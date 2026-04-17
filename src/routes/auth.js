@@ -56,6 +56,9 @@ router.post('/send-code', sendLimit, async (req, res) => {
       [emailLower, code, expiresAt]
     );
 
+    // Always log OTP so it's visible in Railway logs during testing
+    console.log(`📧 OTP for ${emailLower}: ${code}`);
+
     await sendOTPEmail(emailLower, code);
 
     res.json({ success: true, message: `Code sent to ${emailLower}` });
