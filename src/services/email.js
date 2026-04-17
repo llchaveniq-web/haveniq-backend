@@ -1,6 +1,13 @@
-const sgMail = require('@sendgrid/mail');
+const nodemailer = require('nodemailer');
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+// Create Gmail transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS,
+  },
+});
 
 // Generate a 6-digit OTP
 function generateOTP() {
@@ -12,8 +19,8 @@ async function sendOTPEmail(email, code, firstName = '') {
   const greeting = firstName ? `Hi ${firstName},` : 'Hi there,';
 
   const msg = {
-    to:   email,
-    from: { email: process.env.FROM_EMAIL, name: process.env.FROM_NAME || 'HavenIQ' },
+    from: `"HavenIQ" <${process.env.GMAIL_USER}>`,
+    to:      email,
     subject: `${code} is your HavenIQ verification code`,
     text: `${greeting}\n\nYour HavenIQ verification code is: ${code}\n\nThis code expires in 10 minutes. HavenIQ will never call or text you asking for this code.\n\n— The HavenIQ Team`,
     html: `
@@ -65,27 +72,24 @@ async function sendOTPEmail(email, code, firstName = '') {
     `,
   };
 
-  await sgMail.send(msg);
+  await transporter.sendMail(msg);
 }
 
 // Send new match notification email
 async function sendMatchEmail(toEmail, toName, matchName, score) {
   const msg = {
-    to:   toEmail,
-    from: { email: process.env.FROM_EMAIL, name: 'HavenIQ' },
+    from: `"HavenIQ" <${process.env.GMAIL_USER}>`,
+    to:      toEmail,
     subject: `You have a new ${score}% match on HavenIQ ✦`,
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
         <h2 style="color:#2CBFBE;">Hi ${toName}! You have a new match ✦</h2>
         <p style="color:#6B7280;"><strong>${matchName}</strong> is <strong>${score}% compatible</strong> with you.</p>
         <p style="color:#6B7280;">Open HavenIQ to see their full profile and connect.</p>
-        <a href="https://haveniq.com/app" style="display:inline-block;background:#2CBFBE;color:#fff;padding:14px 28px;border-radius:12px;text-decoration:none;font-weight:700;margin-top:16px;">
-          See my match →
-        </a>
       </div>
     `,
   };
-  await sgMail.send(msg);
+  await transporter.sendMail(msg);
 }
 
 module.exports = { generateOTP, sendOTPEmail, sendMatchEmail };
