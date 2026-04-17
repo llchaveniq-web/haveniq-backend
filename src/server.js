@@ -10,6 +10,7 @@ const pool       = require('./db/pool');
 const { requireAuth } = require('./middleware/auth');
 
 const app    = express();
+app.set('trust proxy', 1); // Required for Railway / reverse proxies
 const server = http.createServer(app);
 
 // ── Socket.io (real-time messaging) ──────────────────────────────────────
