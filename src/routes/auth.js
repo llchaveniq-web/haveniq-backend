@@ -33,9 +33,10 @@ router.post('/send-code', sendLimit, async (req, res) => {
       return res.status(400).json({ error: 'Only .edu email addresses are accepted' });
     }
 
-    // Domain must match the selected school
+    // Domain must match the selected school (exact OR subdomain, e.g. student.csulb.edu)
     const emailDomain = emailLower.split('@')[1];
-    if (emailDomain !== schoolDomain) {
+    const domainMatches = emailDomain === schoolDomain || emailDomain.endsWith('.' + schoolDomain);
+    if (!domainMatches) {
       return res.status(400).json({
         error: `Email must be a ${schoolDomain} address for ${school}`,
       });
