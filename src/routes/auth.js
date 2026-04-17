@@ -59,7 +59,12 @@ router.post('/send-code', sendLimit, async (req, res) => {
     // Always log OTP so it's visible in Railway logs during testing
     console.log(`📧 OTP for ${emailLower}: ${code}`);
 
-    await sendOTPEmail(emailLower, code);
+    // Try to send email but don't fail if it errors (e.g. Resend domain not verified yet)
+    try {
+      await sendOTPEmail(emailLower, code);
+    } catch (emailErr) {
+      console.error('Email send failed (check Railway logs for code):', emailErr.message);
+    }
 
     res.json({ success: true, message: `Code sent to ${emailLower}` });
   } catch (err) {
