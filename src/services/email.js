@@ -1,6 +1,9 @@
 const { Resend } = require('resend');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Lazy-initialize so the server doesn't crash if env var loads after module
+function getResend() {
+  return new Resend(process.env.RESEND_API_KEY);
+}
 
 // Generate a 6-digit OTP
 function generateOTP() {
@@ -11,7 +14,7 @@ function generateOTP() {
 async function sendOTPEmail(email, code, firstName = '') {
   const greeting = firstName ? `Hi ${firstName},` : 'Hi there,';
 
-  await resend.emails.send({
+  await getResend().emails.send({
     from: 'HavenIQ <onboarding@resend.dev>',
     to:      email,
     subject: `${code} is your HavenIQ verification code`,
@@ -49,7 +52,7 @@ async function sendOTPEmail(email, code, firstName = '') {
 
 // Send new match notification email
 async function sendMatchEmail(toEmail, toName, matchName, score) {
-  await resend.emails.send({
+  await getResend().emails.send({
     from: 'HavenIQ <onboarding@resend.dev>',
     to:      toEmail,
     subject: `You have a new ${score}% match on HavenIQ ✦`,
