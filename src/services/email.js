@@ -15,7 +15,7 @@ async function sendOTPEmail(email, code, firstName = '') {
   const greeting = firstName ? `Hi ${firstName},` : 'Hi there,';
 
   await getResend().emails.send({
-    from: 'HavenIQ <onboarding@resend.dev>',
+    from: 'HavenIQ <noreply@haveniq.org>',
     to:      email,
     subject: `${code} is your HavenIQ verification code`,
     html: `
@@ -53,7 +53,7 @@ async function sendOTPEmail(email, code, firstName = '') {
 // Send new match notification email
 async function sendMatchEmail(toEmail, toName, matchName, score) {
   await getResend().emails.send({
-    from: 'HavenIQ <onboarding@resend.dev>',
+    from: 'HavenIQ <noreply@haveniq.org>',
     to:      toEmail,
     subject: `You have a new ${score}% match on HavenIQ ✦`,
     html: `
