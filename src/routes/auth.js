@@ -21,7 +21,7 @@ const verifyLimit = rateLimit({
 // Validates .edu email, generates OTP, sends via SendGrid
 router.post('/send-code', sendLimit, async (req, res) => {
   try {
-    const { email, school, schoolDomain } = req.body;
+    const { email, school, schoolDomain, schoolDomains } = req.body;
 
     if (!email || !school || !schoolDomain) {
       return res.status(400).json({ error: 'email, school, and schoolDomain are required' });
@@ -33,12 +33,19 @@ router.post('/send-code', sendLimit, async (req, res) => {
       return res.status(400).json({ error: 'Only .edu email addresses are accepted' });
     }
 
-    // Domain must match the selected school (exact OR subdomain, e.g. student.csulb.edu)
-    const emailDomain = emailLower.split('@')[1];
-    const domainMatches = emailDomain === schoolDomain || emailDomain.endsWith('.' + schoolDomain);
+    // Domain must match one of the school's accepted domains (exact OR
+    // subdomain — e.g. student.csulb.edu for csulb.edu). A school can
+    // have multiple accepted domains when it's part of a community
+    // college district that shares a single student-mail domain
+    // (CCCD's `student.cccd.edu`, FHDA's `student.fhda.edu`, etc.).
+    const emailDomain  = emailLower.split('@')[1];
+    const acceptedList = Array.isArray(schoolDomains) && schoolDomains.length > 0
+      ? schoolDomains.map(d => String(d).toLowerCase())
+      : [String(schoolDomain).toLowerCase()];
+    const domainMatches = acceptedList.some(d => emailDomain === d || emailDomain.endsWith('.' + d));
     if (!domainMatches) {
       return res.status(400).json({
-        error: `Email must be a ${schoolDomain} address for ${school}`,
+        error: `Email must be a ${acceptedList.join(' / ')} address for ${school}`,
       });
     }
 
