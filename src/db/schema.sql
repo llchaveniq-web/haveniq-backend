@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   bio               TEXT,
   major             TEXT,
   school_year       TEXT,   -- Freshman / Sophomore / Junior / Senior / Graduate
+  age               INTEGER,
   gender            TEXT,
   looking_for       TEXT[], -- ['Man','Woman','Non-binary']
   photo_url         TEXT,
@@ -29,6 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
   budget_min        INTEGER DEFAULT 500,
   budget_max        INTEGER DEFAULT 2000,
   move_in_timeline  TEXT,   -- '1 month' / '2 months' / etc.
+  neighborhoods     TEXT[], -- ['Westwood','North Berkeley',...]
+  roommate_status   TEXT,   -- 'actively_looking' | 'open_to_offers' | 'found_roommate'
 
   -- Status flags
   is_verified       BOOLEAN DEFAULT FALSE,   -- selfie + enrollment verified
@@ -41,6 +44,12 @@ CREATE TABLE IF NOT EXISTS users (
   created_at        TIMESTAMPTZ DEFAULT NOW(),
   updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Idempotent migration for existing databases — new installs get the columns
+-- via CREATE TABLE above, existing prod databases need these ALTERs.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age             INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods   TEXT[];
+ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status TEXT;
 
 -- ── OTP codes ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS otp_codes (

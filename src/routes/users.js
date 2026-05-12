@@ -15,25 +15,28 @@ router.get('/me', requireAuth, async (req, res) => {
 
     const u = rows[0];
     res.json({
-      id:             u.id,
-      email:          u.email,
-      school:         u.school,
-      firstName:      u.first_name,
-      lastName:       u.last_name,
-      bio:            u.bio,
-      major:          u.major,
-      schoolYear:     u.school_year,
-      gender:         u.gender,
-      lookingFor:     u.looking_for || [],
-      photoUrl:       u.photo_url,
-      budgetMin:      u.budget_min,
-      budgetMax:      u.budget_max,
-      moveInTimeline: u.move_in_timeline,
-      isVerified:     u.is_verified,
-      isPaused:       u.is_paused,
-      quizCompleted:  u.quiz_completed,
-      isPremium:      u.is_premium,
-      trustScore:     u.trust_score,
+      id:              u.id,
+      email:           u.email,
+      school:          u.school,
+      firstName:       u.first_name,
+      lastName:        u.last_name,
+      bio:             u.bio,
+      major:           u.major,
+      schoolYear:      u.school_year,
+      age:             u.age,
+      gender:          u.gender,
+      lookingFor:      u.looking_for || [],
+      photoUrl:        u.photo_url,
+      budgetMin:       u.budget_min,
+      budgetMax:       u.budget_max,
+      moveInTimeline:  u.move_in_timeline,
+      neighborhoods:   u.neighborhoods || [],
+      roommateStatus:  u.roommate_status,
+      isVerified:      u.is_verified,
+      isPaused:        u.is_paused,
+      quizCompleted:   u.quiz_completed,
+      isPremium:       u.is_premium,
+      trustScore:      u.trust_score,
       pendingRequests: parseInt(u.pending_requests),
     });
   } catch (err) {
@@ -45,31 +48,29 @@ router.get('/me', requireAuth, async (req, res) => {
 // ── PATCH /users/me ───────────────────────────────────────────────────────
 router.patch('/me', requireAuth, async (req, res) => {
   try {
-    const allowed = [
-      'first_name', 'last_name', 'bio', 'major', 'school_year',
-      'gender', 'looking_for', 'photo_url',
-      'budget_min', 'budget_max', 'move_in_timeline',
-      'is_paused',
-    ];
-
     const updates = [];
     const values  = [];
     let   idx     = 1;
 
-    // Map camelCase → snake_case
+    // Map camelCase → snake_case. Any field listed here is patchable from
+    // the app's updateProfile() call. Adding a new field here + a column to
+    // the users table is the entire workflow for new profile fields.
     const fieldMap = {
-      firstName:     'first_name',
-      lastName:      'last_name',
-      bio:           'bio',
-      major:         'major',
-      schoolYear:    'school_year',
-      gender:        'gender',
-      lookingFor:    'looking_for',
-      photoUrl:      'photo_url',
-      budgetMin:     'budget_min',
-      budgetMax:     'budget_max',
-      moveInTimeline:'move_in_timeline',
-      isPaused:      'is_paused',
+      firstName:      'first_name',
+      lastName:       'last_name',
+      bio:            'bio',
+      major:          'major',
+      schoolYear:     'school_year',
+      age:            'age',
+      gender:         'gender',
+      lookingFor:     'looking_for',
+      photoUrl:       'photo_url',
+      budgetMin:      'budget_min',
+      budgetMax:      'budget_max',
+      moveInTimeline: 'move_in_timeline',
+      neighborhoods:  'neighborhoods',
+      roommateStatus: 'roommate_status',
+      isPaused:       'is_paused',
     };
 
     for (const [camel, snake] of Object.entries(fieldMap)) {
