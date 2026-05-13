@@ -102,7 +102,7 @@ router.post('/:conversationId', requireAuth, async (req, res) => {
 
     // Verify user is part of conversation
     const { rows: convRows } = await pool.query(
-      'SELECT * FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
+      'SELECT user_a, user_b FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
       [req.params.conversationId, req.user.id]
     );
     if (!convRows[0]) return res.status(403).json({ error: 'Not authorized' });
@@ -112,6 +112,19 @@ router.post('/:conversationId', requireAuth, async (req, res) => {
        VALUES ($1, $2, $3) RETURNING *`,
       [req.params.conversationId, req.user.id, body.trim()]
     );
+
+    // Push notification to recipient (fire-and-forget)
+    const sendPushToUser = req.app.get('sendPushToUser');
+    if (sendPushToUser) {
+      const otherUserId = convRows[0].user_a === req.user.id
+        ? convRows[0].user_b
+        : convRows[0].user_a;
+      sendPushToUser(otherUserId, {
+        title: `${req.user.first_name} sent a message`,
+        body: body.trim().slice(0, 80),
+        data: { screen: 'thread', conversationId: req.params.conversationId },
+      }).catch(() => {});
+    }
 
     res.status(201).json(rows[0]);
   } catch (err) {

@@ -105,6 +105,17 @@ router.post('/connect', requireAuth, async (req, res) => {
       [req.user.id, toUserId, 'pending']
     );
 
+    // Push notification to recipient (fire-and-forget)
+    const sendPushToUser = req.app.get('sendPushToUser');
+    if (sendPushToUser) {
+      const senderName = req.user.first_name || 'Someone';
+      sendPushToUser(toUserId, {
+        title: 'New connect request ✦',
+        body: `${senderName} wants to connect with you on HavenIQ`,
+        data: { screen: 'matches' },
+      }).catch(() => {});
+    }
+
     res.json({ success: true, status: 'pending' });
   } catch (err) {
     console.error(err);
@@ -134,7 +145,7 @@ router.post('/respond', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'Pending request not found' });
     }
 
-    // If accepted, create a conversation
+    // If accepted, create a conversation and notify the original sender
     if (action === 'accept') {
       const [userA, userB] = req.user.id < fromUserId
         ? [req.user.id, fromUserId]
@@ -145,6 +156,17 @@ router.post('/respond', requireAuth, async (req, res) => {
          VALUES ($1, $2) ON CONFLICT DO NOTHING`,
         [userA, userB]
       );
+
+      // Push notification to the person whose request was accepted
+      const sendPushToUser = req.app.get('sendPushToUser');
+      if (sendPushToUser) {
+        const acceptorName = req.user.first_name || 'Someone';
+        sendPushToUser(fromUserId, {
+          title: 'Connect request accepted! ✦',
+          body: `${acceptorName} accepted your connect request. Say hello!`,
+          data: { screen: 'messages' },
+        }).catch(() => {});
+      }
     }
 
     res.json({ success: true, status: newStatus });

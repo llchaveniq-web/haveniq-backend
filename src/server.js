@@ -134,6 +134,7 @@ app.use('/users',    require('./routes/users'));
 app.use('/quiz',     require('./routes/quiz'));
 app.use('/matches',  require('./routes/matches'));
 app.use('/messages', require('./routes/messages'));
+app.use('/telemetry', require('./routes/telemetry'));
 
 // Health check
 app.get('/health', (req, res) => res.json({
