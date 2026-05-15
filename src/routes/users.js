@@ -1,6 +1,22 @@
-const router = require('express').Router();
-const pool   = require('../db/pool');
+const router  = require('express').Router();
+const multer  = require('multer');
+const pool    = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { uploadProfilePhoto, deleteProfilePhoto } = require('../services/cloudinary');
+
+// 5 MB image cap — generous for a single profile photo, prevents abuse.
+// Held in memory (no temp files on Railway's ephemeral disk) and streamed
+// straight to Cloudinary via upload_stream.
+const uploadMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      return cb(new Error('Only image uploads are allowed'));
+    }
+    cb(null, true);
+  },
+});
 
 // ── GET /users/me ─────────────────────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res) => {
@@ -146,6 +162,33 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch viewers' });
+  }
+});
+
+// ── POST /users/me/photo ──────────────────────────────────────────────────
+// Multipart upload of profile photo. Stores to Cloudinary, saves URL to
+// users.photo_url. Returns `{ url }` — matches the frontend ProfileAPI
+// contract. Requires CLOUDINARY_* env vars on the server.
+router.post('/me/photo', requireAuth, uploadMiddleware.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'photo file is required' });
+    }
+
+    const url = await uploadProfilePhoto(req.user.id, req.file.buffer);
+
+    await pool.query(
+      'UPDATE users SET photo_url = $1, updated_at = NOW() WHERE id = $2',
+      [url, req.user.id]
+    );
+
+    res.json({ url });
+  } catch (err) {
+    console.error('photo upload error:', err);
+    if (err && err.message && err.message.includes('Cloudinary not configured')) {
+      return res.status(503).json({ error: 'Photo storage not configured. Contact support.' });
+    }
+    res.status(500).json({ error: 'Failed to upload photo' });
   }
 });
 
