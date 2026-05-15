@@ -113,6 +113,29 @@ router.patch('/me', requireAuth, async (req, res) => {
   }
 });
 
+// ── DELETE /users/me ──────────────────────────────────────────────────────
+// Permanently delete the signed-in user's account. Cascading FK deletes
+// remove their quiz_answers, push_tokens, connect_requests, conversations,
+// compatibility_scores, profile_views, etc. Cloudinary asset is removed
+// separately (best-effort) so we don't keep orphan photos in storage.
+router.delete('/me', requireAuth, async (req, res) => {
+  try {
+    // Best-effort photo cleanup — never block account deletion on this.
+    deleteProfilePhoto(req.user.id).catch(() => {});
+
+    const { rowCount } = await pool.query(
+      'DELETE FROM users WHERE id = $1',
+      [req.user.id]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'User not found' });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('delete account error:', err);
+    res.status(500).json({ error: 'Failed to delete account' });
+  }
+});
+
 // ── GET /users/:id ────────────────────────────────────────────────────────
 // Public profile view (only basic info visible)
 router.get('/:id', requireAuth, async (req, res) => {
