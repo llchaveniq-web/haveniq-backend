@@ -67,6 +67,19 @@ router.post('/submit', requireAuth, async (req, res) => {
       [req.user.id]
     );
 
+    // Longitudinal snapshot — captures the user's profile + quiz state at
+    // the moment of completion. Powers drift analysis when they re-take
+    // the quiz months later. Best-effort: failures are logged, not fatal.
+    pool.query(
+      `INSERT INTO user_profile_snapshot (user_id, trigger, snapshot)
+       SELECT $1, 'quiz_complete', jsonb_build_object(
+         'profile', to_jsonb(u) - 'password_hash',
+         'answers', $2::jsonb
+       )
+       FROM users u WHERE u.id = $1`,
+      [req.user.id, JSON.stringify(answers)],
+    ).catch(err => console.error('snapshot insert failed:', err));
+
     // Trigger async match scoring (non-blocking)
     scoreNewMatches(req.user.id, answers).catch(err =>
       console.error('Async scoring error:', err)

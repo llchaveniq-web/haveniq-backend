@@ -150,6 +150,21 @@ CREATE TABLE IF NOT EXISTS profile_views (
 );
 CREATE INDEX IF NOT EXISTS idx_views_viewed ON profile_views(viewed_id, viewed_at DESC);
 
+-- ── User profile snapshots ───────────────────────────────────────────────
+-- Frozen point-in-time captures of a user's profile + quiz state. Powers
+-- longitudinal drift analysis ("how has this person changed since freshman
+-- year?") and gives compatibility scoring something to compare against
+-- when re-quiz answers shift over time. Writers: quiz completion (every
+-- submit creates one row). Future: weekly cron for active users.
+CREATE TABLE IF NOT EXISTS user_profile_snapshot (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+  trigger     TEXT NOT NULL,
+  snapshot    JSONB NOT NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_user ON user_profile_snapshot(user_id, created_at DESC);
+
 -- ── Push tokens ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS push_tokens (
   id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

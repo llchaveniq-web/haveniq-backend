@@ -155,7 +155,11 @@ router.get('/:id', requireAuth, async (req, res) => {
       pool.query(
         'INSERT INTO profile_views (viewer_id, viewed_id) VALUES ($1, $2)',
         [req.user.id, req.params.id]
-      ).catch(() => {}); // fire-and-forget
+      ).catch(err => {
+        // Fire-and-forget but surface failures — silent catches caused
+        // profile_views to stay at 0 rows in prod without anyone noticing.
+        console.error('profile_views insert failed:', err);
+      });
     }
 
     res.json(rows[0]);

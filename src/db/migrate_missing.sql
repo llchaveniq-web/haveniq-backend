@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS profile_views (
 );
 CREATE INDEX IF NOT EXISTS idx_views_viewed ON profile_views(viewed_id, viewed_at DESC);
 
+-- ── User profile snapshots ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS user_profile_snapshot (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+  trigger     TEXT NOT NULL,
+  snapshot    JSONB NOT NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_user ON user_profile_snapshot(user_id, created_at DESC);
+
 -- ── Trigger function + connect_requests trigger ───────────────
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
