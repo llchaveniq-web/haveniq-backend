@@ -69,6 +69,7 @@ router.get('/feed', requireAuth, async (req, res) => {
          u.move_in_timeline,
          u.is_verified,
          u.trust_score,
+         cr.id     AS connect_request_id,
          cr.status AS connect_status
        FROM compatibility_scores cs
        JOIN users u ON (
@@ -111,6 +112,7 @@ router.get('/feed', requireAuth, async (req, res) => {
       breakdown:     r.breakdown || {},
       whyMatched:    r.why_matched,
       connectStatus: r.connect_status || null,
+      requestId:     r.connect_request_id || null,
     }));
 
     res.json(matches);
