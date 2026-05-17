@@ -7,9 +7,11 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- Ensure newer columns on users exist
-ALTER TABLE users ADD COLUMN IF NOT EXISTS age             INTEGER;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods   TEXT[];
-ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age              INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods    TEXT[];
+ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status  TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_email     TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALSE;
 
 -- ── Compatibility scores ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compatibility_scores (
@@ -96,6 +98,27 @@ CREATE TABLE IF NOT EXISTS user_profile_snapshot (
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_user ON user_profile_snapshot(user_id, created_at DESC);
+
+-- ── Shared move-in checklists ─────────────────────────────────
+CREATE TABLE IF NOT EXISTS match_checklists (
+  request_id    UUID PRIMARY KEY REFERENCES connect_requests(id) ON DELETE CASCADE,
+  items         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_by    UUID REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- ── Match outcome pulses (30/60/90-day feedback) ──────────────
+CREATE TABLE IF NOT EXISTS match_pulses (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  request_id    UUID REFERENCES connect_requests(id) ON DELETE CASCADE,
+  responder_id  UUID REFERENCES users(id) ON DELETE CASCADE,
+  day_marker    INTEGER NOT NULL CHECK (day_marker IN (30, 60, 90)),
+  status        TEXT    NOT NULL CHECK (status IN ('going_well', 'having_issues', 'not_connected', 'moved_out')),
+  note          TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(request_id, responder_id, day_marker)
+);
+CREATE INDEX IF NOT EXISTS idx_pulses_responder ON match_pulses(responder_id, created_at DESC);
 
 -- ── Trigger function + connect_requests trigger ───────────────
 CREATE OR REPLACE FUNCTION update_updated_at()

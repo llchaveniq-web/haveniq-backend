@@ -18,6 +18,51 @@ const uploadMiddleware = multer({
   },
 });
 
+// ── GET /users/signup-stats ───────────────────────────────────────────────
+// Public endpoint (no auth) used by the signup screen to display live
+// social proof: "12 students from your school joined this week". Returns
+// rough bucketed counts so we never leak exact growth numbers school-by-
+// school to anyone who probes the endpoint.
+//
+// Query: ?school=<exact name>
+// Returns: { thisWeek: number, total: number }
+router.get('/signup-stats', async (req, res) => {
+  try {
+    const schoolName = (req.query.school || '').toString().trim();
+    if (!schoolName) return res.json({ thisWeek: 0, total: 0 });
+
+    const { rows } = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') AS this_week,
+         COUNT(*) AS total
+       FROM users
+       WHERE school = $1 AND email NOT LIKE '%@haveniq-demo.edu'`,
+      [schoolName],
+    );
+
+    // Bucket exact counts into rough numbers to avoid leaking precise
+    // school-by-school growth signal to anyone scraping this endpoint.
+    const bucket = (n) => {
+      const v = Number(n) || 0;
+      if (v === 0)   return 0;
+      if (v < 5)     return v;       // small numbers are fine ("3 joined")
+      if (v < 10)    return 5;
+      if (v < 25)    return 10;
+      if (v < 50)    return 25;
+      if (v < 100)   return 50;
+      return Math.floor(v / 100) * 100;
+    };
+
+    res.json({
+      thisWeek: bucket(rows[0].this_week),
+      total:    bucket(rows[0].total),
+    });
+  } catch (err) {
+    console.error('signup-stats failed:', err);
+    res.json({ thisWeek: 0, total: 0 });  // never block signup on a stats error
+  }
+});
+
 // ── GET /users/me ─────────────────────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res) => {
   try {
@@ -87,6 +132,7 @@ router.patch('/me', requireAuth, async (req, res) => {
       neighborhoods:  'neighborhoods',
       roommateStatus: 'roommate_status',
       isPaused:       'is_paused',
+      parentEmail:    'parent_email',
     };
 
     for (const [camel, snake] of Object.entries(fieldMap)) {

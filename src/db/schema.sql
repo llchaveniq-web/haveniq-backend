@@ -47,9 +47,15 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Idempotent migration for existing databases — new installs get the columns
 -- via CREATE TABLE above, existing prod databases need these ALTERs.
-ALTER TABLE users ADD COLUMN IF NOT EXISTS age             INTEGER;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods   TEXT[];
-ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS age              INTEGER;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods    TEXT[];
+ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status  TEXT;
+-- Parents-as-positive-signal play. Optional parent email collected during
+-- onboarding (or via Settings). On a student's FIRST accepted match we
+-- send the parent a one-time "your student just matched with X, .edu
+-- verified" email — converts the parent from a veto-risk into a buy-in.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_email     TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALSE;
 
 -- ── OTP codes ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS otp_codes (
@@ -164,6 +170,35 @@ CREATE TABLE IF NOT EXISTS user_profile_snapshot (
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_user ON user_profile_snapshot(user_id, created_at DESC);
+
+-- ── Shared move-in checklists ────────────────────────────────────────────
+-- One row per accepted match. Both roommates read & write the same JSONB
+-- so when one ticks "Get keys" the other sees it next time they pull to
+-- refresh. Not real-time (no websocket sync yet) but eventually consistent.
+CREATE TABLE IF NOT EXISTS match_checklists (
+  request_id    UUID PRIMARY KEY REFERENCES connect_requests(id) ON DELETE CASCADE,
+  items         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_by    UUID REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- ── Match outcome pulses ─────────────────────────────────────────────────
+-- The "did this match actually work?" feedback loop. Every accepted
+-- connect_request is eligible for a pulse at 30 / 60 / 90 days after the
+-- acceptance. This is THE dataset that proves (or disproves) that the
+-- compatibility algorithm produces lasting roommate relationships — every
+-- fundraising deck rests on the answers in this table.
+CREATE TABLE IF NOT EXISTS match_pulses (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  request_id    UUID REFERENCES connect_requests(id) ON DELETE CASCADE,
+  responder_id  UUID REFERENCES users(id) ON DELETE CASCADE,
+  day_marker    INTEGER NOT NULL CHECK (day_marker IN (30, 60, 90)),
+  status        TEXT    NOT NULL CHECK (status IN ('going_well', 'having_issues', 'not_connected', 'moved_out')),
+  note          TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(request_id, responder_id, day_marker)
+);
+CREATE INDEX IF NOT EXISTS idx_pulses_responder ON match_pulses(responder_id, created_at DESC);
 
 -- ── Push tokens ───────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS push_tokens (

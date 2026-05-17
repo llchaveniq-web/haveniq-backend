@@ -1,6 +1,44 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { sendParentMatchEmail } = require('../services/email');
+
+// Best-effort parent notification on a student's FIRST accepted match.
+// Called twice — once for each side of the pair. Each user's row has
+// `parent_notified` which gates against repeat sends. Wrapped in its own
+// try/catch so a parent-email failure never blocks the accept response.
+async function maybeNotifyParent(studentId, matchUserId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.id, u.first_name, u.parent_email, u.parent_notified,
+              m.first_name AS match_first, m.last_name AS match_last, m.school AS match_school,
+              cs.score AS compatibility
+       FROM users u
+       JOIN users m ON m.id = $2
+       LEFT JOIN compatibility_scores cs
+              ON (cs.user_a = LEAST(u.id, m.id) AND cs.user_b = GREATEST(u.id, m.id))
+       WHERE u.id = $1`,
+      [studentId, matchUserId],
+    );
+    const row = rows[0];
+    if (!row || !row.parent_email || row.parent_notified) return;
+
+    await sendParentMatchEmail({
+      parentEmail:      row.parent_email,
+      studentName:      row.first_name || 'Your student',
+      matchName:        `${row.match_first} ${(row.match_last || '').charAt(0)}.`,
+      matchSchool:      row.match_school,
+      compatibilityPct: Math.round(Number(row.compatibility) || 0),
+    });
+
+    await pool.query(
+      'UPDATE users SET parent_notified = TRUE WHERE id = $1',
+      [studentId],
+    );
+  } catch (err) {
+    console.error('[parent notify] send failed:', err);
+  }
+}
 
 // ── GET /matches/feed ─────────────────────────────────────────────────────
 // Returns scored, filtered matches for the current user
@@ -167,6 +205,12 @@ router.post('/respond', requireAuth, async (req, res) => {
           data: { screen: 'messages' },
         }).catch(() => {});
       }
+
+      // First-match parent notification. Fire for BOTH users — each one's
+      // parent (if registered) gets a one-time "your student just matched"
+      // email. Awaited in the background so the API response stays fast.
+      maybeNotifyParent(req.user.id, fromUserId).catch(() => {});
+      maybeNotifyParent(fromUserId, req.user.id).catch(() => {});
     }
 
     res.json({ success: true, status: newStatus });

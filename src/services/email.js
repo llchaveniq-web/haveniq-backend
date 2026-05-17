@@ -66,4 +66,58 @@ async function sendMatchEmail(toEmail, toName, matchName, score) {
   });
 }
 
-module.exports = { generateOTP, sendOTPEmail, sendMatchEmail };
+// One-time "your student just matched" email to a student's parent the
+// first time they accept a connect_request. Designed to convert parents
+// from a veto-risk into an advocate — surfaces the .edu verification,
+// the platform's anti-scam posture, and a link to the parent portal.
+//
+// `studentName`     — first name of the user whose parent we're emailing
+// `matchName`       — first name + last initial of the matched roommate
+// `matchSchool`     — school name (shared, since this is roommate-matching)
+// `compatibilityPct` — the algorithm's score (0-100)
+async function sendParentMatchEmail({ parentEmail, studentName, matchName, matchSchool, compatibilityPct }) {
+  await getResend().emails.send({
+    from:    'HavenIQ <noreply@haveniq.org>',
+    to:      parentEmail,
+    subject: `${studentName} just matched with a verified roommate on HavenIQ ✦`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#F5FAFA; margin:0; padding:40px 20px;">
+          <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+            <div style="background:#2CBFBE; padding:32px; text-align:center;">
+              <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
+              <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Roommate matching for verified college students</p>
+            </div>
+            <div style="padding:36px 32px;">
+              <p style="color:#2B2B3C; font-size:17px; margin:0 0 16px;">Hi there,</p>
+              <p style="color:#2B2B3C; font-size:15px; line-height:1.6; margin:0 0 20px;">
+                <strong>${studentName}</strong> shared your email when they signed up for HavenIQ so we could let you know about big milestones. Here's the first one:
+              </p>
+              <div style="background:#F5FAFA; border-left:4px solid #2CBFBE; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
+                <p style="font-size:18px; color:#2B2B3C; margin:0 0 6px; font-weight:600;">${studentName} just matched with ${matchName}.</p>
+                <p style="font-size:14px; color:#6B7280; margin:0;">${compatibilityPct}% compatibility · ${matchSchool}</p>
+              </div>
+              <p style="color:#2B2B3C; font-size:14px; line-height:1.7; margin:0 0 18px;">
+                <strong>Why we tell you:</strong> Roommate decisions are big. We want you in the loop — not by sharing ${studentName}'s private profile, but by letting you know that the person they matched with is:
+              </p>
+              <ul style="color:#2B2B3C; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 24px;">
+                <li><strong>.edu verified</strong> — confirmed enrollment at ${matchSchool}</li>
+                <li><strong>Quiz-matched</strong> — 55-question clinical compatibility framework, not just preferences</li>
+                <li><strong>Anti-scam protected</strong> — contact info stays hidden until both sides ID-verify</li>
+              </ul>
+              <p style="color:#6B7280; font-size:13px; line-height:1.6; margin:0 0 8px;">
+                We won't email you about every match — just the first one. If ${studentName} would rather we stopped, they can remove your email from Settings.
+              </p>
+            </div>
+            <div style="background:#F5FAFA; padding:18px 32px; text-align:center; border-top:1px solid #E0EDED;">
+              <p style="color:#6B7280; font-size:12px; margin:0;">HavenIQ · California-first roommate matching · haveniq.org</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+  });
+}
+
+module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail };
