@@ -84,6 +84,7 @@ router.get('/feed', requireAuth, async (req, res) => {
          AND cs.score >= 65
          AND u.is_paused = FALSE
          AND u.quiz_completed = TRUE
+         AND u.email NOT LIKE '%@haveniq-demo.edu'
          ${school ? 'AND u.school = $2' : ''}
        ORDER BY cs.score DESC
        LIMIT 50`,
