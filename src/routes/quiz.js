@@ -3,14 +3,35 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 
+// Cap per free-text answer to keep one bad actor from stuffing 10MB
+// of garbage into the quiz_answers JSONB column. 5000 chars is roughly
+// 1000 words — far more than any legitimate clinical-quiz reflection.
+const MAX_TEXT_ANSWER_CHARS = 5000;
+
+function validateAnswers(answers) {
+  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
+    return 'answers object required';
+  }
+  for (const [k, v] of Object.entries(answers)) {
+    // Answers come in two shapes: { type: 'choice', value: number } or
+    // { type: 'text', text: string }. We only need to cap text shapes.
+    if (v && typeof v === 'object' && v.type === 'text') {
+      if (typeof v.text !== 'string') return `answer ${k}: text must be a string`;
+      if (v.text.length > MAX_TEXT_ANSWER_CHARS) {
+        return `answer ${k}: text exceeds ${MAX_TEXT_ANSWER_CHARS} char limit`;
+      }
+    }
+  }
+  return null;
+}
+
 // ── POST /quiz/save ───────────────────────────────────────────────────────
 // Save quiz progress (called after every answer for save & resume)
 router.post('/save', requireAuth, async (req, res) => {
   try {
-    const { answers } = req.body;
-    if (!answers || typeof answers !== 'object') {
-      return res.status(400).json({ error: 'answers object required' });
-    }
+    const { answers } = req.body || {};
+    const err = validateAnswers(answers);
+    if (err) return res.status(400).json({ error: err });
 
     await pool.query(
       `INSERT INTO quiz_answers (user_id, answers, completed)
@@ -47,10 +68,9 @@ router.get('/progress', requireAuth, async (req, res) => {
 // Final submission — marks complete, triggers async match scoring
 router.post('/submit', requireAuth, async (req, res) => {
   try {
-    const { answers } = req.body;
-    if (!answers || typeof answers !== 'object') {
-      return res.status(400).json({ error: 'answers object required' });
-    }
+    const { answers } = req.body || {};
+    const err = validateAnswers(answers);
+    if (err) return res.status(400).json({ error: err });
 
     // Save final answers and mark completed
     await pool.query(

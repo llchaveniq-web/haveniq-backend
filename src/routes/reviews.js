@@ -39,6 +39,11 @@ router.post('/', requireAuth, async (req, res) => {
     if (typeof body !== 'string' || body.trim().length < 20) {
       return res.status(400).json({ error: 'body must be at least 20 characters' });
     }
+    // Upper cap to match other user-generated content. 5K chars ≈ 1000
+    // words — far more than any reasonable roommate review.
+    if (body.length > 5000) {
+      return res.status(400).json({ error: 'body exceeds 5000 character limit' });
+    }
 
     const { rows } = await pool.query(
       `INSERT INTO roommate_reviews

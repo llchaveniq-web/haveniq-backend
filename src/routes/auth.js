@@ -4,17 +4,30 @@ const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { signToken } = require('../middleware/auth');
 
-// Rate limiters
+// Rate limiters — keyed by EMAIL (not IP).
+//
+// Default express-rate-limit buckets by IP. On a campus launch event,
+// all 30-50 students arrive from the same WiFi egress and would share
+// the same bucket — the 6th OTP-request would block legitimate users.
+// Keying by email instead means each student has their own quota and a
+// campus-wide launch is safe.
+//
+// Falls back to IP when email is missing (e.g. on routes where the
+// body is malformed) so the limiter still has SOME protection.
 const sendLimit = rateLimit({
   windowMs: 15 * 60 * 1000,  // 15 min
   max: 5,
   message: { error: 'Too many OTP requests. Try again in 15 minutes.' },
+  keyGenerator: (req) =>
+    (req.body?.email || '').toString().toLowerCase().trim() || req.ip,
 });
 
 const verifyLimit = rateLimit({
   windowMs: 10 * 60 * 1000,  // 10 min
   max: 10,
   message: { error: 'Too many verification attempts.' },
+  keyGenerator: (req) =>
+    (req.body?.email || '').toString().toLowerCase().trim() || req.ip,
 });
 
 // ── POST /auth/send-code ──────────────────────────────────────────────────

@@ -228,6 +228,8 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
        FROM profile_views pv
        JOIN users u ON u.id = pv.viewer_id
        WHERE pv.viewed_id = $1
+         AND u.is_paused = FALSE
+         AND u.email NOT LIKE '%@haveniq-demo.edu'
        ORDER BY pv.viewed_at DESC LIMIT 50`,
       [req.user.id]
     );

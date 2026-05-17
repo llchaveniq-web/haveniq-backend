@@ -237,7 +237,10 @@ router.get('/requests', requireAuth, async (req, res) => {
          (cs.user_a = cr.from_user AND cs.user_b = $1) OR
          (cs.user_b = cr.from_user AND cs.user_a = $1)
        )
-       WHERE cr.to_user = $1 AND cr.status = 'pending'
+       WHERE cr.to_user = $1
+         AND cr.status = 'pending'
+         AND u.is_paused = FALSE
+         AND u.email NOT LIKE '%@haveniq-demo.edu'
        ORDER BY cr.created_at DESC`,
       [req.user.id]
     );

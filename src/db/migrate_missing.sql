@@ -13,6 +13,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status  TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_email     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALSE;
 
+-- The original quiz_answers table on Railway lacked the `completed` column
+-- that /quiz/submit relies on. Caused every real student's submit to 500
+-- with "column does not exist". Idempotent fix.
+ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE;
+ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 -- ── Compatibility scores ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compatibility_scores (
   id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

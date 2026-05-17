@@ -70,8 +70,11 @@ io.on('connection', (socket) => {
 
   // Send a message
   socket.on('send_message', async (data) => {
-    const { conversationId, body } = data;
+    const { conversationId, body } = data || {};
     if (!conversationId || !body?.trim()) return;
+    // Same 10K cap as the HTTP /:conversationId route. Without this a
+    // socket-connected client could bypass the HTTP-side validation.
+    if (body.length > 10000) return;
 
     try {
       // Verify this user belongs to the conversation

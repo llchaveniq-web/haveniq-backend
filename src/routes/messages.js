@@ -95,10 +95,19 @@ router.get('/:conversationId', requireAuth, async (req, res) => {
 
 // ── POST /messages/:conversationId ────────────────────────────────────────
 // Send a message (also used as fallback when socket is unavailable)
+// Per-message char cap. 10K chars is roughly 2000 words — far beyond any
+// reasonable chat message. Keeps a single bad actor from filling the
+// messages table with multi-MB rows that bloat the conversation LATERAL
+// join (which selects the full body for the messages tab preview).
+const MAX_MESSAGE_CHARS = 10000;
+
 router.post('/:conversationId', requireAuth, async (req, res) => {
   try {
-    const { body } = req.body;
+    const { body } = req.body || {};
     if (!body?.trim()) return res.status(400).json({ error: 'body required' });
+    if (body.length > MAX_MESSAGE_CHARS) {
+      return res.status(400).json({ error: `message exceeds ${MAX_MESSAGE_CHARS} char limit` });
+    }
 
     // Verify user is part of conversation
     const { rows: convRows } = await pool.query(
