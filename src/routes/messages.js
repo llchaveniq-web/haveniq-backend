@@ -67,7 +67,7 @@ router.get('/:conversationId', requireAuth, async (req, res) => {
   try {
     // Verify user is part of this conversation
     const { rows: convRows } = await pool.query(
-      'SELECT * FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
+      'SELECT id, user_a, user_b FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
       [req.params.conversationId, req.user.id]
     );
     if (!convRows[0]) return res.status(403).json({ error: 'Not authorized' });
@@ -123,7 +123,7 @@ router.post('/:conversationId', requireAuth, async (req, res) => {
         title: `${req.user.first_name} sent a message`,
         body: body.trim().slice(0, 80),
         data: { screen: 'thread', conversationId: req.params.conversationId },
-      }).catch(() => {});
+      }).catch(err => console.error('[push] HTTP message send failed:', err));
     }
 
     res.status(201).json(rows[0]);

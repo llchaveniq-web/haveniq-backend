@@ -111,37 +111,54 @@ async function scoreNewMatches(userId, newAnswers) {
     [userId]
   );
 
+  // Build all the score rows in one pass, then bulk-INSERT in a single
+  // round-trip. Previously this fired one INSERT per other user — at 100
+  // students the 100th signup serialized 99 round-trips through the
+  // connection pool. Batching collapses that to a single statement.
+  const rows = [];
   for (const other of otherUsers) {
     const result = calculateCompatibility(newAnswers, other.answers);
-
-    // Skip if hard blocked
     if (result.isHardBlocked) continue;
-
-    // Canonical pair ordering (smaller UUID first)
     const [userA, userB] = userId < other.user_id
       ? [userId, other.user_id]
       : [other.user_id, userId];
-
-    const whyMatched = generateWhyMatched(result.breakdown, result.finalPct);
-
-    await pool.query(
-      `INSERT INTO compatibility_scores
-         (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (user_a, user_b) DO UPDATE
-       SET score=$3, is_hard_blocked=$4, is_soft_blocked=$5,
-           shadow_penalty=$6, breakdown=$7, why_matched=$8, calculated_at=NOW()`,
-      [
-        userA, userB,
-        result.finalPct,
-        result.isHardBlocked,
-        result.isSoftBlocked,
-        result.shadowPenalty,
-        JSON.stringify(result.breakdown),
-        whyMatched,
-      ]
-    );
+    rows.push([
+      userA, userB,
+      result.finalPct,
+      result.isHardBlocked,
+      result.isSoftBlocked,
+      result.shadowPenalty,
+      JSON.stringify(result.breakdown),
+      generateWhyMatched(result.breakdown, result.finalPct),
+    ]);
   }
+
+  if (rows.length === 0) return;
+
+  // Flatten into a single $1...$N param list. 8 columns per row.
+  const COLS = 8;
+  const valuePlaceholders = rows
+    .map((_, rowIdx) => {
+      const base = rowIdx * COLS;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`;
+    })
+    .join(', ');
+  const params = rows.flat();
+
+  await pool.query(
+    `INSERT INTO compatibility_scores
+       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched)
+     VALUES ${valuePlaceholders}
+     ON CONFLICT (user_a, user_b) DO UPDATE
+     SET score          = EXCLUDED.score,
+         is_hard_blocked = EXCLUDED.is_hard_blocked,
+         is_soft_blocked = EXCLUDED.is_soft_blocked,
+         shadow_penalty  = EXCLUDED.shadow_penalty,
+         breakdown       = EXCLUDED.breakdown,
+         why_matched     = EXCLUDED.why_matched,
+         calculated_at   = NOW()`,
+    params,
+  );
 }
 
 module.exports = router;

@@ -14,6 +14,19 @@ app.set('trust proxy', 1); // Required for Railway / reverse proxies
 const server = http.createServer(app);
 
 // ── Socket.io (real-time messaging) ──────────────────────────────────────
+//
+// ⚠️  CURRENTLY UNUSED IN PRODUCTION (as of 2026-05-17). The web client at
+// app.haveniq.org goes through the HTTP messaging path only (see
+// stores/matchStore.ts sendMessage). The socket.io handler below is left
+// in place because:
+//   1. The helper `sendPushToUser` (which IS used by HTTP routes) lives in
+//      this file alongside the socket setup,
+//   2. A future native iOS/Android build can connect for real-time delivery
+//      without re-architecting the server.
+//
+// If we ever wire the web client to use socket.io, audit for duplicate
+// message rows — the HTTP POST and the `send_message` socket event would
+// BOTH insert into `messages`, which would silently double messages.
 const io = new Server(server, {
   cors: {
     origin: process.env.CLIENT_URL || '*',
@@ -91,7 +104,7 @@ io.on('connection', (socket) => {
         title: `${socket.firstName} sent a message`,
         body: body.trim().slice(0, 80),
         data: { screen: 'thread', conversationId },
-      }).catch(() => {});
+      }).catch(err => console.error('[push] socket message send failed:', err));
 
     } catch (err) {
       console.error('send_message error:', err);

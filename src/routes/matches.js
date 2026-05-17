@@ -154,7 +154,7 @@ router.post('/connect', requireAuth, async (req, res) => {
         title: 'New connect request ✦',
         body: `${senderName} wants to connect with you on HavenIQ`,
         data: { screen: 'matches' },
-      }).catch(() => {});
+      }).catch(err => console.error('[push] connect request send failed:', err));
     }
 
     res.json({ success: true, status: 'pending' });
@@ -206,7 +206,7 @@ router.post('/respond', requireAuth, async (req, res) => {
           title: 'Connect request accepted! ✦',
           body: `${acceptorName} accepted your connect request. Say hello!`,
           data: { screen: 'messages' },
-        }).catch(() => {});
+        }).catch(err => console.error('[push] accept send failed:', err));
       }
 
       // First-match parent notification. Fire for BOTH users — each one's

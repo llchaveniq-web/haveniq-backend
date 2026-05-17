@@ -94,7 +94,7 @@ router.post('/verify-code', verifyLimit, async (req, res) => {
 
     // Find valid OTP
     const { rows: otpRows } = await pool.query(
-      `SELECT * FROM otp_codes
+      `SELECT id, code, attempts FROM otp_codes
        WHERE email = $1 AND used = FALSE AND expires_at > NOW()
        ORDER BY created_at DESC LIMIT 1`,
       [emailLower]
@@ -124,9 +124,13 @@ router.post('/verify-code', verifyLimit, async (req, res) => {
     // Mark OTP used
     await pool.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otpRecord.id]);
 
-    // Create or find user
+    // Create or find user. Explicit column list (vs. SELECT *) so that
+    // adding sensitive columns to users in the future doesn't accidentally
+    // leak them through this auth response.
     let { rows: userRows } = await pool.query(
-      'SELECT * FROM users WHERE email = $1',
+      `SELECT id, email, school, first_name, last_name,
+              is_verified, trust_score, quiz_completed
+       FROM users WHERE email = $1`,
       [emailLower]
     );
 
@@ -138,7 +142,9 @@ router.post('/verify-code', verifyLimit, async (req, res) => {
     } else {
       const ins = await pool.query(
         `INSERT INTO users (email, school, school_domain, trust_score)
-         VALUES ($1, $2, $3, 20) RETURNING *`,
+         VALUES ($1, $2, $3, 20)
+         RETURNING id, email, school, first_name, last_name,
+                   is_verified, trust_score, quiz_completed`,
         [emailLower, school || '', schoolDomain || '']
       );
       user      = ins.rows[0];
