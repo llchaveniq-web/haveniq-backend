@@ -154,6 +154,7 @@ app.use('/telemetry', require('./routes/telemetry'));
 app.use('/reviews',  require('./routes/reviews'));
 app.use('/pulses',   require('./routes/pulses'));
 app.use('/checklists', require('./routes/checklists'));
+app.use('/admin',    require('./routes/admin'));
 
 // Health check
 app.get('/health', (req, res) => res.json({
