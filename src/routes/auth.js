@@ -21,7 +21,10 @@ const verifyLimit = rateLimit({
 // Validates .edu email, generates OTP, sends via SendGrid
 router.post('/send-code', sendLimit, async (req, res) => {
   try {
-    const { email, school, schoolDomain, schoolDomains } = req.body;
+    // Guard against `req.body === undefined` (request with no Content-Type
+    // and no body would otherwise throw on destructuring and bubble up to
+    // a 500). Smoke test caught this — should be a clean 400.
+    const { email, school, schoolDomain, schoolDomains } = req.body || {};
 
     if (!email || !school || !schoolDomain) {
       return res.status(400).json({ error: 'email, school, and schoolDomain are required' });
@@ -84,7 +87,7 @@ router.post('/send-code', sendLimit, async (req, res) => {
 // Verifies OTP, creates/finds user, returns JWT
 router.post('/verify-code', verifyLimit, async (req, res) => {
   try {
-    const { email, code, school, schoolDomain } = req.body;
+    const { email, code, school, schoolDomain } = req.body || {};
 
     if (!email || !code) {
       return res.status(400).json({ error: 'email and code are required' });
