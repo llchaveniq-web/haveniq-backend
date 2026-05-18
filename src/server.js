@@ -7,7 +7,14 @@ const cors       = require('cors');
 const helmet     = require('helmet');
 const rateLimit  = require('express-rate-limit');
 const pool       = require('./db/pool');
-const { requireAuth } = require('./middleware/auth');
+const { requireAuth }  = require('./middleware/auth');
+const sentry            = require('./utils/sentry');
+
+// Sentry — opt-in error monitoring. No-op unless SENTRY_DSN env var is
+// set AND @sentry/node is installed. See utils/sentry.js for setup
+// instructions. Initialize as early as possible so initialization
+// errors elsewhere still get captured.
+sentry.tryInit();
 
 const app    = express();
 app.set('trust proxy', 1); // Required for Railway / reverse proxies
@@ -154,6 +161,7 @@ app.use('/telemetry', require('./routes/telemetry'));
 app.use('/reviews',  require('./routes/reviews'));
 app.use('/pulses',   require('./routes/pulses'));
 app.use('/checklists', require('./routes/checklists'));
+app.use('/groups',   require('./routes/groups'));
 app.use('/admin',    require('./routes/admin'));
 
 // Health check
@@ -166,9 +174,12 @@ app.get('/health', (req, res) => res.json({
 // 404 handler
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
 
-// Global error handler
+// Global error handler. Sentry (when enabled) gets a copy of every
+// unhandled exception via captureError; we still log and respond 500
+// regardless so the request always completes.
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
+  sentry.captureError(err, { path: req.path, method: req.method });
   res.status(500).json({ error: 'Internal server error' });
 });
 

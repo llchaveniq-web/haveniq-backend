@@ -62,6 +62,9 @@ check GET  /pulses/pending                          401 "pulses pending requires
 check POST /pulses                                  401 "pulses submit requires auth"
 check GET  /checklists/00000000-0000-0000-0000-000000000000 401 "checklists fetch requires auth"
 check PATCH /checklists/00000000-0000-0000-0000-000000000000 401 "checklists update requires auth"
+check POST /groups                                  401 "groups create requires auth"
+check GET  /groups/me                               401 "groups list requires auth"
+check GET  /groups/00000000-0000-0000-0000-000000000000 401 "groups detail requires auth"
 
 # Auth flow endpoints — 400 = exists but rejects empty body (correct)
 check POST /auth/send-code                          400 "auth send-code rejects empty body"

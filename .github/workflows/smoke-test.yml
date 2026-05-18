@@ -1,0 +1,60 @@
+name: Smoke test on push
+
+# Runs the smoke-test script after each push to main. The actual deploy
+# is handled by Railway (auto-deploys on push to main), so this workflow
+# WAITS for Railway to finish redeploying, then verifies every backend
+# route returns the expected status code.
+#
+# Why this matters: Railway deploys are "best effort" — they don't tell
+# us if a route 500s after the build succeeds. The smoke test catches
+# regressions like the quiz_answers.completed column drop that broke
+# /quiz/submit silently for hours on 2026-05-17.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # manual trigger from the Actions tab
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for Railway to redeploy
+        # Railway typically deploys in 60-120s. Poll /health until the
+        # service is responsive on the new deploy. Cap at 4 minutes so
+        # the workflow doesn't hang forever if Railway is having issues.
+        run: |
+          BASE="https://haveniq-backend-production.up.railway.app"
+          echo "Waiting for $BASE to respond healthy..."
+          for i in {1..48}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Backend healthy after ${i}*5s"
+              # Extra 60s grace period for Railway to fully swap traffic
+              # to the new deploy on a slow rollout.
+              sleep 60
+              exit 0
+            fi
+            echo "  attempt $i: status=$STATUS, sleeping 5s"
+            sleep 5
+          done
+          echo "::error::Backend never reached healthy state in 4 minutes"
+          exit 1
+
+      - name: Run smoke test
+        run: bash smoke-test.sh
+
+      - name: On failure, post a clear summary
+        if: failure()
+        run: |
+          echo "## ❌ Smoke test failed on production" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "One or more backend routes returned an unexpected status." >> $GITHUB_STEP_SUMMARY
+          echo "Check the 'Run smoke test' step above for which routes failed." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Common causes:" >> $GITHUB_STEP_SUMMARY
+          echo "- DB schema drift (a migration didn't get applied to prod)" >> $GITHUB_STEP_SUMMARY
+          echo "- Missing env var on Railway" >> $GITHUB_STEP_SUMMARY
+          echo "- A route was renamed/removed without updating smoke-test.sh" >> $GITHUB_STEP_SUMMARY

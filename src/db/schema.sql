@@ -182,6 +182,34 @@ CREATE TABLE IF NOT EXISTS match_checklists (
   updated_by    UUID REFERENCES users(id) ON DELETE SET NULL
 );
 
+-- ── Squad / group matching ───────────────────────────────────────────────
+-- Students forming a group of 2-5 to look for housing together.
+-- A group has one creator + N members; the creator is also a member.
+-- Group-to-apartment + group-to-group matching is future work; for now
+-- this is just persistence of the group itself.
+CREATE TABLE IF NOT EXISTS match_groups (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name          TEXT NOT NULL,
+  creator_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  size_target   INTEGER NOT NULL CHECK (size_target BETWEEN 2 AND 5),
+  budget_per_person_min INTEGER,
+  budget_per_person_max INTEGER,
+  move_in_window TEXT,        -- 'ASAP' | 'Next month' | 'This semester' | 'Next semester'
+  status        TEXT NOT NULL DEFAULT 'forming' CHECK (status IN ('forming', 'complete', 'archived')),
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_groups_creator ON match_groups(creator_id);
+
+CREATE TABLE IF NOT EXISTS match_group_members (
+  group_id      UUID NOT NULL REFERENCES match_groups(id) ON DELETE CASCADE,
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role          TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('creator', 'member')),
+  joined_at     TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON match_group_members(user_id);
+
 -- ── Match outcome pulses ─────────────────────────────────────────────────
 -- The "did this match actually work?" feedback loop. Every accepted
 -- connect_request is eligible for a pulse at 30 / 60 / 90 days after the
