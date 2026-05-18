@@ -70,6 +70,8 @@ check GET  /groups/feed                             401 "groups feed requires au
 check POST /groups/00000000-0000-0000-0000-000000000000/express-interest 401 "groups express-interest requires auth"
 check GET  /search?q=test                           401 "search requires auth"
 check POST /quiz/preview-matches                    401 "quiz preview-matches requires auth"
+check DELETE /quiz/reset                            401 "quiz reset requires auth"
+check GET  /quiz/snapshots                          401 "quiz snapshots requires auth"
 
 # Auth flow endpoints — 400 = exists but rejects empty body (correct)
 check POST /auth/send-code                          400 "auth send-code rejects empty body"

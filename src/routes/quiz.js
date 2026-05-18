@@ -256,4 +256,114 @@ async function scoreNewMatches(userId, newAnswers) {
   );
 }
 
+// ── DELETE /quiz/reset ─────────────────────────────────────────────────────
+// Clears the user's quiz_answers row + quiz_completed flag so they can
+// retake. Snapshots are intentionally preserved — they're the longitudinal
+// record we use to compute drift across retakes.
+router.delete('/reset', requireAuth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM quiz_answers WHERE user_id = $1', [req.user.id]);
+    await pool.query('UPDATE users SET quiz_completed = FALSE WHERE id = $1', [req.user.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('quiz reset failed:', err);
+    res.status(500).json({ error: 'Failed to reset quiz' });
+  }
+});
+
+// ── GET /quiz/snapshots ────────────────────────────────────────────────────
+// Returns a chronological list of every quiz completion the user has
+// ever made, along with computed drift vs. the previous snapshot:
+//   - changedAnswers: count of question IDs where the answer differs
+//   - topDriftCategories: 1-3 categories with the largest movement
+//   - driftPct: 0..100 — share of answered questions that changed
+//
+// The first snapshot has all drift fields null. The category mapping
+// here mirrors services/scoring.js — kept in sync manually because
+// duplicating the constant is cheaper than refactoring the import for a
+// single read-side feature.
+const SNAPSHOT_CATEGORIES = {
+  attachment:    [1,2,3,4,5],
+  emotional:     [6,7,8,9,10],
+  control:       [11,12,13,14,15],
+  communication: [16,17,18,19,20],
+  identity:      [21,22,23,24,25],
+  childhood:     [26,27,28,29,30],
+  shadow:        [31,32,33,34,35],
+  nervous:       [36,37,38,39,40],
+  selfawareness: [41,42,43,44,45,46,47],
+  lifestyle:     [48,49,50,51,52,53,54,55],
+};
+
+function flatAnswerValue(raw) {
+  if (typeof raw === 'number') return raw;
+  if (raw && typeof raw === 'object') {
+    if (typeof raw.index === 'number') return raw.index;
+    if (typeof raw.value === 'number') return raw.value;
+  }
+  return null;
+}
+
+function computeDrift(prev, curr) {
+  const allIds = new Set([...Object.keys(prev || {}), ...Object.keys(curr || {})]);
+  let changed = 0, considered = 0;
+  const categoryMoves = {};
+  for (const id of allIds) {
+    const a = flatAnswerValue(prev[id]);
+    const b = flatAnswerValue(curr[id]);
+    if (a == null || b == null) continue;
+    considered += 1;
+    if (a !== b) {
+      changed += 1;
+      const cat = Object.entries(SNAPSHOT_CATEGORIES)
+        .find(([, ids]) => ids.includes(Number(id)))?.[0];
+      if (cat) categoryMoves[cat] = (categoryMoves[cat] || 0) + 1;
+    }
+  }
+  const topDriftCategories = Object.entries(categoryMoves)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3)
+    .map(([cat, n]) => ({ category: cat, changes: n }));
+  return {
+    changedAnswers: changed,
+    driftPct: considered ? Math.round((changed / considered) * 100) : 0,
+    topDriftCategories,
+  };
+}
+
+router.get('/snapshots', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, trigger, snapshot, created_at
+       FROM user_profile_snapshot
+       WHERE user_id = $1 AND trigger = 'quiz_complete'
+       ORDER BY created_at ASC`,
+      [req.user.id]
+    );
+
+    const out = [];
+    let prevAnswers = null;
+    for (const r of rows) {
+      const answers = r.snapshot?.answers ?? {};
+      const drift = prevAnswers ? computeDrift(prevAnswers, answers) : null;
+      out.push({
+        id:         r.id,
+        createdAt:  r.created_at,
+        // Don't ship the full answer payload to the client — only the
+        // derived signals. Keeps the wire size small and avoids leaking
+        // any text-answer free-form content unintentionally.
+        drift,
+      });
+      prevAnswers = answers;
+    }
+
+    // Newest-first for UI display
+    out.reverse();
+    res.json({ snapshots: out });
+  } catch (err) {
+    console.error('snapshots fetch failed:', err);
+    res.status(500).json({ error: 'Failed to load quiz history' });
+  }
+});
+
 module.exports = router;
