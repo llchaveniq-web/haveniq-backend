@@ -160,6 +160,64 @@ router.patch('/me', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /users/me/export ──────────────────────────────────────────────────
+// GDPR Article 15 — Right of Access. Returns a single JSON document
+// containing every row of data we hold about the signed-in user across
+// every table. Streams as a file download (Content-Disposition) so
+// browsers save it directly. Push tokens are redacted; nothing else is.
+router.get('/me/export', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [
+      profile, quiz, snapshots, consent, telemetry,
+      requests, messages, views, scores, reviews, pulses, pushTokens,
+      checklists,
+    ] = await Promise.all([
+      pool.query('SELECT * FROM users                   WHERE id            = $1', [userId]),
+      pool.query('SELECT * FROM quiz_answers            WHERE user_id       = $1', [userId]),
+      pool.query('SELECT * FROM user_profile_snapshot   WHERE user_id       = $1 ORDER BY created_at DESC', [userId]),
+      pool.query('SELECT * FROM consent_log             WHERE user_id       = $1 ORDER BY created_at DESC', [userId]),
+      pool.query('SELECT * FROM telemetry_events        WHERE user_id       = $1 ORDER BY client_ts DESC LIMIT 50000', [userId]),
+      pool.query('SELECT * FROM connect_requests        WHERE from_user     = $1 OR to_user     = $1 ORDER BY created_at DESC', [userId]),
+      pool.query('SELECT * FROM messages                WHERE sender_id     = $1 ORDER BY created_at DESC', [userId]),
+      pool.query('SELECT * FROM profile_views           WHERE viewer_id     = $1 OR viewed_id   = $1 ORDER BY viewed_at DESC', [userId]),
+      pool.query('SELECT * FROM compatibility_scores    WHERE user_a        = $1 OR user_b      = $1 ORDER BY calculated_at DESC', [userId]),
+      pool.query('SELECT * FROM roommate_reviews        WHERE reviewer_id   = $1 OR reviewee_id = $1 ORDER BY created_at DESC', [userId]),
+      pool.query('SELECT * FROM match_pulses            WHERE responder_id  = $1 ORDER BY created_at DESC', [userId]),
+      pool.query('SELECT id, user_id, platform, created_at FROM push_tokens WHERE user_id = $1', [userId]),
+      pool.query(`SELECT * FROM match_checklists
+                  WHERE request_id IN (SELECT id FROM connect_requests WHERE from_user = $1 OR to_user = $1)`, [userId]),
+    ]);
+
+    const out = {
+      exported_at:           new Date().toISOString(),
+      schema_version:        '1.0',
+      user_id:               userId,
+      profile:               profile.rows[0] ?? null,
+      quiz_answers:          quiz.rows,
+      profile_snapshots:     snapshots.rows,
+      consent_log:           consent.rows,
+      telemetry_events:      telemetry.rows,
+      connect_requests:      requests.rows,
+      messages_sent:         messages.rows,
+      profile_views:         views.rows,
+      compatibility_scores:  scores.rows,
+      roommate_reviews:      reviews.rows,
+      match_pulses:          pulses.rows,
+      push_tokens:           pushTokens.rows,  // token strings redacted by SELECT
+      shared_checklists:     checklists.rows,
+    };
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="haveniq-export-${userId.slice(0,8)}-${Date.now()}.json"`);
+    res.send(JSON.stringify(out, null, 2));
+  } catch (err) {
+    console.error('export failed:', err);
+    res.status(500).json({ error: 'Failed to export data' });
+  }
+});
+
 // ── DELETE /users/me ──────────────────────────────────────────────────────
 // Permanently delete the signed-in user's account. Cascading FK deletes
 // remove their quiz_answers, push_tokens, connect_requests, conversations,
