@@ -10,6 +10,34 @@ const pool       = require('./db/pool');
 const { requireAuth }  = require('./middleware/auth');
 const sentry            = require('./utils/sentry');
 
+// ── CORS configuration ────────────────────────────────────────────────────
+// Production requires an explicit CLIENT_URL (comma-separated list of
+// origins). In production the previous fallback to '*' meant a missing
+// env var on a future deploy silently opened the API to any origin.
+// Dev defaults to '*' for convenience and warns loudly.
+const isProd = process.env.NODE_ENV === 'production';
+const rawAllowed = (process.env.CLIENT_URL || '').trim();
+if (isProd && !rawAllowed) {
+  // eslint-disable-next-line no-console
+  console.error('[fatal] CLIENT_URL must be set in production. Comma-separated list of allowed origins, e.g. "https://app.haveniq.org,https://haveniq.org".');
+  process.exit(1);
+}
+const allowedOrigins = rawAllowed
+  ? rawAllowed.split(',').map(s => s.trim()).filter(Boolean)
+  : ['*'];
+if (!isProd && allowedOrigins.includes('*')) {
+  // eslint-disable-next-line no-console
+  console.warn('[cors] CLIENT_URL not set — defaulting to "*" for dev. Set it for production.');
+}
+const corsOrigin = allowedOrigins.includes('*')
+  ? true  // express-cors treats `true` as "reflect request origin" — works for browsers but doesn't accept credentials with `*` literal
+  : (origin, cb) => {
+      // Same-origin / curl requests have no Origin header — let them through.
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      cb(new Error(`CORS: ${origin} not in allowed list`));
+    };
+
 // Sentry — opt-in error monitoring. No-op unless SENTRY_DSN env var is
 // set AND @sentry/node is installed. See utils/sentry.js for setup
 // instructions. Initialize as early as possible so initialization
@@ -36,7 +64,7 @@ const server = http.createServer(app);
 // BOTH insert into `messages`, which would silently double messages.
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || '*',
+    origin: corsOrigin,
     methods: ['GET', 'POST'],
   },
 });
@@ -137,8 +165,11 @@ io.on('connection', (socket) => {
 // ── Express middleware ────────────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CLIENT_URL || '*',
-  credentials: true,
+  origin: corsOrigin,
+  // Credentials only meaningful when origin is reflected (not '*'). We
+  // don't use cookies (bearer-token auth) so this is mostly defensive
+  // hygiene for the day someone adds them.
+  credentials: !allowedOrigins.includes('*'),
 }));
 
 // Stripe webhook MUST consume the raw body (not the JSON-parsed one) so

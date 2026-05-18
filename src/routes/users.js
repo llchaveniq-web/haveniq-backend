@@ -108,6 +108,35 @@ router.get('/me', requireAuth, async (req, res) => {
 });
 
 // ── PATCH /users/me ───────────────────────────────────────────────────────
+// Per-field validators. SQL is already parameterized so injection isn't
+// possible — these stop garbage data (negative ages, 100KB bios, arbitrary
+// strings in enum-shaped fields) from polluting the row.
+const SCHOOL_YEARS = new Set(['freshman', 'sophomore', 'junior', 'senior', 'grad']);
+const GENDERS      = new Set(['male', 'female', 'nonbinary', 'other', 'prefer_not']);
+const LOOKING_FOR  = new Set(['same_gender', 'any_gender', 'lgbtq_friendly', 'no_substances', 'quiet', 'social']);
+const STATUSES     = new Set(['looking', 'open', 'committed', 'paused']);
+const TIMELINES    = new Set(['this_month', '1-3_months', 'fall_semester', 'spring_semester', 'flexible']);
+const EMAIL_RE     = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const validators = {
+  first_name:      v => typeof v === 'string' && v.length > 0 && v.length <= 50,
+  last_name:       v => typeof v === 'string' && v.length <= 50,
+  bio:             v => typeof v === 'string' && v.length <= 2000,
+  major:           v => typeof v === 'string' && v.length <= 100,
+  school_year:     v => typeof v === 'string' && SCHOOL_YEARS.has(v),
+  age:             v => Number.isInteger(v) && v >= 16 && v <= 99,
+  gender:          v => typeof v === 'string' && GENDERS.has(v),
+  looking_for:     v => Array.isArray(v) && v.length <= 10 && v.every(x => typeof x === 'string' && LOOKING_FOR.has(x)),
+  photo_url:       v => typeof v === 'string' && v.length <= 500 && /^https?:\/\//.test(v),
+  budget_min:      v => Number.isInteger(v) && v >= 0 && v <= 100000,
+  budget_max:      v => Number.isInteger(v) && v >= 0 && v <= 100000,
+  move_in_timeline:v => typeof v === 'string' && TIMELINES.has(v),
+  neighborhoods:   v => Array.isArray(v) && v.length <= 20 && v.every(x => typeof x === 'string' && x.length <= 100),
+  roommate_status: v => typeof v === 'string' && STATUSES.has(v),
+  is_paused:       v => typeof v === 'boolean',
+  parent_email:    v => typeof v === 'string' && v.length <= 200 && EMAIL_RE.test(v),
+};
+
 router.patch('/me', requireAuth, async (req, res) => {
   try {
     const updates = [];
@@ -136,11 +165,21 @@ router.patch('/me', requireAuth, async (req, res) => {
       parentEmail:    'parent_email',
     };
 
+    const invalid = [];
     for (const [camel, snake] of Object.entries(fieldMap)) {
-      if (req.body[camel] !== undefined) {
-        updates.push(`${snake} = $${idx++}`);
-        values.push(req.body[camel]);
+      if (req.body[camel] === undefined) continue;
+      const v = req.body[camel];
+      const validate = validators[snake];
+      if (validate && !validate(v)) {
+        invalid.push(camel);
+        continue;
       }
+      updates.push(`${snake} = $${idx++}`);
+      values.push(v);
+    }
+
+    if (invalid.length > 0) {
+      return res.status(400).json({ error: 'Invalid fields', fields: invalid });
     }
 
     if (updates.length === 0) {
@@ -332,20 +371,46 @@ router.post('/me/photo', requireAuth, uploadMiddleware.single('photo'), async (r
 });
 
 // ── POST /users/me/push-token ─────────────────────────────────────────────
+// Previously `ON CONFLICT (token) DO UPDATE SET user_id = $1` let any
+// authenticated user claim another user's Expo push token and silently
+// redirect their notifications. Now: a token may be re-bound to a new
+// user ONLY when the existing row already belongs to the same user (the
+// idempotent case where a user opens the app on a fresh install of the
+// same device). Cross-user claims return 409 so the client knows the
+// token belongs to someone else.
 router.post('/me/push-token', requireAuth, async (req, res) => {
   try {
-    const { token, platform } = req.body;
-    if (!token) return res.status(400).json({ error: 'token required' });
+    const { token, platform } = req.body || {};
+    if (!token || typeof token !== 'string' || token.length > 500) {
+      return res.status(400).json({ error: 'token required' });
+    }
+    if (platform && !['ios', 'android', 'web'].includes(platform)) {
+      return res.status(400).json({ error: 'invalid platform' });
+    }
 
-    await pool.query(
-      `INSERT INTO push_tokens (user_id, token, platform)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (token) DO UPDATE SET user_id = $1`,
-      [req.user.id, token, platform || 'ios']
+    const { rows: existing } = await pool.query(
+      'SELECT user_id FROM push_tokens WHERE token = $1',
+      [token]
     );
+    if (existing[0] && existing[0].user_id !== req.user.id) {
+      return res.status(409).json({ error: 'Token already registered to another account' });
+    }
+    if (existing[0]) {
+      // Same user re-registering — refresh platform/updated_at.
+      await pool.query(
+        'UPDATE push_tokens SET platform = $1, updated_at = NOW() WHERE token = $2',
+        [platform || 'ios', token]
+      );
+    } else {
+      await pool.query(
+        'INSERT INTO push_tokens (user_id, token, platform) VALUES ($1, $2, $3)',
+        [req.user.id, token, platform || 'ios']
+      );
+    }
 
     res.json({ success: true });
   } catch (err) {
+    console.error('push-token error:', err);
     res.status(500).json({ error: 'Failed to save push token' });
   }
 });

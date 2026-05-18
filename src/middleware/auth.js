@@ -1,6 +1,20 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 
+// Fail fast at module load if JWT_SECRET is missing or weak. A missing
+// secret makes jwt.sign() throw on every signin; a short secret makes
+// tokens trivially forgeable. Both are catastrophic and silent until
+// the first user signs in — so refuse to boot the process.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  // eslint-disable-next-line no-console
+  console.error(
+    '[fatal] JWT_SECRET must be set and at least 32 characters. ' +
+    'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"',
+  );
+  process.exit(1);
+}
+
 async function requireAuth(req, res, next) {
   try {
     const header = req.headers.authorization;

@@ -4,35 +4,55 @@ const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { signToken } = require('../middleware/auth');
 
-// Rate limiters — keyed by EMAIL (not IP).
+// Rate limiters — TWO buckets per route: per-email (so a single victim
+// can't be bombarded) AND per-IP (so a single attacker can't rotate
+// emails to dodge the per-email limit). Both must pass.
 //
-// Default express-rate-limit buckets by IP. On a campus launch event,
-// all 30-50 students arrive from the same WiFi egress and would share
-// the same bucket — the 6th OTP-request would block legitimate users.
-// Keying by email instead means each student has their own quota and a
-// campus-wide launch is safe.
-//
-// Falls back to IP when email is missing (e.g. on routes where the
-// body is malformed) so the limiter still has SOME protection.
-const sendLimit = rateLimit({
+// On a campus launch event, 30-50 students arrive from the same WiFi
+// egress; the per-IP signup bucket is generous enough (20/hour) that
+// legitimate launches still go through.
+const sendLimitEmail = rateLimit({
   windowMs: 15 * 60 * 1000,  // 15 min
   max: 5,
-  message: { error: 'Too many OTP requests. Try again in 15 minutes.' },
+  message: { error: 'Too many OTP requests for this email. Try again in 15 minutes.' },
   keyGenerator: (req) =>
     (req.body?.email || '').toString().toLowerCase().trim() || req.ip,
 });
 
-const verifyLimit = rateLimit({
+// Per-IP signup limiter — caps total signup attempts from one egress,
+// regardless of how many email addresses are tried. Without this an
+// attacker can rotate emails forever and the per-email limiter never
+// fires.
+const sendLimitIp = rateLimit({
+  windowMs: 60 * 60 * 1000,  // 1 hour
+  max: 20,
+  message: { error: 'Too many signups from this network. Try again in 1 hour.' },
+  // Default keyGenerator (IP) is what we want here.
+});
+
+const verifyLimitEmail = rateLimit({
   windowMs: 10 * 60 * 1000,  // 10 min
-  max: 10,
+  max: 5,
   message: { error: 'Too many verification attempts.' },
   keyGenerator: (req) =>
     (req.body?.email || '').toString().toLowerCase().trim() || req.ip,
 });
 
+const verifyLimitIp = rateLimit({
+  windowMs: 10 * 60 * 1000,  // 10 min
+  max: 30,
+  message: { error: 'Too many verification attempts from this network.' },
+});
+
+const refreshLimitIp = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many refresh attempts.' },
+});
+
 // ── POST /auth/send-code ──────────────────────────────────────────────────
 // Validates .edu email, generates OTP, sends via SendGrid
-router.post('/send-code', sendLimit, async (req, res) => {
+router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
   try {
     // Guard against `req.body === undefined` (request with no Content-Type
     // and no body would otherwise throw on destructuring and bubble up to
@@ -108,7 +128,8 @@ router.post('/send-code', sendLimit, async (req, res) => {
 
 // ── POST /auth/verify-code ────────────────────────────────────────────────
 // Verifies OTP, creates/finds user, returns JWT
-router.post('/verify-code', verifyLimit, async (req, res) => {
+const MAX_OTP_ATTEMPTS = 5;
+router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) => {
   try {
     const { email, code, school, schoolDomain } = req.body || {};
 
@@ -132,18 +153,28 @@ router.post('/verify-code', verifyLimit, async (req, res) => {
 
     const otpRecord = otpRows[0];
 
-    // Track attempts
-    await pool.query(
-      'UPDATE otp_codes SET attempts = attempts + 1 WHERE id = $1',
+    // Atomically increment + read the new attempt count. Without RETURNING
+    // we compared the pre-increment value below and let the user have one
+    // extra guess past the cap (the 4th wrong code was rejected, but the
+    // 5th was allowed to validate before lockout fired).
+    const { rows: bumped } = await pool.query(
+      'UPDATE otp_codes SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts',
       [otpRecord.id]
     );
+    const attemptsAfter = bumped[0]?.attempts ?? otpRecord.attempts + 1;
 
-    if (otpRecord.attempts >= 3) {
+    if (attemptsAfter > MAX_OTP_ATTEMPTS) {
       await pool.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otpRecord.id]);
       return res.status(400).json({ error: 'Too many attempts. Request a new code.' });
     }
 
     if (otpRecord.code !== code.trim()) {
+      // Once the user hits the cap with a wrong code, burn the OTP so the
+      // next try can't re-validate even though the count check above
+      // passed for THIS request.
+      if (attemptsAfter >= MAX_OTP_ATTEMPTS) {
+        await pool.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otpRecord.id]);
+      }
       return res.status(400).json({ error: 'Incorrect code. Try again.' });
     }
 
@@ -203,13 +234,28 @@ router.post('/verify-code', verifyLimit, async (req, res) => {
 });
 
 // ── POST /auth/refresh ────────────────────────────────────────────────────
-router.post('/refresh', async (req, res) => {
+// Refresh policy: a token may be exchanged for a fresh one if it is either
+// still valid OR expired within the last REFRESH_GRACE_DAYS. Tokens older
+// than that grace window are dead — the user must sign back in. Previously
+// `ignoreExpiration: true` accepted tokens stolen years ago.
+const REFRESH_GRACE_DAYS = 7;
+router.post('/refresh', refreshLimitIp, async (req, res) => {
   try {
-    const { token } = req.body;
+    const { token } = req.body || {};
     if (!token) return res.status(400).json({ error: 'token required' });
 
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true });
+
+    // `exp` is seconds since epoch. If absent the token is malformed.
+    const expSec = decoded.exp;
+    if (typeof expSec !== 'number') {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    const ageMs = Date.now() - expSec * 1000;
+    if (ageMs > REFRESH_GRACE_DAYS * 86400 * 1000) {
+      return res.status(401).json({ error: 'Token too old to refresh. Sign in again.' });
+    }
 
     const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [decoded.userId]);
     if (!rows[0]) return res.status(401).json({ error: 'User not found' });

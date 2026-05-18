@@ -7,19 +7,45 @@ const { calculateCompatibility, generateWhyMatched } = require('../services/scor
 // of garbage into the quiz_answers JSONB column. 5000 chars is roughly
 // 1000 words — far more than any legitimate clinical-quiz reflection.
 const MAX_TEXT_ANSWER_CHARS = 5000;
+const MIN_QUESTION_ID  = 1;
+const MAX_QUESTION_ID  = 100;   // Wider than the current 55-question set
+                                // so adding questions doesn't require a
+                                // simultaneous backend deploy.
+const MAX_TOTAL_ANSWERS = 200;  // Stops a single submit from carrying
+                                // unbounded garbage keys.
 
 function validateAnswers(answers) {
   if (!answers || typeof answers !== 'object' || Array.isArray(answers)) {
     return 'answers object required';
   }
+  const keys = Object.keys(answers);
+  if (keys.length > MAX_TOTAL_ANSWERS) {
+    return `too many answers (${keys.length} > ${MAX_TOTAL_ANSWERS})`;
+  }
   for (const [k, v] of Object.entries(answers)) {
-    // Answers come in two shapes: { type: 'choice', value: number } or
-    // { type: 'text', text: string }. We only need to cap text shapes.
-    if (v && typeof v === 'object' && v.type === 'text') {
+    // Question IDs must be small positive integers in the documented range.
+    const qid = Number(k);
+    if (!Number.isInteger(qid) || qid < MIN_QUESTION_ID || qid > MAX_QUESTION_ID) {
+      return `answer ${k}: question id out of range`;
+    }
+    if (!v || typeof v !== 'object') {
+      return `answer ${k}: malformed`;
+    }
+    if (v.type === 'text' || v.type === 'freetext') {
       if (typeof v.text !== 'string') return `answer ${k}: text must be a string`;
       if (v.text.length > MAX_TEXT_ANSWER_CHARS) {
         return `answer ${k}: text exceeds ${MAX_TEXT_ANSWER_CHARS} char limit`;
       }
+    } else if (v.type === 'option' || v.type === 'choice') {
+      // Accept either `index` (zero-based) or `value` (numeric). Both
+      // must be small integers — scoring engine treats anything else as
+      // invalid anyway.
+      const candidate = v.index !== undefined ? v.index : v.value;
+      if (!Number.isInteger(candidate) || candidate < 0 || candidate > 20) {
+        return `answer ${k}: option index out of range`;
+      }
+    } else {
+      return `answer ${k}: unknown type ${v.type}`;
     }
   }
   return null;

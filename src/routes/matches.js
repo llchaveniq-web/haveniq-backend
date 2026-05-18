@@ -134,10 +134,34 @@ router.get('/feed', requireAuth, async (req, res) => {
 
 // ── POST /matches/connect ─────────────────────────────────────────────────
 // Send a connect request
+const CONNECT_MIN_SCORE = 65;
 router.post('/connect', requireAuth, async (req, res) => {
   try {
-    const { toUserId } = req.body;
+    const { toUserId } = req.body || {};
     if (!toUserId) return res.status(400).json({ error: 'toUserId required' });
+    if (toUserId === req.user.id) {
+      return res.status(400).json({ error: 'Cannot connect to yourself' });
+    }
+
+    // Eligibility gate — without this, a malicious client can spam
+    // connect requests at guessed UUIDs. Require a real compatibility
+    // row above the surface threshold AND no hard-block flag.
+    const { rows: compat } = await pool.query(
+      `SELECT score, is_hard_blocked
+         FROM compatibility_scores
+        WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+        LIMIT 1`,
+      [req.user.id, toUserId]
+    );
+    if (!compat[0]) {
+      return res.status(404).json({ error: 'Match not found' });
+    }
+    if (compat[0].is_hard_blocked) {
+      return res.status(403).json({ error: 'Not eligible to connect' });
+    }
+    if (parseFloat(compat[0].score) < CONNECT_MIN_SCORE) {
+      return res.status(403).json({ error: 'Compatibility too low to connect' });
+    }
 
     // Check if already connected or pending
     const { rows: existing } = await pool.query(
