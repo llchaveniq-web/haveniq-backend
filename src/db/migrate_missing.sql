@@ -137,6 +137,21 @@ CREATE TABLE IF NOT EXISTS match_group_members (
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON match_group_members(user_id);
 
+-- ── Premium subscriptions (Stripe-backed, opt-in until activated) ──
+-- One row per user, kept in sync with Stripe via webhook. status mirrors
+-- the Stripe subscription.status verbatim so we don't drift over time.
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id                UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  stripe_customer_id     TEXT NOT NULL,
+  stripe_subscription_id TEXT,
+  status                 TEXT NOT NULL,
+  plan                   TEXT,
+  current_period_end     TIMESTAMPTZ,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
+
 -- ── Apartment listings (founder-curated until partnerships land) ─
 -- school_near is a free-form string (e.g. "Orange Coast College") used
 -- for same-school filtering — matches the convention in users.school.

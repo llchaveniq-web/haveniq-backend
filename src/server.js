@@ -140,7 +140,16 @@ app.use(cors({
   origin: process.env.CLIENT_URL || '*',
   credentials: true,
 }));
-app.use(express.json({ limit: '10mb' }));
+
+// Stripe webhook MUST consume the raw body (not the JSON-parsed one) so
+// signature verification works. Mount it BEFORE the global JSON parser
+// and let the route file declare its own express.raw() middleware. The
+// JSON parser below skips this exact path.
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+  type: (req) => !req.originalUrl.startsWith('/premium/webhook'),
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Global rate limit
@@ -164,6 +173,7 @@ app.use('/checklists', require('./routes/checklists'));
 app.use('/groups',   require('./routes/groups'));
 app.use('/search',   require('./routes/search'));
 app.use('/housing',  require('./routes/housing'));
+app.use('/premium',  require('./routes/premium'));
 app.use('/admin',    require('./routes/admin'));
 
 // Health check

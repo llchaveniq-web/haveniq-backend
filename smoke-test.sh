@@ -75,6 +75,9 @@ check GET  /quiz/snapshots                          401 "quiz snapshots requires
 check GET  /housing/listings                        401 "housing list requires auth"
 check POST /housing/listings                        401 "housing create requires auth"
 check GET  /housing/listings/00000000-0000-0000-0000-000000000000 401 "housing detail requires auth"
+check GET  /premium/status                          401 "premium status requires auth"
+check POST /premium/checkout-session                401 "premium checkout-session requires auth"
+check POST /premium/cancel                          401 "premium cancel requires auth"
 
 # Auth flow endpoints — 400 = exists but rejects empty body (correct)
 check POST /auth/send-code                          400 "auth send-code rejects empty body"

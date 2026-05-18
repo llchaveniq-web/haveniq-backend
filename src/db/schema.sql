@@ -210,6 +210,19 @@ CREATE TABLE IF NOT EXISTS match_group_members (
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON match_group_members(user_id);
 
+-- ── Premium subscriptions (Stripe-backed) ────────────────────────────────
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id                UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  stripe_customer_id     TEXT NOT NULL,
+  stripe_subscription_id TEXT,
+  status                 TEXT NOT NULL,
+  plan                   TEXT,
+  current_period_end     TIMESTAMPTZ,
+  created_at             TIMESTAMPTZ DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
+
 -- ── Apartment listings ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS listings (
   id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
