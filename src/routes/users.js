@@ -3,6 +3,7 @@ const multer  = require('multer');
 const pool    = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { uploadProfilePhoto, deleteProfilePhoto } = require('../services/cloudinary');
+const { isFounder } = require('../utils/founders');
 
 // 5 MB image cap — generous for a single profile photo, prevents abuse.
 // Held in memory (no temp files on Railway's ephemeral disk) and streamed
@@ -223,13 +224,18 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'HavenIQ+ required to see profile viewers' });
     }
 
+    // Founder bypass: investor demos see populated "who viewed your
+    // profile" lists. Real students see only real viewers.
+    const includeDemos = isFounder(req.user.id);
+    const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
+
     const { rows } = await pool.query(
       `SELECT u.id, u.first_name, u.last_name, u.school, u.photo_url, pv.viewed_at
        FROM profile_views pv
        JOIN users u ON u.id = pv.viewer_id
        WHERE pv.viewed_id = $1
          AND u.is_paused = FALSE
-         AND u.email NOT LIKE '%@haveniq-demo.edu'
+         ${demoFilter}
        ORDER BY pv.viewed_at DESC LIMIT 50`,
       [req.user.id]
     );

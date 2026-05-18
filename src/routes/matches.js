@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { sendParentMatchEmail } = require('../services/email');
+const { isFounder } = require('../utils/founders');
 
 // Best-effort parent notification on a student's FIRST accepted match.
 // Called twice — once for each side of the pair. Each user's row has
@@ -47,6 +48,14 @@ router.get('/feed', requireAuth, async (req, res) => {
     const userId = req.user.id;
     const { school } = req.query;  // optional school filter
 
+    // Demo-user filter is applied to REAL students only. Founders bypass
+    // it so investor demos (the conference, advisor meetings, etc.) show
+    // a populated match feed instead of "you + your brother." Real
+    // student trust is preserved because the filter still hides demos
+    // for everyone else.
+    const includeDemos = isFounder(userId);
+    const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
+
     const { rows } = await pool.query(
       `SELECT
          cs.score,
@@ -84,7 +93,7 @@ router.get('/feed', requireAuth, async (req, res) => {
          AND cs.score >= 65
          AND u.is_paused = FALSE
          AND u.quiz_completed = TRUE
-         AND u.email NOT LIKE '%@haveniq-demo.edu'
+         ${demoFilter}
          ${school ? 'AND u.school = $2' : ''}
        ORDER BY cs.score DESC
        LIMIT 50`,
@@ -227,6 +236,12 @@ router.post('/respond', requireAuth, async (req, res) => {
 // Incoming pending requests
 router.get('/requests', requireAuth, async (req, res) => {
   try {
+    // Same founder-bypass pattern as /feed. Demo connect requests are
+    // hidden from real students but shown to founders so the "incoming
+    // requests" tab is also populated for investor demos.
+    const includeDemos = isFounder(req.user.id);
+    const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
+
     const { rows } = await pool.query(
       `SELECT cr.id, cr.from_user, cr.created_at,
               u.first_name, u.last_name, u.school, u.photo_url,
@@ -240,7 +255,7 @@ router.get('/requests', requireAuth, async (req, res) => {
        WHERE cr.to_user = $1
          AND cr.status = 'pending'
          AND u.is_paused = FALSE
-         AND u.email NOT LIKE '%@haveniq-demo.edu'
+         ${demoFilter}
        ORDER BY cr.created_at DESC`,
       [req.user.id]
     );

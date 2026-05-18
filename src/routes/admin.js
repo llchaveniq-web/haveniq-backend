@@ -1,21 +1,10 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-
-// Founder gate. Only user IDs listed here (comma-separated env var
-// FOUNDER_USER_IDS) can reach the admin endpoints. Defaults to Jackson
-// for development if the env var isn't set.
-//
-// Add new co-founder UUIDs by appending to the env var on Railway:
-//   FOUNDER_USER_IDS=jackson-uuid,brother-uuid,third-uuid
-const DEFAULT_FOUNDER_IDS = ['d5ade30f-be9f-45a8-bcb4-90be3ee25ecb'];
-function getFounderIds() {
-  const env = (process.env.FOUNDER_USER_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
-  return env.length > 0 ? env : DEFAULT_FOUNDER_IDS;
-}
+const { isFounder } = require('../utils/founders');
 
 function requireFounder(req, res, next) {
-  if (!getFounderIds().includes(req.user.id)) {
+  if (!isFounder(req.user.id)) {
     return res.status(403).json({ error: 'Founders only' });
   }
   next();
