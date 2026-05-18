@@ -43,25 +43,35 @@ router.post('/send-code', sendLimit, async (req, res) => {
       return res.status(400).json({ error: 'email, school, and schoolDomain are required' });
     }
 
-    // Must be a .edu address
+    // Accept academic email addresses worldwide, not just US .edu. The
+    // pattern covers the major country-academic TLD conventions:
+    //   US           → *.edu
+    //   UK / NZ / JP / KR / IN / ZA → *.ac.<cc>
+    //   AU / SG / PH / MX / CN / IN / TR / etc. → *.edu.<cc>
+    // Countries without a clean academic TLD (Canada .ca, Germany .de,
+    // France .fr, Ireland .ie) get validated by exact match against the
+    // school's pre-registered domain instead — see the schoolDomains
+    // check below.
     const emailLower = email.trim().toLowerCase();
-    if (!emailLower.endsWith('.edu')) {
-      return res.status(400).json({ error: 'Only .edu email addresses are accepted' });
-    }
+    const academicTldRegex = /\.(edu|edu\.[a-z]{2,3}|ac\.[a-z]{2,3})$/;
 
-    // Domain must match one of the school's accepted domains (exact OR
-    // subdomain — e.g. student.csulb.edu for csulb.edu). A school can
-    // have multiple accepted domains when it's part of a community
-    // college district that shares a single student-mail domain
-    // (CCCD's `student.cccd.edu`, FHDA's `student.fhda.edu`, etc.).
     const emailDomain  = emailLower.split('@')[1];
     const acceptedList = Array.isArray(schoolDomains) && schoolDomains.length > 0
       ? schoolDomains.map(d => String(d).toLowerCase())
       : [String(schoolDomain).toLowerCase()];
     const domainMatches = acceptedList.some(d => emailDomain === d || emailDomain.endsWith('.' + d));
-    if (!domainMatches) {
+
+    // Two acceptance paths:
+    //   1. The email matches the school's pre-registered domain (handles
+    //      every country including the no-academic-TLD ones, as long as
+    //      the school is curated in the school list).
+    //   2. The email has a recognized academic TLD pattern (handles
+    //      international students whose school isn't yet curated — better
+    //      than refusing them outright on day-one launch).
+    const hasAcademicTld = academicTldRegex.test(emailDomain);
+    if (!domainMatches && !hasAcademicTld) {
       return res.status(400).json({
-        error: `Email must be a ${acceptedList.join(' / ')} address for ${school}`,
+        error: `Email must be a verified school address (e.g. .edu, .ac.uk, .edu.au) or match ${acceptedList.join(' / ')} for ${school}`,
       });
     }
 
