@@ -163,6 +163,7 @@ app.use('/pulses',   require('./routes/pulses'));
 app.use('/checklists', require('./routes/checklists'));
 app.use('/groups',   require('./routes/groups'));
 app.use('/search',   require('./routes/search'));
+app.use('/housing',  require('./routes/housing'));
 app.use('/admin',    require('./routes/admin'));
 
 // Health check

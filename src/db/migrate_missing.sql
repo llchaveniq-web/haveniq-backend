@@ -137,6 +137,31 @@ CREATE TABLE IF NOT EXISTS match_group_members (
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON match_group_members(user_id);
 
+-- ── Apartment listings (founder-curated until partnerships land) ─
+-- school_near is a free-form string (e.g. "Orange Coast College") used
+-- for same-school filtering — matches the convention in users.school.
+-- per_person_rent is stored explicitly because total / beds can be off
+-- (some leases have shared masters, dens, etc.).
+CREATE TABLE IF NOT EXISTS listings (
+  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  address               TEXT NOT NULL,
+  city                  TEXT,
+  school_near           TEXT NOT NULL,
+  beds                  INTEGER NOT NULL CHECK (beds BETWEEN 1 AND 10),
+  baths                 NUMERIC(3,1) NOT NULL CHECK (baths > 0),
+  total_rent_cents      INTEGER NOT NULL CHECK (total_rent_cents > 0),
+  per_person_rent_cents INTEGER NOT NULL CHECK (per_person_rent_cents > 0),
+  photo_url             TEXT,
+  contact_name          TEXT,
+  contact_email         TEXT,
+  available_from        DATE,
+  notes                 TEXT,
+  is_active             BOOLEAN NOT NULL DEFAULT TRUE,
+  created_by            UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at            TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_listings_school ON listings(school_near) WHERE is_active = TRUE;
+
 -- ── Group-to-group interest signals ───────────────────────────────
 -- When squad A "expresses interest" in squad B, we record a row here.
 -- Mutual interest (B → A also exists) becomes the basis for opening a

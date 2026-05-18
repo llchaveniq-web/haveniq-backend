@@ -1,0 +1,153 @@
+const router = require('express').Router();
+const pool   = require('../db/pool');
+const { requireAuth } = require('../middleware/auth');
+const { isFounder }   = require('../utils/founders');
+
+// ── GET /housing/listings ──────────────────────────────────────────────────
+// Active listings near the caller's school, optionally filtered by max
+// per-person budget. Authenticated to discourage scraping; not paywalled.
+router.get('/listings', requireAuth, async (req, res) => {
+  try {
+    const { rows: userRows } = await pool.query('SELECT school FROM users WHERE id = $1', [req.user.id]);
+    const callerSchool = req.query.school || userRows[0]?.school || null;
+    const maxPerPerson = req.query.maxPrice ? Math.round(Number(req.query.maxPrice) * 100) : null;
+    const minBeds      = req.query.minBeds  ? Number(req.query.minBeds) : null;
+
+    const { rows } = await pool.query(
+      `SELECT id, address, city, school_near, beds, baths,
+              total_rent_cents, per_person_rent_cents, photo_url,
+              contact_name, available_from, notes, created_at
+       FROM listings
+       WHERE is_active = TRUE
+         AND ($1::text IS NULL OR school_near = $1)
+         AND ($2::integer IS NULL OR per_person_rent_cents <= $2)
+         AND ($3::integer IS NULL OR beds >= $3)
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [callerSchool, maxPerPerson, minBeds],
+    );
+
+    res.json({
+      listings: rows.map(r => ({
+        id:           r.id,
+        address:      r.address,
+        city:         r.city,
+        schoolNear:   r.school_near,
+        beds:         r.beds,
+        baths:        Number(r.baths),
+        totalRent:    r.total_rent_cents / 100,
+        perPerson:    r.per_person_rent_cents / 100,
+        photoUrl:     r.photo_url,
+        contactName:  r.contact_name,
+        availableFrom: r.available_from,
+        notes:        r.notes,
+        createdAt:    r.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error('listings fetch failed:', err);
+    res.status(500).json({ error: 'Failed to load listings' });
+  }
+});
+
+// ── GET /housing/listings/:id ─────────────────────────────────────────────
+router.get('/listings/:id', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, address, city, school_near, beds, baths,
+              total_rent_cents, per_person_rent_cents, photo_url,
+              contact_name, contact_email, available_from, notes, created_at
+       FROM listings
+       WHERE id = $1 AND is_active = TRUE`,
+      [req.params.id],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Listing not found' });
+    const r = rows[0];
+    res.json({
+      id:            r.id,
+      address:       r.address,
+      city:          r.city,
+      schoolNear:    r.school_near,
+      beds:          r.beds,
+      baths:         Number(r.baths),
+      totalRent:     r.total_rent_cents / 100,
+      perPerson:     r.per_person_rent_cents / 100,
+      photoUrl:      r.photo_url,
+      contactName:   r.contact_name,
+      contactEmail:  r.contact_email,
+      availableFrom: r.available_from,
+      notes:         r.notes,
+      createdAt:     r.created_at,
+    });
+  } catch (err) {
+    console.error('listing fetch failed:', err);
+    res.status(500).json({ error: 'Failed to load listing' });
+  }
+});
+
+// ── POST /housing/listings ─────────────────────────────────────────────────
+// Founder-only until we onboard real property managers. The frontend
+// admin screen (see app/admin/) gates entry behind founder ID too — this
+// is the server-side enforcement.
+router.post('/listings', requireAuth, async (req, res) => {
+  if (!isFounder(req.user.id)) {
+    return res.status(403).json({ error: 'Listings are founder-curated for now' });
+  }
+
+  const {
+    address, city, schoolNear, beds, baths,
+    totalRent, perPerson, photoUrl, contactName, contactEmail,
+    availableFrom, notes,
+  } = req.body || {};
+
+  if (!address || !schoolNear || !beds || !baths || !totalRent || !perPerson) {
+    return res.status(400).json({ error: 'address, schoolNear, beds, baths, totalRent, perPerson are required' });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO listings
+         (address, city, school_near, beds, baths,
+          total_rent_cents, per_person_rent_cents, photo_url,
+          contact_name, contact_email, available_from, notes, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       RETURNING id`,
+      [
+        address,
+        city ?? null,
+        schoolNear,
+        beds,
+        baths,
+        Math.round(Number(totalRent) * 100),
+        Math.round(Number(perPerson) * 100),
+        photoUrl ?? null,
+        contactName ?? null,
+        contactEmail ?? null,
+        availableFrom ?? null,
+        notes ?? null,
+        req.user.id,
+      ],
+    );
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    console.error('listing create failed:', err);
+    res.status(500).json({ error: 'Failed to create listing' });
+  }
+});
+
+// ── DELETE /housing/listings/:id ──────────────────────────────────────────
+// Soft delete — flips is_active false. Keeps the audit trail intact.
+router.delete('/listings/:id', requireAuth, async (req, res) => {
+  if (!isFounder(req.user.id)) {
+    return res.status(403).json({ error: 'Founder-only' });
+  }
+  try {
+    await pool.query('UPDATE listings SET is_active = FALSE WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('listing delete failed:', err);
+    res.status(500).json({ error: 'Failed to delete listing' });
+  }
+});
+
+module.exports = router;
