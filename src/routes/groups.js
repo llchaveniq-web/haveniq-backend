@@ -1,6 +1,30 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { calculateGroupCompatibility } = require('../services/scoring');
+const { isFounder } = require('../utils/founders');
+
+// Normalize the wire shape of quiz answers into the flat
+// { questionId: number } map the scoring engine expects.
+function normalizeAnswers(raw) {
+  const flat = {};
+  for (const [k, v] of Object.entries(raw || {})) {
+    if (typeof v === 'number') { flat[k] = v; continue; }
+    if (v && typeof v === 'object') {
+      if (typeof v.index === 'number') flat[k] = v.index;
+      else if (typeof v.value === 'number') flat[k] = v.value;
+    }
+  }
+  return flat;
+}
+
+// Two integer ranges overlap if neither is entirely left or right of the
+// other. Treats nulls as "no constraint" → always overlapping.
+function rangesOverlap(aMin, aMax, bMin, bMax) {
+  if (aMax != null && bMin != null && aMax < bMin) return false;
+  if (bMax != null && aMin != null && bMax < aMin) return false;
+  return true;
+}
 
 // ── POST /groups ──────────────────────────────────────────────────────────
 // Create a new squad. The creator is automatically added as the first
@@ -85,6 +109,191 @@ router.get('/me', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('group list failed:', err);
     res.status(500).json({ error: 'Failed to load groups' });
+  }
+});
+
+// ── GET /groups/feed?groupId=... ──────────────────────────────────────────
+// Squad-to-squad discovery. For the caller's group (must be `forming`),
+// returns up to 10 other `forming` squads ranked by cross-group
+// compatibility, filtered to same school and overlapping budget /
+// move-in window. The score is the average pairwise score across every
+// cross-group member pair (see calculateGroupCompatibility).
+//
+// Caller must be a member of the requested group — prevents random users
+// from probing other squads' compositions.
+router.get('/feed', requireAuth, async (req, res) => {
+  const groupId = req.query.groupId;
+  if (!groupId) return res.status(400).json({ error: 'groupId required' });
+
+  try {
+    // Verify membership.
+    const { rows: memberCheck } = await pool.query(
+      'SELECT 1 FROM match_group_members WHERE group_id = $1 AND user_id = $2',
+      [groupId, req.user.id],
+    );
+    if (!memberCheck[0]) return res.status(403).json({ error: 'Not a member of this group' });
+
+    const { rows: callerRows } = await pool.query(
+      `SELECT g.id, g.status, g.budget_per_person_min, g.budget_per_person_max, g.move_in_window,
+              MIN(u.school) AS school
+       FROM match_groups g
+       JOIN match_group_members m ON m.group_id = g.id
+       JOIN users u ON u.id = m.user_id
+       WHERE g.id = $1
+       GROUP BY g.id`,
+      [groupId],
+    );
+    const caller = callerRows[0];
+    if (!caller) return res.status(404).json({ error: 'Group not found' });
+
+    // Caller's members + their answers.
+    const { rows: callerMembers } = await pool.query(
+      `SELECT u.id, qa.answers
+       FROM match_group_members m
+       JOIN users u ON u.id = m.user_id
+       LEFT JOIN quiz_answers qa ON qa.user_id = u.id AND qa.completed = TRUE
+       WHERE m.group_id = $1`,
+      [groupId],
+    );
+    const callerAnswers = callerMembers
+      .filter(r => r.answers)
+      .map(r => normalizeAnswers(r.answers));
+
+    if (callerAnswers.length === 0) {
+      return res.json({ matches: [], reason: 'Group has no completed-quiz members yet' });
+    }
+
+    // Candidates: forming groups at same school (any member), excluding self.
+    const includeDemos = isFounder(req.user.id);
+    const demoFilter   = includeDemos ? '' : `AND NOT EXISTS (
+      SELECT 1 FROM match_group_members mm2
+      JOIN users u2 ON u2.id = mm2.user_id
+      WHERE mm2.group_id = g.id AND u2.email LIKE '%@haveniq-demo.edu'
+    )`;
+
+    const { rows: candidates } = await pool.query(
+      `SELECT g.id, g.name, g.size_target, g.move_in_window,
+              g.budget_per_person_min, g.budget_per_person_max,
+              g.created_at,
+              (SELECT COUNT(*)::int FROM match_group_members WHERE group_id = g.id) AS member_count
+       FROM match_groups g
+       WHERE g.status = 'forming'
+         AND g.id != $1
+         AND EXISTS (
+           SELECT 1 FROM match_group_members mm
+           JOIN users u ON u.id = mm.user_id
+           WHERE mm.group_id = g.id AND u.school = $2
+         )
+         ${demoFilter}
+       LIMIT 50`,
+      [groupId, caller.school],
+    );
+
+    const results = [];
+    for (const cand of candidates) {
+      if (!rangesOverlap(
+        caller.budget_per_person_min, caller.budget_per_person_max,
+        cand.budget_per_person_min,  cand.budget_per_person_max,
+      )) continue;
+
+      const { rows: candMembers } = await pool.query(
+        `SELECT u.id, u.first_name, u.last_name, u.photo_url, qa.answers
+         FROM match_group_members m
+         JOIN users u ON u.id = m.user_id
+         LEFT JOIN quiz_answers qa ON qa.user_id = u.id AND qa.completed = TRUE
+         WHERE m.group_id = $1`,
+        [cand.id],
+      );
+
+      const candAnswers = candMembers
+        .filter(r => r.answers)
+        .map(r => normalizeAnswers(r.answers));
+      if (candAnswers.length === 0) continue;
+
+      const score = calculateGroupCompatibility(callerAnswers, candAnswers);
+      if (!score || score.isHardBlocked) continue;
+
+      results.push({
+        id:             cand.id,
+        name:           cand.name,
+        sizeTarget:     cand.size_target,
+        memberCount:    cand.member_count,
+        moveInWindow:   cand.move_in_window,
+        budgetMin:      cand.budget_per_person_min,
+        budgetMax:      cand.budget_per_person_max,
+        score:          score.finalPct,
+        members: candMembers.map(m => ({
+          id:          m.id,
+          firstName:   m.first_name,
+          lastInitial: (m.last_name || '').slice(0, 1).toUpperCase(),
+          photoUrl:    m.photo_url,
+        })),
+      });
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    res.json({ matches: results.slice(0, 10) });
+  } catch (err) {
+    console.error('group feed failed:', err);
+    res.status(500).json({ error: 'Failed to load squad matches' });
+  }
+});
+
+// ── POST /groups/:id/express-interest ────────────────────────────────────
+// Caller's group (passed via body.fromGroupId) signals interest in :id.
+// Idempotent — duplicate signal returns the existing row. Auto-flips to
+// 'accepted' if the reverse signal already exists (mutual interest).
+router.post('/:id/express-interest', requireAuth, async (req, res) => {
+  const toGroup = req.params.id;
+  const fromGroup = req.body?.fromGroupId;
+  if (!fromGroup) return res.status(400).json({ error: 'fromGroupId required' });
+  if (fromGroup === toGroup) return res.status(400).json({ error: 'Cannot express interest in your own squad' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: memberCheck } = await client.query(
+      'SELECT 1 FROM match_group_members WHERE group_id = $1 AND user_id = $2',
+      [fromGroup, req.user.id],
+    );
+    if (!memberCheck[0]) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'Not a member of the requesting squad' });
+    }
+
+    // Check for reverse interest — mutual signals auto-accept.
+    const { rows: reverse } = await client.query(
+      `SELECT id FROM group_interests
+       WHERE from_group = $1 AND to_group = $2 AND status = 'pending'`,
+      [toGroup, fromGroup],
+    );
+    const mutual = reverse.length > 0;
+
+    const { rows: inserted } = await client.query(
+      `INSERT INTO group_interests (from_group, to_group, initiator_id, status)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (from_group, to_group) DO UPDATE
+         SET status = EXCLUDED.status
+       RETURNING id, status, created_at`,
+      [fromGroup, toGroup, req.user.id, mutual ? 'accepted' : 'pending'],
+    );
+
+    if (mutual) {
+      await client.query(
+        `UPDATE group_interests SET status = 'accepted' WHERE id = $1`,
+        [reverse[0].id],
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ interest: inserted[0], mutual });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('express-interest failed:', err);
+    res.status(500).json({ error: 'Failed to send interest' });
+  } finally {
+    client.release();
   }
 });
 

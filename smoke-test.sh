@@ -66,6 +66,8 @@ check POST /groups                                  401 "groups create requires 
 check GET  /groups/me                               401 "groups list requires auth"
 check GET  /groups/00000000-0000-0000-0000-000000000000 401 "groups detail requires auth"
 check POST /groups/00000000-0000-0000-0000-000000000000/join 401 "groups join requires auth"
+check GET  /groups/feed                             401 "groups feed requires auth"
+check POST /groups/00000000-0000-0000-0000-000000000000/express-interest 401 "groups express-interest requires auth"
 check GET  /search?q=test                           401 "search requires auth"
 check POST /quiz/preview-matches                    401 "quiz preview-matches requires auth"
 

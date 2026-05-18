@@ -143,4 +143,41 @@ function generateWhyMatched(breakdown, score) {
   }
 }
 
-module.exports = { calculateCompatibility, generateWhyMatched };
+/**
+ * Squad-to-squad compatibility — averages the pairwise score across every
+ * cross-group member pair. If any pairwise score is a hard block, the
+ * overall group is hard-blocked (one bad pairing ruins the household).
+ *
+ * Inputs are arrays of normalized answer maps (already flattened to
+ * { questionId: number } at the caller). Returns null when either group
+ * has zero quiz-completed members — caller should hide those groups
+ * rather than show a misleading 0%.
+ */
+function calculateGroupCompatibility(membersA, membersB) {
+  if (!Array.isArray(membersA) || !Array.isArray(membersB)) return null;
+  if (membersA.length === 0 || membersB.length === 0) return null;
+
+  let sum = 0;
+  let count = 0;
+  let softBlocked = false;
+  for (const a of membersA) {
+    for (const b of membersB) {
+      const r = calculateCompatibility(a, b);
+      if (r.isHardBlocked) {
+        return { finalPct: 0, isHardBlocked: true, isSoftBlocked: false, pairs: count };
+      }
+      if (r.isSoftBlocked) softBlocked = true;
+      sum += r.finalPct;
+      count += 1;
+    }
+  }
+  if (count === 0) return null;
+  return {
+    finalPct: Math.round(sum / count),
+    isHardBlocked: false,
+    isSoftBlocked: softBlocked,
+    pairs: count,
+  };
+}
+
+module.exports = { calculateCompatibility, generateWhyMatched, calculateGroupCompatibility };

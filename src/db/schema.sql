@@ -210,6 +210,19 @@ CREATE TABLE IF NOT EXISTS match_group_members (
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON match_group_members(user_id);
 
+-- ── Group-to-group interest signals ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS group_interests (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  from_group  UUID NOT NULL REFERENCES match_groups(id) ON DELETE CASCADE,
+  to_group    UUID NOT NULL REFERENCES match_groups(id) ON DELETE CASCADE,
+  initiator_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  CHECK (from_group != to_group),
+  UNIQUE (from_group, to_group)
+);
+CREATE INDEX IF NOT EXISTS idx_group_interests_to ON group_interests(to_group);
+
 -- ── Match outcome pulses ─────────────────────────────────────────────────
 -- The "did this match actually work?" feedback loop. Every accepted
 -- connect_request is eligible for a pulse at 30 / 60 / 90 days after the
