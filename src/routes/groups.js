@@ -88,6 +88,70 @@ router.get('/me', requireAuth, async (req, res) => {
   }
 });
 
+// ── POST /groups/:id/join ─────────────────────────────────────────────────
+// Accept a squad invite. Idempotent — joining when already a member is a
+// no-op success. Blocks: group not found (404), group already at
+// size_target (409), group archived (410).
+router.post('/:id/join', requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: groupRows } = await client.query(
+      `SELECT id, size_target, status,
+              (SELECT COUNT(*)::int FROM match_group_members WHERE group_id = $1) AS member_count
+       FROM match_groups WHERE id = $1`,
+      [req.params.id],
+    );
+    const group = groupRows[0];
+    if (!group) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Squad not found' });
+    }
+    if (group.status === 'archived') {
+      await client.query('ROLLBACK');
+      return res.status(410).json({ error: 'This squad has been archived' });
+    }
+
+    const { rows: existing } = await client.query(
+      'SELECT 1 FROM match_group_members WHERE group_id = $1 AND user_id = $2',
+      [group.id, req.user.id],
+    );
+    if (existing[0]) {
+      await client.query('COMMIT');
+      return res.json({ joined: true, alreadyMember: true });
+    }
+
+    if (group.member_count >= group.size_target) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'This squad is already full' });
+    }
+
+    await client.query(
+      `INSERT INTO match_group_members (group_id, user_id, role)
+       VALUES ($1, $2, 'member')`,
+      [group.id, req.user.id],
+    );
+
+    // Auto-flip to 'complete' when the group hits its size target.
+    if (group.member_count + 1 >= group.size_target) {
+      await client.query(
+        `UPDATE match_groups SET status = 'complete', updated_at = NOW() WHERE id = $1`,
+        [group.id],
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ joined: true, alreadyMember: false });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('group join failed:', err);
+    res.status(500).json({ error: 'Failed to join squad' });
+  } finally {
+    client.release();
+  }
+});
+
 // ── GET /groups/:id ───────────────────────────────────────────────────────
 // Single group detail with members. 403 if the caller isn't a member.
 router.get('/:id', requireAuth, async (req, res) => {

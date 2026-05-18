@@ -65,6 +65,9 @@ check PATCH /checklists/00000000-0000-0000-0000-000000000000 401 "checklists upd
 check POST /groups                                  401 "groups create requires auth"
 check GET  /groups/me                               401 "groups list requires auth"
 check GET  /groups/00000000-0000-0000-0000-000000000000 401 "groups detail requires auth"
+check POST /groups/00000000-0000-0000-0000-000000000000/join 401 "groups join requires auth"
+check GET  /search?q=test                           401 "search requires auth"
+check POST /quiz/preview-matches                    401 "quiz preview-matches requires auth"
 
 # Auth flow endpoints — 400 = exists but rejects empty body (correct)
 check POST /auth/send-code                          400 "auth send-code rejects empty body"

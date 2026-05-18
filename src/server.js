@@ -162,6 +162,7 @@ app.use('/reviews',  require('./routes/reviews'));
 app.use('/pulses',   require('./routes/pulses'));
 app.use('/checklists', require('./routes/checklists'));
 app.use('/groups',   require('./routes/groups'));
+app.use('/search',   require('./routes/search'));
 app.use('/admin',    require('./routes/admin'));
 
 // Health check

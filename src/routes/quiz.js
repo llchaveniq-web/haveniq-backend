@@ -64,6 +64,81 @@ router.get('/progress', requireAuth, async (req, res) => {
   }
 });
 
+// ── POST /quiz/preview-matches ────────────────────────────────────────────
+// Mid-quiz hook: show the user 1-3 already-completed students whose answers
+// are most compatible with whatever they've answered so far. Drives quiz
+// completion — empirically, "here's who you're already matching with" is
+// a much stronger pull than a generic progress bar. Does NOT persist
+// anything to compatibility_scores; final scoring still happens on submit.
+router.post('/preview-matches', requireAuth, async (req, res) => {
+  try {
+    const { answers } = req.body || {};
+    const err = validateAnswers(answers);
+    if (err) return res.status(400).json({ error: err });
+
+    // Need at least a handful of answers for the score to mean anything —
+    // otherwise the top result is just whoever happens to be in the DB.
+    const answerCount = Object.keys(answers || {}).length;
+    if (answerCount < 5) return res.json({ matches: [] });
+
+    // Pull completed users at the same school. Filter demo accounts unless
+    // the caller is a founder (matches the rest of the app's behavior).
+    const { isFounder } = require('../utils/founders');
+    const includeDemos = isFounder(req.user.id);
+    const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+
+    const { rows: candidates } = await pool.query(
+      `SELECT qa.user_id, qa.answers, u.first_name, u.last_name, u.photo_url, u.school
+       FROM quiz_answers qa
+       JOIN users u ON u.id = qa.user_id
+       WHERE qa.completed = TRUE
+         AND qa.user_id != $1
+         AND u.is_paused = FALSE
+         ${demoFilter}`,
+      [req.user.id]
+    );
+
+    // Normalize the wire shape into the flat { questionId: number } map
+    // the scoring engine expects. Frontend stores three answer shapes:
+    //   { type: 'option', index: N }, { type: 'scale', value: N }, { type: 'text', text: string }
+    // We pull `index` first, then fall back to `value`. Text answers are
+    // skipped — scoring already tolerates missing IDs via `??`.
+    const normalize = (raw) => {
+      const flat = {};
+      for (const [k, v] of Object.entries(raw || {})) {
+        if (typeof v === 'number') { flat[k] = v; continue; }
+        if (v && typeof v === 'object') {
+          if (typeof v.index === 'number') flat[k] = v.index;
+          else if (typeof v.value === 'number') flat[k] = v.value;
+        }
+      }
+      return flat;
+    };
+    const flat = normalize(answers);
+
+    const scored = [];
+    for (const c of candidates) {
+      const otherFlat = normalize(c.answers);
+      const result = calculateCompatibility(flat, otherFlat);
+      if (result.isHardBlocked) continue;
+      scored.push({
+        userId:    c.user_id,
+        firstName: c.first_name,
+        lastInitial: (c.last_name || '').slice(0, 1).toUpperCase(),
+        photoUrl:  c.photo_url,
+        school:    c.school,
+        score:     Math.round(result.finalPct),
+      });
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+    res.json({ matches: scored.slice(0, 3) });
+  } catch (err) {
+    console.error('preview-matches failed:', err);
+    res.status(500).json({ error: 'Failed to compute preview' });
+  }
+});
+
 // ── POST /quiz/submit ─────────────────────────────────────────────────────
 // Final submission — marks complete, triggers async match scoring
 router.post('/submit', requireAuth, async (req, res) => {
