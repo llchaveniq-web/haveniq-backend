@@ -192,8 +192,11 @@ router.post('/submit', requireAuth, async (req, res) => {
     // the moment of completion. Powers drift analysis when they re-take
     // the quiz months later. Best-effort: failures are logged, not fatal.
     pool.query(
+      // $1 is cast to ::uuid — a bare $1 in the SELECT list deduces as text
+      // and clashes with the uuid comparison in the WHERE, which Postgres
+      // rejects ("inconsistent types deduced for parameter $1").
       `INSERT INTO user_profile_snapshot (user_id, trigger, snapshot)
-       SELECT $1, 'quiz_complete', jsonb_build_object(
+       SELECT $1::uuid, 'quiz_complete', jsonb_build_object(
          'profile', to_jsonb(u) - 'password_hash',
          'answers', $2::jsonb
        )
