@@ -120,4 +120,56 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
   });
 }
 
-module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail };
+// Warm intro email sent when a student invites a parent/guardian into the
+// loop (Parent Dashboard → "Invite a parent"). Peace-of-mind only: it sets
+// the expectation that the parent gets milestone heads-ups, NOT a live feed
+// of the student's private activity.
+//
+// `parentEmail` — recipient
+// `studentName` — first name of the student doing the inviting
+async function sendParentInviteEmail({ parentEmail, studentName }) {
+  const name = studentName || 'Your student';
+  await getResend().emails.send({
+    from:    'HavenIQ <noreply@haveniq.org>',
+    to:      parentEmail,
+    subject: `${name} added you to their HavenIQ roommate search ✦`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#F5FAFA; margin:0; padding:40px 20px;">
+          <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+            <div style="background:#2CBFBE; padding:32px; text-align:center;">
+              <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
+              <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Roommate matching for verified college students</p>
+            </div>
+            <div style="padding:36px 32px;">
+              <p style="color:#2B2B3C; font-size:17px; margin:0 0 16px;">Hi there,</p>
+              <p style="color:#2B2B3C; font-size:15px; line-height:1.7; margin:0 0 20px;">
+                <strong>${name}</strong> added your email to their HavenIQ account so you can stay in the loop on their roommate search — one of the bigger decisions of the college year.
+              </p>
+              <div style="background:#F5FAFA; border-left:4px solid #2CBFBE; padding:18px 22px; border-radius:8px; margin:0 0 22px;">
+                <p style="font-size:14px; color:#2B2B3C; margin:0 0 10px; font-weight:600;">What you'll get:</p>
+                <p style="font-size:14px; color:#6B7280; line-height:1.7; margin:0;">
+                  A heads-up at big milestones — like when ${name} connects with a roommate — including that the match is <strong>.edu&nbsp;verified</strong>. That's it. No spam.
+                </p>
+              </div>
+              <p style="color:#2B2B3C; font-size:14px; line-height:1.7; margin:0 0 8px;"><strong>What we'll never share:</strong></p>
+              <ul style="color:#6B7280; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 22px;">
+                <li>${name}'s private messages</li>
+                <li>Their match activity, preferences, or quiz answers</li>
+              </ul>
+              <p style="color:#6B7280; font-size:13px; line-height:1.6; margin:0;">
+                ${name} stays in full control and can remove your email anytime from their Parent Dashboard.
+              </p>
+            </div>
+            <div style="background:#F5FAFA; padding:18px 32px; text-align:center; border-top:1px solid #E0EDED;">
+              <p style="color:#6B7280; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+  });
+}
+
+module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail, sendParentInviteEmail };

@@ -4,6 +4,7 @@ const pool    = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { uploadProfilePhoto, deleteProfilePhoto } = require('../services/cloudinary');
 const { isFounder } = require('../utils/founders');
+const { sendParentInviteEmail } = require('../services/email');
 
 // 5 MB image cap — generous for a single profile photo, prevents abuse.
 // Held in memory (no temp files on Railway's ephemeral disk) and streamed
@@ -412,6 +413,36 @@ router.post('/me/push-token', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('push-token error:', err);
     res.status(500).json({ error: 'Failed to save push token' });
+  }
+});
+
+// ── POST /users/parent-invite ─────────────────────────────────────────────
+// Student invites a parent/guardian into the loop. Stores the parent email
+// on the user row and sends a warm intro email. Peace-of-mind only — the
+// parent gets milestone heads-ups, never the student's private activity.
+router.post('/parent-invite', requireAuth, async (req, res) => {
+  try {
+    const parentEmail = String(req.body?.parentEmail || '').trim().toLowerCase();
+    if (!parentEmail || parentEmail.length > 200 || !EMAIL_RE.test(parentEmail)) {
+      return res.status(400).json({ error: 'A valid parent email is required' });
+    }
+
+    await pool.query(
+      'UPDATE users SET parent_email = $1 WHERE id = $2',
+      [parentEmail, req.user.id],
+    );
+
+    try {
+      await sendParentInviteEmail({ parentEmail, studentName: req.user.first_name });
+    } catch (e) {
+      console.error('[parent-invite] email send failed:', e.message);
+      return res.status(502).json({ error: "Saved your parent's email, but the invite couldn't send. Try again." });
+    }
+
+    res.json({ success: true, parentEmail });
+  } catch (err) {
+    console.error('[parent-invite] failed:', err);
+    res.status(500).json({ error: 'Failed to send the parent invite' });
   }
 });
 
