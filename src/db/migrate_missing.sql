@@ -215,3 +215,22 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE TRIGGER requests_updated_at
   BEFORE UPDATE ON connect_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ── Personality profiles (AI-derived) ─────────────────────────
+-- One row per user. Written once at quiz submission by
+-- services/personality.js (a single Anthropic call → OCEAN + archetype).
+CREATE TABLE IF NOT EXISTS personality_profiles (
+  user_id      UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  archetype    TEXT,
+  ocean        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  summary      TEXT,
+  strengths    JSONB DEFAULT '[]'::jsonb,
+  growth_areas JSONB DEFAULT '[]'::jsonb,
+  roommate_fit TEXT,
+  model        TEXT,
+  source       TEXT DEFAULT 'anthropic',
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE OR REPLACE TRIGGER personality_updated_at
+  BEFORE UPDATE ON personality_profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at();

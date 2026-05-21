@@ -1,0 +1,259 @@
+// ─── Personality derivation ──────────────────────────────────────────────
+//
+// Turns a student's 22 quiz answers into a structured personality profile:
+//   • Big Five / OCEAN scores (0-100 each) — the validated trait model
+//   • an archetype (one of the 6 HavenIQ roommate archetypes)
+//   • a short narrative + strengths + growth areas + roommate-fit note
+//
+// This runs ONCE per student, at quiz submission (see routes/quiz.js). It is
+// NOT in the per-match path — matching stays a fast, free, weighted algorithm.
+// One Anthropic call per signup keeps the cost to a fraction of a cent.
+//
+// The Anthropic call uses tool-use ("structured output") so the model is
+// forced to return a schema-valid object — no brittle JSON-string parsing.
+//
+// Everything here is best-effort. If ANTHROPIC_API_KEY is missing, or the
+// API call fails/times out, derivePersonality() returns a deterministic
+// fallback profile computed straight from the answers. The caller always
+// gets a usable profile and the quiz flow never breaks.
+
+const QUESTIONS = require('../data/quizQuestions');
+
+const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
+// Override with the ANTHROPIC_MODEL env var. Sonnet gives the best profile
+// quality; one call per student means cost is negligible. Switch to a Haiku
+// model via the env var if you want to trim cost further.
+const MODEL       = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const CALL_TIMEOUT_MS = 25000;
+
+const ARCHETYPES = [
+  'harmonizer',
+  'structured_nester',
+  'calm_anchor',
+  'independent',
+  'social_builder',
+  'adaptive_partner',
+];
+
+const OCEAN_KEYS = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism'];
+
+// ─── Answer normalization ────────────────────────────────────────────────
+// quiz_answers.answers is stored in the frontend wire shape, one of:
+//   { type: 'option', index: N }  ·  { type: 'scale', value: N }  ·  bare N
+// Flatten to { questionId: optionIndex }.
+function flatten(answers) {
+  const flat = {};
+  for (const [k, v] of Object.entries(answers || {})) {
+    if (typeof v === 'number') { flat[k] = v; continue; }
+    if (v && typeof v === 'object') {
+      if (typeof v.index === 'number')      flat[k] = v.index;
+      else if (typeof v.value === 'number') flat[k] = v.value;
+    }
+  }
+  return flat;
+}
+
+// ─── Prompt construction ─────────────────────────────────────────────────
+function buildTranscript(flat) {
+  const lines = [];
+  for (const q of QUESTIONS) {
+    const idx = flat[q.id];
+    if (idx === undefined || idx === null) continue;
+    const choice = q.options[idx];
+    if (choice === undefined) continue;
+    lines.push(`[${q.category}] ${q.text}\n  → "${choice}"`);
+  }
+  return lines.join('\n\n');
+}
+
+const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer a 22-question quiz grounded in clinical frameworks (Bowlby attachment, Gottman, Polyvagal, ACEs, Jungian Shadow, HEXACO, Klontz money scripts, executive function, sensory processing).
+
+Given one student's answers, derive a Big Five (OCEAN) personality profile and a roommate archetype.
+
+Rules:
+- Score each OCEAN trait 0-100, anchored to the actual answers. Do not default everything to ~50; let the answers move the scores.
+- Be honest and clinical, not flattering or horoscopic. Name real tendencies, including less-flattering ones, but stay warm and non-judgmental.
+- Frame everything around cohabitation / being a roommate. Do NOT diagnose mental illness or use clinical disorder language.
+- "summary" is 2-3 sentences. "strengths" and "growth_areas" are short concrete phrases. "roommate_fit" is 1-2 sentences on the kind of roommate this person lives well with.
+
+Pick exactly one archetype:
+- harmonizer: empathetic, peace-keeping, emotionally perceptive, collaborative.
+- structured_nester: highly organized, routine-driven, reliable, high cleanliness standards.
+- calm_anchor: emotionally regulated, non-reactive under pressure, steady, de-escalating.
+- independent: self-sufficient, values personal space, low-maintenance, introspective.
+- social_builder: energized by people, warm, welcoming, community-oriented, expressive.
+- adaptive_partner: highly self-aware, emotionally flexible, honest about needs, growth-oriented.
+
+Call the record_personality_profile tool with your result.`;
+
+const TOOL = {
+  name: 'record_personality_profile',
+  description: "Record the student's derived personality profile.",
+  input_schema: {
+    type: 'object',
+    properties: {
+      ocean: {
+        type: 'object',
+        description: 'Big Five trait scores, each 0-100.',
+        properties: {
+          openness:          { type: 'integer', minimum: 0, maximum: 100 },
+          conscientiousness: { type: 'integer', minimum: 0, maximum: 100 },
+          extraversion:      { type: 'integer', minimum: 0, maximum: 100 },
+          agreeableness:     { type: 'integer', minimum: 0, maximum: 100 },
+          neuroticism:       { type: 'integer', minimum: 0, maximum: 100 },
+        },
+        required: OCEAN_KEYS,
+      },
+      archetype:    { type: 'string', enum: ARCHETYPES },
+      summary:      { type: 'string', description: '2-3 sentence personality summary.' },
+      strengths:    { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 4 },
+      growth_areas: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 3 },
+      roommate_fit: { type: 'string', description: 'The kind of roommate this person lives well with.' },
+    },
+    required: ['ocean', 'archetype', 'summary', 'strengths', 'growth_areas', 'roommate_fit'],
+  },
+};
+
+// ─── Anthropic call ──────────────────────────────────────────────────────
+async function callAnthropic(transcript) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const res = await fetch(ANTHROPIC_URL, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'content-type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify({
+        model:       MODEL,
+        max_tokens:  1024,
+        system:      SYSTEM_PROMPT,
+        tools:       [TOOL],
+        tool_choice: { type: 'tool', name: TOOL.name },
+        messages: [{
+          role: 'user',
+          content: `Here are the student's quiz answers:\n\n${transcript}`,
+        }],
+      }),
+    });
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Anthropic API ${res.status}: ${detail.slice(0, 300)}`);
+    }
+
+    const data = await res.json();
+    const toolUse = (data.content || []).find(b => b.type === 'tool_use');
+    if (!toolUse || !toolUse.input) throw new Error('no tool_use block in response');
+    return toolUse.input;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ─── Output normalization ────────────────────────────────────────────────
+function clampScore(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return 50;
+  return Math.min(100, Math.max(0, v));
+}
+
+function normalizeProfile(raw) {
+  const ocean = {};
+  for (const k of OCEAN_KEYS) ocean[k] = clampScore(raw && raw.ocean ? raw.ocean[k] : 50);
+
+  const archetype = ARCHETYPES.includes(raw && raw.archetype) ? raw.archetype : 'adaptive_partner';
+  const asArray = (v) => Array.isArray(v) ? v.filter(s => typeof s === 'string' && s.trim()).slice(0, 4) : [];
+
+  return {
+    ocean,
+    archetype,
+    summary:      typeof raw?.summary === 'string' ? raw.summary.trim() : '',
+    strengths:    asArray(raw?.strengths),
+    growth_areas: asArray(raw?.growth_areas),
+    roommate_fit: typeof raw?.roommate_fit === 'string' ? raw.roommate_fit.trim() : '',
+  };
+}
+
+// ─── Deterministic fallback ──────────────────────────────────────────────
+// Used when the API key is missing or the call fails. Rough OCEAN estimate
+// straight from the answer indices — approximate, but never blank, never
+// crashes. `source: 'fallback'` flags it so it can be re-derived later.
+function fallbackProfile(flat) {
+  const get = (id) => (flat[id] === undefined || flat[id] === null ? null : flat[id]);
+  // avg of normalized signals; signal = number 0..1, higher = more of trait
+  const blend = (...signals) => {
+    const ok = signals.filter(s => s !== null && Number.isFinite(s));
+    if (ok.length === 0) return 0.5;
+    return ok.reduce((a, b) => a + b, 0) / ok.length;
+  };
+  const norm = (v, max) => (v === null ? null : v / max);
+  const inv  = (v, max) => (v === null ? null : 1 - v / max);
+
+  const conscientiousness = blend(inv(get(50), 3), inv(get(57), 3));
+  const extraversion      = blend(norm(get(48), 3), norm(get(37), 3));
+  const agreeableness     = blend(get(14), get(31), get(32), inv(get(60), 3));
+  const neuroticism       = blend(inv(get(9), 2), inv(get(34), 2), norm(get(40), 3), norm(get(3), 3));
+  const openness          = blend(norm(get(56), 3) === null ? null : 0.4 + norm(get(56), 3) * 0.3);
+
+  const ocean = {
+    openness:          clampScore(openness * 100),
+    conscientiousness: clampScore(conscientiousness * 100),
+    extraversion:      clampScore(extraversion * 100),
+    agreeableness:     clampScore(agreeableness * 100),
+    neuroticism:       clampScore(neuroticism * 100),
+  };
+
+  const scores = {
+    harmonizer:        ocean.agreeableness,
+    structured_nester: ocean.conscientiousness,
+    calm_anchor:       (100 - ocean.neuroticism) * 0.95,
+    independent:       (100 - ocean.extraversion) * 0.9,
+    social_builder:    ocean.extraversion,
+    adaptive_partner:  ocean.openness * 0.9 + 12,
+  };
+  const archetype = Object.entries(scores).sort(([, a], [, b]) => b - a)[0][0];
+
+  return normalizeProfile({
+    ocean,
+    archetype,
+    summary: 'A preliminary profile based on your quiz answers. A fuller, AI-written version will appear once it finishes generating.',
+    strengths: ['Completed the full compatibility quiz', 'Clear, consistent self-report'],
+    growth_areas: ['Profile still being refined'],
+    roommate_fit: 'Best matched with roommates whose lifestyle and communication style line up with your answers.',
+  });
+}
+
+// ─── Public entry point ──────────────────────────────────────────────────
+/**
+ * Derive a personality profile from a student's quiz answers.
+ * Always resolves — never rejects. Returns:
+ *   { ocean, archetype, summary, strengths, growth_areas, roommate_fit,
+ *     source: 'anthropic'|'fallback', model: string|null }
+ */
+async function derivePersonality(answers) {
+  const flat = flatten(answers);
+
+  if (Object.keys(flat).length < 5) {
+    // Not enough answered to say anything meaningful.
+    return { ...fallbackProfile(flat), source: 'fallback', model: null };
+  }
+
+  try {
+    const transcript = buildTranscript(flat);
+    const raw = await callAnthropic(transcript);
+    return { ...normalizeProfile(raw), source: 'anthropic', model: MODEL };
+  } catch (err) {
+    console.error('[personality] derivation failed, using fallback:', err.message);
+    return { ...fallbackProfile(flat), source: 'fallback', model: null };
+  }
+}
+
+module.exports = { derivePersonality, ARCHETYPES, OCEAN_KEYS };

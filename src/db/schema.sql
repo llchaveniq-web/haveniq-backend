@@ -297,3 +297,27 @@ CREATE OR REPLACE TRIGGER quiz_updated_at
   BEFORE UPDATE ON quiz_answers FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 CREATE OR REPLACE TRIGGER requests_updated_at
   BEFORE UPDATE ON connect_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ── Personality profiles (AI-derived) ────────────────────────────────────
+-- One row per user. Produced once at quiz submission by
+-- services/personality.js — a single Anthropic call turns the 22 quiz
+-- answers into a Big Five (OCEAN) profile + archetype + narrative.
+--   ocean  : { openness, conscientiousness, extraversion, agreeableness,
+--             neuroticism }, each 0-100
+--   source : 'anthropic' normally, or 'fallback' when the API key is missing
+--            / the call failed (deterministic estimate — never blank)
+CREATE TABLE IF NOT EXISTS personality_profiles (
+  user_id      UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  archetype    TEXT,
+  ocean        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  summary      TEXT,
+  strengths    JSONB DEFAULT '[]'::jsonb,
+  growth_areas JSONB DEFAULT '[]'::jsonb,
+  roommate_fit TEXT,
+  model        TEXT,
+  source       TEXT DEFAULT 'anthropic',
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE OR REPLACE TRIGGER personality_updated_at
+  BEFORE UPDATE ON personality_profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at();

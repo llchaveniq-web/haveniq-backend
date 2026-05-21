@@ -1,0 +1,125 @@
+// ─── Quiz question text (backend mirror) ─────────────────────────────────
+//
+// The backend stores quiz answers as bare numbers ({ "1": 2, "14": 1, ... }
+// — question id -> chosen option index). That's enough for the weighted
+// scoring engine, but the personality-derivation service needs the actual
+// QUESTION TEXT and OPTION TEXT to send the AI something meaningful.
+//
+// This file is a deliberate mirror of the frontend's constants/quiz.ts
+// QUESTIONS array (the 22-question v4 set). If the quiz changes there, mirror
+// the change here. IDs are non-contiguous on purpose — they're preserved from
+// the original 60-question set.
+
+module.exports = [
+  { id: 1,  category: 'attachment',
+    text: 'When you feel uncomfortable at home, what do you do first?',
+    options: ['Speak up right away', 'Go to my room', 'Leave the house', "Pretend it's fine"] },
+  { id: 3,  category: 'attachment',
+    text: 'If your roommate goes cold after a disagreement, you...',
+    options: ['Move on easily', 'Stay neutral', 'Feel unsettled', 'Need to resolve it'] },
+  { id: 9,  category: 'emotional regulation',
+    text: 'Do you ever slam doors or raise your voice when frustrated?',
+    options: ['Yes, it happens', 'Rarely', 'Never'] },
+  { id: 14, category: 'communication',
+    text: 'Which is MORE true of you (contempt vs. respect)?',
+    options: [
+      'I sometimes roll my eyes, sigh, or mock when frustrated with a roommate',
+      "I show respect even when I'm frustrated — eye-rolling crosses a line",
+    ] },
+  { id: 17, category: 'communication',
+    text: 'Are you direct or indirect when something bothers you?',
+    options: ['Very direct', 'Somewhat direct', 'Indirect'] },
+  { id: 22, category: 'attachment',
+    text: "When you really need support, what's your first move?",
+    options: ['Reach out right away', 'Wait a bit, then reach out', 'Try to handle it alone first', "Pull away — I don't want to burden anyone"] },
+  { id: 29, category: 'childhood / origin',
+    text: 'Growing up, what did adults model when they were upset with each other?',
+    options: ['Talked it out directly', 'Went silent for hours or days', 'Loud arguments, then made up', 'Pretended everything was fine'] },
+  { id: 31, category: 'shadow trait',
+    text: 'Which is MORE true of you (gossip vs. directness)?',
+    options: [
+      'I vent about people I live with to others when frustrated',
+      'I take complaints directly to them — gossip feels two-faced',
+    ] },
+  { id: 32, category: 'shadow trait',
+    text: 'Which is MORE true of you (manipulation vs. openness)?',
+    options: [
+      "I've used social pressure or strategic timing to get my way at home",
+      "I've always just asked openly for what I needed",
+    ] },
+  { id: 34, category: 'shadow trait',
+    text: 'Are you more likely to explode or go cold when upset?',
+    options: ['Explode', 'Go cold', 'Neither'] },
+  { id: 37, category: 'nervous system',
+    text: 'How much do you need physical space (your own room, closed door) to recharge?',
+    options: [
+      'Constantly — alone time is non-negotiable',
+      'Daily — at least an hour',
+      'A few times a week',
+      'Rarely — I recharge around people',
+    ] },
+  { id: 40, category: 'nervous system',
+    text: 'When a roommate goes cold without explanation, you...',
+    options: [
+      'Address it directly within hours',
+      "Wait it out — they'll come around",
+      'Mentally rehearse what I might have done wrong',
+      "Feel anxious and can't focus on anything else",
+    ] },
+  { id: 48, category: 'lifestyle',
+    text: 'How often do you have people over?',
+    options: ['Rarely or never', 'Once or twice a month', 'Most weekends', 'Multiple times a week'] },
+  { id: 49, category: 'lifestyle',
+    text: "What's your typical weekday bedtime?",
+    options: ['Before 10 PM', '10 PM – midnight', 'Midnight – 2 AM', "After 2 AM — I'm a night owl"] },
+  { id: 50, category: 'lifestyle',
+    text: 'How clean do you keep shared spaces?',
+    options: ['Spotless — I clean constantly', 'Clean most of the time', 'I clean when it gets noticeable', 'Honestly not a priority for me'] },
+  { id: 51, category: 'lifestyle',
+    text: 'Do you smoke, vape, or use cannabis at home?',
+    options: ['Never', 'Cannabis occasionally', 'Vape or smoke occasionally', "Regularly — it's part of my routine"] },
+  { id: 54, category: 'lifestyle',
+    text: 'Are you comfortable with a roommate who drinks alcohol at home?',
+    options: ['Totally fine', 'Fine occasionally', "Prefer they don't", 'Not comfortable with it'] },
+  { id: 56, category: 'lifestyle / money',
+    text: "If a roommate constantly spent on things you'd consider wasteful, you'd feel...",
+    options: [
+      'Honestly bothered — our shared rent is at stake',
+      "Quietly judgmental but I wouldn't say anything",
+      'Indifferent — their money, their choice',
+      "Curious — I'd probably learn from them",
+    ] },
+  { id: 57, category: 'executive function',
+    text: 'You started a load of laundry 2 hours ago. Most likely scenario:',
+    options: [
+      'Already folded and put away',
+      "I'll move it to the dryer when I notice",
+      'Still in the washer the next morning',
+      'This happens to me weekly — I forget regularly',
+    ] },
+  { id: 58, category: 'shadow trait',
+    text: "Have you ever used a roommate's stuff (food, products, supplies) without asking — even small things?",
+    options: [
+      "Yes — small things shouldn't matter",
+      'Once or twice',
+      'Only if I replaced it later',
+      'Never — I always ask first',
+    ] },
+  { id: 59, category: 'nervous system',
+    text: 'What disturbs you most when trying to sleep or focus?',
+    options: [
+      'Background noise (music, voices, TV)',
+      'Light leaking in (under doors, screens)',
+      'Smells (cooking, products, perfumes)',
+      'Visual clutter / messy shared spaces',
+      'Honestly, none of these bother me much',
+    ] },
+  { id: 60, category: 'communication',
+    text: 'After someone you live with apologizes for something, you typically...',
+    options: [
+      'Accept it fully and genuinely move on',
+      'Accept it but stay guarded for a few days',
+      'Need to talk through it more before I can let go',
+      "Say I'm fine but the resentment lingers honestly",
+    ] },
+];

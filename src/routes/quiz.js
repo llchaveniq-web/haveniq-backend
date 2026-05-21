@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
+const { derivePersonality } = require('../services/personality');
 
 // Cap per free-text answer to keep one bad actor from stuffing 10MB
 // of garbage into the quiz_answers JSONB column. 5000 chars is roughly
@@ -209,6 +210,33 @@ router.post('/submit', requireAuth, async (req, res) => {
       console.error('Async scoring error:', err)
     );
 
+    // Derive a personality profile from the answers — one Anthropic call per
+    // submit. Non-blocking + best-effort: derivePersonality() never rejects
+    // (it falls back to a deterministic profile), and a DB failure here is
+    // logged, not fatal. The /submit response is sent without waiting.
+    derivePersonality(answers)
+      .then(profile => pool.query(
+        `INSERT INTO personality_profiles
+           (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (user_id) DO UPDATE
+         SET archetype = $2, ocean = $3, summary = $4, strengths = $5,
+             growth_areas = $6, roommate_fit = $7, model = $8, source = $9,
+             updated_at = NOW()`,
+        [
+          req.user.id,
+          profile.archetype,
+          JSON.stringify(profile.ocean),
+          profile.summary,
+          JSON.stringify(profile.strengths),
+          JSON.stringify(profile.growth_areas),
+          profile.roommate_fit,
+          profile.model,
+          profile.source,
+        ],
+      ))
+      .catch(err => console.error('personality store failed:', err.message));
+
     res.json({ success: true, message: 'Quiz submitted. Calculating your matches...' });
   } catch (err) {
     console.error(err);
@@ -392,6 +420,41 @@ router.get('/snapshots', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('snapshots fetch failed:', err);
     res.status(500).json({ error: 'Failed to load quiz history' });
+  }
+});
+
+// ── GET /quiz/personality ─────────────────────────────────────────────────
+// Returns the user's AI-derived personality profile (Big Five / OCEAN +
+// archetype + narrative). Produced once at quiz submission by
+// services/personality.js. Returns { profile: null } if the user hasn't
+// completed the quiz yet, or the derivation hasn't finished writing.
+router.get('/personality', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT archetype, ocean, summary, strengths, growth_areas,
+              roommate_fit, source, updated_at
+       FROM personality_profiles
+       WHERE user_id = $1`,
+      [req.user.id],
+    );
+    if (!rows[0]) return res.json({ profile: null });
+
+    const r = rows[0];
+    res.json({
+      profile: {
+        archetype:   r.archetype,
+        ocean:       r.ocean,
+        summary:     r.summary,
+        strengths:   r.strengths || [],
+        growthAreas: r.growth_areas || [],
+        roommateFit: r.roommate_fit,
+        source:      r.source,
+        updatedAt:   r.updated_at,
+      },
+    });
+  } catch (err) {
+    console.error('personality fetch failed:', err);
+    res.status(500).json({ error: 'Failed to load personality profile' });
   }
 });
 
