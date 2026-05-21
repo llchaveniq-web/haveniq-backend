@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder } = require('../utils/founders');
+const { derivePersonality } = require('../services/personality');
 
 function requireFounder(req, res, next) {
   if (!isFounder(req.user.id)) {
@@ -84,6 +85,59 @@ router.get('/stats', requireAuth, requireFounder, async (req, res) => {
   } catch (err) {
     console.error('[admin/stats] query failed:', err);
     res.status(500).json({ error: 'Failed to load stats' });
+  }
+});
+
+// ── POST /admin/backfill-personality ─────────────────────────────────────
+// One-shot: derive + store a personality profile for every user who has
+// completed the quiz but has no personality_profiles row yet (students who
+// finished the quiz before the personality feature shipped). Responds
+// immediately with the queued count, then derives sequentially in the
+// background — one Anthropic call at a time so we never burst the API.
+router.post('/backfill-personality', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT qa.user_id, qa.answers
+      FROM quiz_answers qa
+      LEFT JOIN personality_profiles pp ON pp.user_id = qa.user_id
+      WHERE qa.completed = TRUE AND pp.user_id IS NULL
+      LIMIT 500
+    `);
+
+    // Respond now — the derivation runs in the background after this.
+    res.json({ success: true, queued: rows.length });
+
+    (async () => {
+      let done = 0, failed = 0;
+      for (const row of rows) {
+        try {
+          const profile = await derivePersonality(row.answers);
+          await pool.query(
+            `INSERT INTO personality_profiles
+               (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (user_id) DO UPDATE
+             SET archetype = $2, ocean = $3, summary = $4, strengths = $5,
+                 growth_areas = $6, roommate_fit = $7, model = $8, source = $9,
+                 updated_at = NOW()`,
+            [
+              row.user_id, profile.archetype, JSON.stringify(profile.ocean),
+              profile.summary, JSON.stringify(profile.strengths),
+              JSON.stringify(profile.growth_areas), profile.roommate_fit,
+              profile.model, profile.source,
+            ],
+          );
+          done++;
+        } catch (e) {
+          failed++;
+          console.error('[backfill] user', row.user_id, e.message);
+        }
+      }
+      console.log(`[backfill] personality done — ${done} ok, ${failed} failed`);
+    })();
+  } catch (err) {
+    console.error('[admin/backfill-personality] failed:', err);
+    res.status(500).json({ error: 'Backfill failed to start' });
   }
 });
 
