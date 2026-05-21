@@ -179,7 +179,16 @@ app.use(cors({
 app.use(express.json({
   limit: '10mb',
   verify: (req, _res, buf) => { req.rawBody = buf; },
-  type: (req) => !req.originalUrl.startsWith('/premium/webhook'),
+  // Parse a body as JSON only when it actually IS JSON. Two exclusions:
+  //   1. the Stripe webhook — it needs the raw body for signature checks;
+  //   2. anything non-JSON — most importantly multipart/form-data photo
+  //      uploads. Without the content-type check, express.json() tried to
+  //      JSON.parse the multipart body ("Unexpected token -") and every
+  //      photo upload 500'd before it reached multer.
+  type: (req) => {
+    if (req.originalUrl.startsWith('/premium/webhook')) return false;
+    return (req.headers['content-type'] || '').includes('application/json');
+  },
 }));
 app.use(express.urlencoded({ extended: true }));
 
