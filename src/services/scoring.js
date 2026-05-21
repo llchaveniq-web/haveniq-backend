@@ -1,113 +1,165 @@
 // ═══════════════════════════════════════════════════════════════
 //  HavenIQ Compatibility Scoring Engine — Server Side
-//  Mirrors the algorithm in the mobile app's quizStore.ts
+//
+//  A faithful mirror of the app's quizStore.ts:calculateCompatibility,
+//  for the v4 22-question quiz. This is the engine that produces every
+//  stored row in compatibility_scores (see routes/quiz.js scoreNewMatches).
+//
+//  Cheap, deterministic, non-AI: a weighted sum over the 22 quiz answers
+//  with hard blocks (dealbreakers → 0%) and soft blocks (friction → score
+//  reduction). Same inputs always produce the same score.
+//
+//  IDs are non-contiguous — preserved from the original 60-question set.
+//  If the quiz changes in the app's constants/quiz.ts, mirror it here.
 // ═══════════════════════════════════════════════════════════════
 
-// Per-question point values (matches app constants)
+// Per-question point values — must match the app's quizStore.ts QUESTION_POINTS.
 const QUESTION_POINTS = {
-  1:40, 2:25, 3:40, 4:20, 5:25, 6:30, 7:20, 8:30, 9:35, 10:35,
-  11:30, 12:35, 13:30, 14:5, 15:25, 16:35, 17:35, 18:5, 19:25, 20:25,
-  21:20, 22:10, 23:10, 24:20, 25:15, 26:20, 27:10, 28:25, 29:10, 30:10,
-  31:40, 32:40, 33:40, 34:40, 35:40,
-  36:7, 37:5, 38:7, 39:7, 40:7, 41:7, 42:7, 43:5, 44:7, 45:7, 46:1, 47:0,
-  48:5, 49:5, 50:4, 51:5, 52:3, 53:2, 54:5, 55:4,
+  1: 40,  3: 40, 22: 25,        // attachment
+  9: 35,                        // emotional regulation
+  14: 35, 17: 35, 60: 30,       // communication
+  29: 20,                       // childhood
+  31: 40, 32: 40, 34: 40, 58: 35, // shadow
+  37: 14, 40: 12, 59: 14,       // nervous system
+  57: 30,                       // control / executive function
+  48: 5,  49: 5,  50: 4, 51: 5, 54: 5, 56: 20, // lifestyle
 };
 
-const SHADOW_IDS = [31, 32, 33, 35];
-const FAWN_IDS   = [42, 43, 44];
-
-// Category question ranges
+// Category → question ids (v4 22-question set).
 const CATEGORIES = {
-  attachment:    { ids: [1,2,3,4,5],     label: 'Attachment Style' },
-  emotional:     { ids: [6,7,8,9,10],    label: 'Emotional Style' },
-  control:       { ids: [11,12,13,14,15],label: 'Control Style' },
-  communication: { ids: [16,17,18,19,20],label: 'Communication' },
-  identity:      { ids: [21,22,23,24,25],label: 'Identity' },
-  childhood:     { ids: [26,27,28,29,30],label: 'Childhood' },
-  shadow:        { ids: [31,32,33,34,35],label: 'Shadow Traits' },
-  nervous:       { ids: [36,37,38,39,40],label: 'Nervous System' },
-  selfawareness: { ids: [41,42,43,44,45,46,47], label: 'Self-Awareness' },
-  lifestyle:     { ids: [48,49,50,51,52,53,54,55], label: 'Lifestyle' },
+  attachment:    { ids: [1, 3, 22],          label: 'Attachment Style' },
+  emotional:     { ids: [9],                 label: 'Emotional Style' },
+  communication: { ids: [14, 17, 60],        label: 'Communication' },
+  childhood:     { ids: [29],                label: 'Childhood' },
+  shadow:        { ids: [31, 32, 34, 58],    label: 'Shadow Traits' },
+  nervous:       { ids: [37, 40, 59],        label: 'Nervous System' },
+  control:       { ids: [57],                label: 'Control Style' },
+  lifestyle:     { ids: [48, 49, 50, 51, 54, 56], label: 'Lifestyle' },
 };
 
-// Score proximity between two answers (0 = worst, 1 = best)
-function diffScore(a, b, maxOptions) {
-  const diff = Math.abs(a - b);
-  if (diff === 0) return 1.0;
-  if (diff === 1) return 0.6;
-  if (diff === 2) return 0.2;
-  return 0.0;
+// Shadow-trait questions: index of the "worst" answer + index of the
+// "best" (most honest) answer. A shadow flag fires when one user picks
+// the worst end and the other picks the best end. Matches the app's
+// quizStore.ts SHADOW_WORST_INDEX. Q14/31/32 are forced-choice (2
+// options); Q58 has 4 options.
+const SHADOW_WORST_INDEX = { 14: 0, 31: 0, 32: 0, 58: 0 };
+const SHADOW_BEST_INDEX  = { 14: 1, 31: 1, 32: 1, 58: 3 };
+
+// ── Answer normalization ─────────────────────────────────────────────────
+// quiz_answers.answers is stored in the app's wire shape, one of:
+//   { type: 'option', index: N }  ·  { type: 'scale', value: N }  ·  bare N
+// Flatten to { questionId: optionIndex }. Tolerates already-flat input.
+function flatten(answers) {
+  const flat = {};
+  if (!answers || typeof answers !== 'object') return flat;
+  for (const [k, v] of Object.entries(answers)) {
+    if (typeof v === 'number') { flat[k] = v; continue; }
+    if (v && typeof v === 'object') {
+      if (typeof v.index === 'number')      flat[k] = v.index;
+      else if (typeof v.value === 'number') flat[k] = v.value;
+    }
+  }
+  return flat;
 }
 
-function calculateCompatibility(answersA, answersB) {
-  // ── Layer 2: Hard blocks ────────────────────────────────────────────
-  // Q51 (substances): if one never and other regularly → block
-  const q51a = answersA[51] ?? -1;
-  const q51b = answersB[51] ?? -1;
-  if ((q51a === 0 && q51b === 3) || (q51a === 3 && q51b === 0)) {
-    return { finalPct: 0, isHardBlocked: true, isSoftBlocked: false, shadowPenalty: 0, breakdown: {} };
-  }
+function optIdx(flat, qid) {
+  const v = flat[qid];
+  return typeof v === 'number' ? v : null;
+}
 
-  // Q49 (bedtime): extreme diff → hard block
-  const q49a = answersA[49] ?? 2;
-  const q49b = answersB[49] ?? 2;
-  if (Math.abs(q49a - q49b) >= 3) {
-    return { finalPct: 0, isHardBlocked: true, isSoftBlocked: false, shadowPenalty: 0, breakdown: {} };
-  }
+// Points earned for an answer pair, by index distance.
+// diff 0 → full points, 1 → 60%, 2 → 20%, 3+ → nothing.
+function diffScore(pts, diff) {
+  if (diff === 0) return pts;
+  if (diff === 1) return Math.round(pts * 0.6);
+  if (diff === 2) return Math.round(pts * 0.2);
+  return 0;
+}
 
-  // ── Layer 2: Soft blocks / reductions ─────────────────────────────
-  let reductions = 0;
+function calculateCompatibility(rawA, rawB) {
+  const A = flatten(rawA);
+  const B = flatten(rawB);
+
+  let rawScore     = 0;
+  let maxScore     = 0;
+  let hardBlocked  = false;
   let isSoftBlocked = false;
+  let softReduction = 0;     // 0-1, from soft blocks
+  let shadowFlags   = 0;
+  const catScores = {};      // cat -> { earned, max }
 
-  const q54a = answersA[54] ?? 2;
-  const q54b = answersB[54] ?? 2;
-  if (Math.abs(q54a - q54b) >= 3) { reductions += 0.15; isSoftBlocked = true; }
-
-  const q50a = answersA[50] ?? 2;
-  const q50b = answersB[50] ?? 2;
-  if (Math.abs(q50a - q50b) >= 3) { reductions += 0.20; isSoftBlocked = true; }
-
-  // ── Layer 1: Psychological scoring (Q1–Q55) ────────────────────────
-  const totalPossible = Object.values(QUESTION_POINTS).reduce((s, v) => s + v, 0);
-  let earnedPoints = 0;
-
-  const breakdown = {};
-  for (const [cat, { ids, label }] of Object.entries(CATEGORIES)) {
-    let catEarned   = 0;
-    let catPossible = 0;
+  for (const [cat, { ids }] of Object.entries(CATEGORIES)) {
+    catScores[cat] = { earned: 0, max: 0 };
     for (const qid of ids) {
       const pts = QUESTION_POINTS[qid] || 0;
-      const a   = answersA[qid] ?? 2;
-      const b   = answersB[qid] ?? 2;
-      const score = diffScore(a, b, 4) * pts;
-      earnedPoints += score;
-      catEarned    += score;
-      catPossible  += pts;
+      if (pts === 0) continue;
+
+      const ai = optIdx(A, qid);
+      const bi = optIdx(B, qid);
+
+      // Every scored question counts toward the max, answered or not —
+      // an unanswered question can't earn points (mirrors the app).
+      maxScore += pts;
+      catScores[cat].max += pts;
+
+      if (ai === null || bi === null) continue;
+
+      const diff   = Math.abs(ai - bi);
+      const earned = diffScore(pts, diff);
+      rawScore += earned;
+      catScores[cat].earned += earned;
+
+      // ── Hard block: Q51 substances — "Never" vs "Regularly" ──────
+      if (qid === 51 && ((ai === 0 && bi === 3) || (ai === 3 && bi === 0))) {
+        hardBlocked = true;
+      }
+      // ── Hard block: Q49 bedtime — extreme sleep-schedule gap ─────
+      if (qid === 49 && diff >= 3) {
+        hardBlocked = true;
+      }
+      // ── Soft block: Q54 alcohol comfort mismatch ─────────────────
+      if (qid === 54 && diff >= 3) {
+        isSoftBlocked = true;
+        softReduction += 0.15;
+      }
+      // ── Soft block: Q50 cleanliness standards diverge ────────────
+      if (qid === 50 && diff >= 3) {
+        isSoftBlocked = true;
+        softReduction += 0.20;
+      }
+      // ── Shadow flag: one honest-worst vs one honest-best ─────────
+      if (qid in SHADOW_WORST_INDEX) {
+        const worst = SHADOW_WORST_INDEX[qid];
+        const best  = SHADOW_BEST_INDEX[qid];
+        if ((ai === worst && bi === best) || (bi === worst && ai === best)) {
+          shadowFlags += 1;
+        }
+      }
     }
-    breakdown[cat] = catPossible > 0 ? Math.round((catEarned / catPossible) * 100) : 50;
   }
 
-  const layer1Pct = totalPossible > 0 ? earnedPoints / totalPossible : 0;
+  // Two or more shadow flags between the pair = a real honesty mismatch.
+  const shadowPenalty = shadowFlags >= 2 ? 0.15 : 0;
 
-  // ── Shadow flag penalty ────────────────────────────────────────────
-  const shadowFlagsA = SHADOW_IDS.filter(id => (answersA[id] ?? 0) >= 3).length;
-  const shadowFlagsB = SHADOW_IDS.filter(id => (answersB[id] ?? 0) >= 3).length;
-  const hasShadowMismatch = (shadowFlagsA >= 2) !== (shadowFlagsB >= 2);
-  const shadowPenalty = hasShadowMismatch ? 0.15 : 0;
+  // Total reduction is capped so a pair never loses more than 40%.
+  const totalReduction = Math.min(0.40, softReduction + shadowPenalty);
 
-  // ── Fawn flag penalty ─────────────────────────────────────────────
-  const fawnFlagsA = FAWN_IDS.filter(id => (answersA[id] ?? 0) >= 3).length;
-  const fawnFlagsB = FAWN_IDS.filter(id => (answersB[id] ?? 0) >= 3).length;
-  const hasFawnMismatch = (fawnFlagsA >= 2) !== (fawnFlagsB >= 2);
-  const fawnPenalty = hasFawnMismatch ? 0.10 : 0;
+  const layer1Pct = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;
+  let finalPct = Math.round(layer1Pct * (1 - totalReduction));
+  finalPct = Math.min(100, Math.max(0, finalPct));
 
-  // ── Final score ───────────────────────────────────────────────────
-  const totalReduction = Math.min(0.40, reductions + shadowPenalty + fawnPenalty);
-  const finalPct = Math.max(0, Math.round(layer1Pct * (1 - totalReduction) * 100));
+  // Hard block trumps everything.
+  if (hardBlocked) finalPct = 0;
+
+  // Per-category breakdown (0-100) for the match-detail screen.
+  const breakdown = {};
+  for (const [cat, s] of Object.entries(catScores)) {
+    breakdown[cat] = s.max > 0 ? Math.round((s.earned / s.max) * 100) : 0;
+  }
 
   return {
     finalPct,
-    isHardBlocked: false,
+    isHardBlocked: hardBlocked,
     isSoftBlocked,
     shadowPenalty: Math.round(shadowPenalty * 100),
     breakdown,
@@ -116,7 +168,7 @@ function calculateCompatibility(answersA, answersB) {
 
 // Generate a "why you matched" blurb based on top categories
 function generateWhyMatched(breakdown, score) {
-  const sorted = Object.entries(breakdown)
+  const sorted = Object.entries(breakdown || {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 2);
 
@@ -125,21 +177,21 @@ function generateWhyMatched(breakdown, score) {
     emotional:     'emotional patterns',
     control:       'approach to shared space',
     communication: 'communication style',
-    identity:      'values and identity',
     childhood:     'background and upbringing',
-    shadow:        'self-awareness',
+    shadow:        'honesty and self-awareness',
     nervous:       'energy and rhythm',
-    selfawareness: 'emotional intelligence',
     lifestyle:     'daily lifestyle habits',
   };
 
   const top = sorted.map(([cat]) => catLabels[cat] || cat);
+  const a = top[0] || 'compatibility';
+  const b = top[1] || a;
   if (score >= 90) {
-    return `Exceptional alignment — your ${top[0]} and ${top[1]} are remarkably similar. This is one of the strongest matches in our system.`;
+    return `Exceptional alignment — your ${a} and ${b} are remarkably similar. This is one of the strongest matches in our system.`;
   } else if (score >= 80) {
-    return `Strong compatibility in ${top[0]} and ${top[1]}. A few differences to discuss but nothing dealbreaking.`;
+    return `Strong compatibility in ${a} and ${b}. A few differences to discuss but nothing dealbreaking.`;
   } else {
-    return `Meaningful overlap in ${top[0]}. Some lifestyle differences worth talking through before committing.`;
+    return `Meaningful overlap in ${a}. Some lifestyle differences worth talking through before committing.`;
   }
 }
 
@@ -148,10 +200,9 @@ function generateWhyMatched(breakdown, score) {
  * cross-group member pair. If any pairwise score is a hard block, the
  * overall group is hard-blocked (one bad pairing ruins the household).
  *
- * Inputs are arrays of normalized answer maps (already flattened to
- * { questionId: number } at the caller). Returns null when either group
- * has zero quiz-completed members — caller should hide those groups
- * rather than show a misleading 0%.
+ * Inputs are arrays of answer maps (wire shape or flat — calculateCompatibility
+ * normalizes either). Returns null when either group has zero quiz-completed
+ * members — caller should hide those groups rather than show a misleading 0%.
  */
 function calculateGroupCompatibility(membersA, membersB) {
   if (!Array.isArray(membersA) || !Array.isArray(membersB)) return null;
