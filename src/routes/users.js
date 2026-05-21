@@ -6,19 +6,38 @@ const { uploadProfilePhoto, deleteProfilePhoto } = require('../services/cloudina
 const { isFounder } = require('../utils/founders');
 const { sendParentInviteEmail } = require('../services/email');
 
-// 5 MB image cap — generous for a single profile photo, prevents abuse.
-// Held in memory (no temp files on Railway's ephemeral disk) and streamed
-// straight to Cloudinary via upload_stream.
+// 10 MB image cap — generous for a modern phone photo, still prevents
+// abuse. Held in memory (no temp files on Railway's ephemeral disk) and
+// streamed straight to Cloudinary via upload_stream.
+const IMAGE_EXT = /\.(jpe?g|png|webp|heic|heif|gif)$/i;
 const uploadMiddleware = multer({
   storage: multer.memoryStorage(),
-  limits:  { fileSize: 5 * 1024 * 1024 },
+  limits:  { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (!file.mimetype.startsWith('image/')) {
-      return cb(new Error('Only image uploads are allowed'));
-    }
-    cb(null, true);
+    // Accept if the mimetype says image OR the filename has an image
+    // extension. Web uploads (Blob -> FormData) frequently arrive with a
+    // missing or generic mimetype (e.g. application/octet-stream), so the
+    // extension is the reliable signal. Cloudinary's resource_type:'image'
+    // is the real backstop — it rejects anything that isn't an image.
+    const okMime = (file.mimetype || '').startsWith('image/');
+    const okExt  = IMAGE_EXT.test(file.originalname || '');
+    if (okMime || okExt) return cb(null, true);
+    cb(new Error('Only image uploads are allowed'));
   },
 });
+
+// Wrap multer so its errors (rejected type, file too large, malformed
+// multipart) return a clean 400 instead of bubbling to the global error
+// handler as an opaque 500 "Internal server error".
+function photoUpload(req, res, next) {
+  uploadMiddleware.single('photo')(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE'
+      ? 'That photo is too large — please pick one under 10 MB.'
+      : (err.message || 'That photo could not be uploaded.');
+    res.status(400).json({ error: msg });
+  });
+}
 
 // ── GET /users/signup-stats ───────────────────────────────────────────────
 // Public endpoint (no auth) used by the signup screen to display live
@@ -348,7 +367,7 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
 // Multipart upload of profile photo. Stores to Cloudinary, saves URL to
 // users.photo_url. Returns `{ url }` — matches the frontend ProfileAPI
 // contract. Requires CLOUDINARY_* env vars on the server.
-router.post('/me/photo', requireAuth, uploadMiddleware.single('photo'), async (req, res) => {
+router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'photo file is required' });
