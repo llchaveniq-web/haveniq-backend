@@ -217,12 +217,12 @@ router.post('/submit', requireAuth, async (req, res) => {
     derivePersonality(answers)
       .then(profile => pool.query(
         `INSERT INTO personality_profiles
-           (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source, mbti, disc)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (user_id) DO UPDATE
          SET archetype = $2, ocean = $3, summary = $4, strengths = $5,
              growth_areas = $6, roommate_fit = $7, model = $8, source = $9,
-             updated_at = NOW()`,
+             mbti = $10, disc = $11, updated_at = NOW()`,
         [
           req.user.id,
           profile.archetype,
@@ -233,6 +233,8 @@ router.post('/submit', requireAuth, async (req, res) => {
           profile.roommate_fit,
           profile.model,
           profile.source,
+          profile.mbti,
+          profile.disc,
         ],
       ))
       .catch(err => console.error('personality store failed:', err.message));
@@ -431,7 +433,7 @@ router.get('/snapshots', requireAuth, async (req, res) => {
 router.get('/personality', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT archetype, ocean, summary, strengths, growth_areas,
+      `SELECT archetype, mbti, disc, ocean, summary, strengths, growth_areas,
               roommate_fit, source, updated_at
        FROM personality_profiles
        WHERE user_id = $1`,
@@ -443,6 +445,8 @@ router.get('/personality', requireAuth, async (req, res) => {
     res.json({
       profile: {
         archetype:   r.archetype,
+        mbti:        r.mbti,
+        disc:        r.disc,
         ocean:       r.ocean,
         summary:     r.summary,
         strengths:   r.strengths || [],

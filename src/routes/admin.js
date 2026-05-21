@@ -114,17 +114,17 @@ router.post('/backfill-personality', requireAuth, requireFounder, async (req, re
           const profile = await derivePersonality(row.answers);
           await pool.query(
             `INSERT INTO personality_profiles
-               (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+               (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source, mbti, disc)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              ON CONFLICT (user_id) DO UPDATE
              SET archetype = $2, ocean = $3, summary = $4, strengths = $5,
                  growth_areas = $6, roommate_fit = $7, model = $8, source = $9,
-                 updated_at = NOW()`,
+                 mbti = $10, disc = $11, updated_at = NOW()`,
             [
               row.user_id, profile.archetype, JSON.stringify(profile.ocean),
               profile.summary, JSON.stringify(profile.strengths),
               JSON.stringify(profile.growth_areas), profile.roommate_fit,
-              profile.model, profile.source,
+              profile.model, profile.source, profile.mbti, profile.disc,
             ],
           );
           done++;

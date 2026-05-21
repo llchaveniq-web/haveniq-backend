@@ -85,6 +85,11 @@ Pick exactly one archetype:
 - social_builder: energized by people, warm, welcoming, community-oriented, expressive.
 - adaptive_partner: highly self-aware, emotionally flexible, honest about needs, growth-oriented.
 
+Also produce two secondary, illustrative labels. These are popular but NOT
+scientifically validated — they are display-only and never drive matching:
+- "mbti": the closest Myers-Briggs 4-letter type (e.g. INFJ, ESTP).
+- "disc": the dominant DISC style — one or two letters from D, I, S, C.
+
 Call the record_personality_profile tool with your result.`;
 
 const TOOL = {
@@ -106,12 +111,14 @@ const TOOL = {
         required: OCEAN_KEYS,
       },
       archetype:    { type: 'string', enum: ARCHETYPES },
+      mbti:         { type: 'string', description: 'Closest Myers-Briggs 4-letter type, e.g. INFJ. Secondary/display-only.' },
+      disc:         { type: 'string', description: 'Dominant DISC style — 1-2 letters from D, I, S, C. Secondary/display-only.' },
       summary:      { type: 'string', description: '2-3 sentence personality summary.' },
       strengths:    { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 4 },
       growth_areas: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 3 },
       roommate_fit: { type: 'string', description: 'The kind of roommate this person lives well with.' },
     },
-    required: ['ocean', 'archetype', 'summary', 'strengths', 'growth_areas', 'roommate_fit'],
+    required: ['ocean', 'archetype', 'mbti', 'disc', 'summary', 'strengths', 'growth_areas', 'roommate_fit'],
   },
 };
 
@@ -172,9 +179,18 @@ function normalizeProfile(raw) {
   const archetype = ARCHETYPES.includes(raw && raw.archetype) ? raw.archetype : 'adaptive_partner';
   const asArray = (v) => Array.isArray(v) ? v.filter(s => typeof s === 'string' && s.trim()).slice(0, 4) : [];
 
+  // Secondary display-only labels — validated against their real shape so a
+  // garbled model response just becomes null rather than junk text.
+  const mbtiRaw = typeof raw?.mbti === 'string' ? raw.mbti.trim().toUpperCase() : '';
+  const discRaw = typeof raw?.disc === 'string' ? raw.disc.trim().toUpperCase() : '';
+  const mbti = /^[EI][NS][TF][JP]$/.test(mbtiRaw) ? mbtiRaw : null;
+  const disc = /^[DISC]{1,2}$/.test(discRaw) ? discRaw : null;
+
   return {
     ocean,
     archetype,
+    mbti,
+    disc,
     summary:      typeof raw?.summary === 'string' ? raw.summary.trim() : '',
     strengths:    asArray(raw?.strengths),
     growth_areas: asArray(raw?.growth_areas),

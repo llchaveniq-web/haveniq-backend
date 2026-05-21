@@ -309,6 +309,8 @@ CREATE OR REPLACE TRIGGER requests_updated_at
 CREATE TABLE IF NOT EXISTS personality_profiles (
   user_id      UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   archetype    TEXT,
+  mbti         TEXT,   -- secondary display label (Myers-Briggs 4-letter)
+  disc         TEXT,   -- secondary display label (DISC style)
   ocean        JSONB NOT NULL DEFAULT '{}'::jsonb,
   summary      TEXT,
   strengths    JSONB DEFAULT '[]'::jsonb,
@@ -319,5 +321,8 @@ CREATE TABLE IF NOT EXISTS personality_profiles (
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
+-- Idempotent column adds for databases created before mbti/disc existed.
+ALTER TABLE personality_profiles ADD COLUMN IF NOT EXISTS mbti TEXT;
+ALTER TABLE personality_profiles ADD COLUMN IF NOT EXISTS disc TEXT;
 CREATE OR REPLACE TRIGGER personality_updated_at
   BEFORE UPDATE ON personality_profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at();
