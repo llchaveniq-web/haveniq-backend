@@ -3,6 +3,25 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 const { derivePersonality } = require('../services/personality');
+const { textToSpeech, transcribe } = require('../services/voice');
+const multer = require('multer');
+
+// In-memory upload for voice-interview audio answers (<= 25 MB).
+const voiceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 25 * 1024 * 1024 },
+});
+// Wrap multer so its errors return a clean 400 instead of bubbling to the
+// global error handler as an opaque 500.
+function voiceAudioUpload(req, res, next) {
+  voiceUpload.single('audio')(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE'
+      ? 'That recording is too long — keep each answer shorter.'
+      : (err.message || 'Audio upload was rejected.');
+    res.status(400).json({ error: msg });
+  });
+}
 
 // Cap per free-text answer to keep one bad actor from stuffing 10MB
 // of garbage into the quiz_answers JSONB column. 5000 chars is roughly
@@ -459,6 +478,36 @@ router.get('/personality', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('personality fetch failed:', err);
     res.status(500).json({ error: 'Failed to load personality profile' });
+  }
+});
+
+// ── POST /quiz/voice/tts ──────────────────────────────────────────────────
+// Text -> spoken audio (mp3). The voice-interview screen calls this to play
+// each question aloud.
+router.post('/voice/tts', requireAuth, async (req, res) => {
+  try {
+    const text = String(req.body?.text || '').trim().slice(0, 800);
+    if (!text) return res.status(400).json({ error: 'text is required' });
+    const audio = await textToSpeech(text);
+    res.set('Content-Type', 'audio/mpeg');
+    res.send(audio);
+  } catch (err) {
+    console.error('[voice/tts] failed:', err.message);
+    res.status(502).json({ error: 'Voice playback is unavailable right now.' });
+  }
+});
+
+// ── POST /quiz/voice/transcribe ──────────────────────────────────────────
+// Multipart audio answer -> { text }. The voice-interview screen uploads the
+// student's recorded answer here and gets back the transcript.
+router.post('/voice/transcribe', requireAuth, voiceAudioUpload, async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'audio file is required' });
+    const { text } = await transcribe(req.file.buffer, req.file.originalname || 'answer.webm');
+    res.json({ text });
+  } catch (err) {
+    console.error('[voice/transcribe] failed:', err.message);
+    res.status(502).json({ error: 'Transcription is unavailable right now.' });
   }
 });
 
