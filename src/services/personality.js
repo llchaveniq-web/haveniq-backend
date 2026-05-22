@@ -76,7 +76,10 @@ function buildVoiceSection(voice) {
     .map((v) => {
       const q = String(v && v.question ? v.question : 'Open question').trim();
       const a = String(v && v.transcript ? v.transcript : '').trim();
-      return `Q: ${q}\nA (spoken): "${a}"`;
+      const emo = Array.isArray(v && v.emotions) && v.emotions.length
+        ? `\n  [measured vocal tone: ${v.emotions.join(', ')}]`
+        : '';
+      return `Q: ${q}\nA (spoken): "${a}"${emo}`;
     })
     .join('\n\n');
 }
@@ -97,7 +100,7 @@ Rules:
 - Score each OCEAN trait 0-100, anchored to the actual answers. Do not default everything to ~50; let the answers move the scores.
 - Be honest and clinical, not flattering or horoscopic. Name real tendencies, including less-flattering ones, but stay warm and non-judgmental.
 - Frame everything around cohabitation / being a roommate. Do NOT diagnose mental illness or use clinical disorder language.
-- Some students also record a short spoken voice interview — open-ended answers about home, past conflict, and roommate preferences, in their own words. When a voice interview is included, treat it as high-value signal: it reveals nuance, tone, and specifics the multiple-choice quiz cannot. Let it meaningfully shape the scores and narrative.
+- Some students also record a short spoken voice interview — open-ended answers about home, past conflict, and roommate preferences, in their own words. When a voice interview is included, treat it as high-value signal: it reveals nuance, tone, and specifics the multiple-choice quiz cannot. Some answers carry a "[measured vocal tone: ...]" tag — an objective read of the emotion in HOW they spoke; weigh that alongside what they said. Let the voice interview meaningfully shape the scores and narrative.
 - Some students also volunteer a personal writing sample (an essay, paper, or personal statement). When present, read it for how they actually think and express themselves — their natural written voice is strong signal. Let it shape the profile too.
 - "summary" is 2-3 sentences. "strengths" and "growth_areas" are short concrete phrases. "roommate_fit" is 1-2 sentences on the kind of roommate this person lives well with.
 

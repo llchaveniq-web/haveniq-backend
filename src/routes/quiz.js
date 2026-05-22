@@ -5,6 +5,7 @@ const { calculateCompatibility, generateWhyMatched } = require('../services/scor
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch } = require('../services/personalityPairing');
 const { textToSpeech, transcribe } = require('../services/voice');
+const { analyzeVoiceEmotion } = require('../services/voiceEmotion');
 const multer = require('multer');
 
 // In-memory upload for voice-interview audio answers (<= 25 MB).
@@ -533,8 +534,16 @@ router.post('/voice/tts', requireAuth, async (req, res) => {
 router.post('/voice/transcribe', requireAuth, voiceAudioUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'audio file is required' });
-    const { text } = await transcribe(req.file.buffer, req.file.originalname || 'answer.webm');
-    res.json({ text });
+    const filename = req.file.originalname || 'answer.webm';
+    // Transcript (required) + vocal-emotion analysis (best-effort) in
+    // parallel. analyzeVoiceEmotion() returns null when HUME_API_KEY is
+    // unset or the call fails, so the interview always works on the
+    // transcript alone.
+    const [transcription, emotions] = await Promise.all([
+      transcribe(req.file.buffer, filename),
+      analyzeVoiceEmotion(req.file.buffer, filename),
+    ]);
+    res.json({ text: transcription.text, emotions: emotions || null });
   } catch (err) {
     console.error('[voice/transcribe] failed:', err.message);
     res.status(502).json({ error: 'Transcription is unavailable right now.' });
@@ -611,7 +620,13 @@ router.post('/voice/submit', requireAuth, async (req, res) => {
       const question   = String(a.question   || '').trim().slice(0, MAX_VOICE_QUESTION_LEN);
       const transcript = String(a.transcript || '').trim().slice(0, MAX_VOICE_TEXT_LEN);
       if (!transcript) continue;
-      voiceAnswers.push({ question, transcript });
+      // Optional vocal-emotion labels (Hume) — a short list of strings.
+      const emotions = Array.isArray(a.emotions)
+        ? a.emotions.filter(e => typeof e === 'string').slice(0, 8).map(e => e.slice(0, 40))
+        : [];
+      voiceAnswers.push(
+        emotions.length ? { question, transcript, emotions } : { question, transcript },
+      );
     }
     if (voiceAnswers.length === 0) {
       return res.status(400).json({ error: 'no usable voice answers' });
