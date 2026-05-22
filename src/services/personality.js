@@ -81,6 +81,14 @@ function buildVoiceSection(voice) {
     .join('\n\n');
 }
 
+// Format an optional free-text writing sample (essay, paper excerpt,
+// personal statement) the student volunteered. Capped so one long upload
+// can't blow out the prompt. Returns '' when there's nothing usable.
+function buildWritingSection(writing) {
+  const w = typeof writing === 'string' ? writing.trim() : '';
+  return w ? w.slice(0, 6000) : '';
+}
+
 const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer a 22-question quiz grounded in clinical frameworks (Bowlby attachment, Gottman, Polyvagal, ACEs, Jungian Shadow, HEXACO, Klontz money scripts, executive function, sensory processing).
 
 Given one student's answers, derive a Big Five (OCEAN) personality profile and a roommate archetype.
@@ -90,6 +98,7 @@ Rules:
 - Be honest and clinical, not flattering or horoscopic. Name real tendencies, including less-flattering ones, but stay warm and non-judgmental.
 - Frame everything around cohabitation / being a roommate. Do NOT diagnose mental illness or use clinical disorder language.
 - Some students also record a short spoken voice interview — open-ended answers about home, past conflict, and roommate preferences, in their own words. When a voice interview is included, treat it as high-value signal: it reveals nuance, tone, and specifics the multiple-choice quiz cannot. Let it meaningfully shape the scores and narrative.
+- Some students also volunteer a personal writing sample (an essay, paper, or personal statement). When present, read it for how they actually think and express themselves — their natural written voice is strong signal. Let it shape the profile too.
 - "summary" is 2-3 sentences. "strengths" and "growth_areas" are short concrete phrases. "roommate_fit" is 1-2 sentences on the kind of roommate this person lives well with.
 
 Pick exactly one archetype:
@@ -138,7 +147,7 @@ const TOOL = {
 };
 
 // ─── Anthropic call ──────────────────────────────────────────────────────
-async function callAnthropic(transcript, voiceSection = '') {
+async function callAnthropic(transcript, voiceSection = '', writingSection = '') {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
 
@@ -148,6 +157,12 @@ async function callAnthropic(transcript, voiceSection = '') {
       `\n\n──────────\nThe student also recorded a spoken voice interview. ` +
       `These open-ended, in-their-own-words answers are richer signal than ` +
       `the multiple-choice quiz — weight them heavily:\n\n${voiceSection}`;
+  }
+  if (writingSection) {
+    userContent +=
+      `\n\n──────────\nThe student also volunteered a personal writing sample ` +
+      `(an essay, paper, or personal statement). Their natural written voice ` +
+      `is high-value signal — weight it heavily:\n\n"${writingSection}"`;
   }
 
   const controller = new AbortController();
@@ -281,21 +296,23 @@ function fallbackProfile(flat) {
  * @param {object} answers       - quiz answers (frontend wire shape)
  * @param {Array}  voiceAnswers  - optional [{ question, transcript }, ...]
  */
-async function derivePersonality(answers, voiceAnswers = []) {
+async function derivePersonality(answers, voiceAnswers = [], writingSample = '') {
   const flat = flatten(answers);
   const voice = Array.isArray(voiceAnswers)
     ? voiceAnswers.filter(v => v && typeof v.transcript === 'string' && v.transcript.trim())
     : [];
+  const writing = typeof writingSample === 'string' ? writingSample.trim() : '';
 
-  if (Object.keys(flat).length < 5 && voice.length === 0) {
+  if (Object.keys(flat).length < 5 && voice.length === 0 && !writing) {
     // Not enough answered to say anything meaningful.
     return { ...fallbackProfile(flat), source: 'fallback', model: null };
   }
 
   try {
-    const transcript   = buildTranscript(flat);
-    const voiceSection = buildVoiceSection(voice);
-    const raw = await callAnthropic(transcript, voiceSection);
+    const transcript     = buildTranscript(flat);
+    const voiceSection   = buildVoiceSection(voice);
+    const writingSection = buildWritingSection(writing);
+    const raw = await callAnthropic(transcript, voiceSection, writingSection);
     return { ...normalizeProfile(raw), source: 'anthropic', model: MODEL };
   } catch (err) {
     console.error('[personality] derivation failed, using fallback:', err.message);

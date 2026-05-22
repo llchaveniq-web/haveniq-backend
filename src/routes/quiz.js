@@ -511,6 +511,47 @@ router.post('/voice/transcribe', requireAuth, voiceAudioUpload, async (req, res)
   }
 });
 
+// ── Personality re-derivation helper ─────────────────────────────────────
+// Re-derive and persist a user's AI personality profile from everything we
+// have on them — quiz answers + optional voice transcripts + optional
+// writing sample. Shared by /quiz/voice/submit and /quiz/writing so a
+// student who adds both gets a profile reflecting all of it. Best-effort:
+// derivePersonality() never rejects; callers run this fire-and-forget.
+async function rederivePersonalityFor(userId) {
+  const { rows } = await pool.query(
+    'SELECT answers, voice_answers, writing_sample FROM quiz_answers WHERE user_id = $1',
+    [userId],
+  );
+  if (!rows[0]) return;
+  const profile = await derivePersonality(
+    rows[0].answers || {},
+    rows[0].voice_answers || [],
+    rows[0].writing_sample || '',
+  );
+  await pool.query(
+    `INSERT INTO personality_profiles
+       (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source, mbti, disc)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (user_id) DO UPDATE
+     SET archetype = $2, ocean = $3, summary = $4, strengths = $5,
+         growth_areas = $6, roommate_fit = $7, model = $8, source = $9,
+         mbti = $10, disc = $11, updated_at = NOW()`,
+    [
+      userId,
+      profile.archetype,
+      JSON.stringify(profile.ocean),
+      profile.summary,
+      JSON.stringify(profile.strengths),
+      JSON.stringify(profile.growth_areas),
+      profile.roommate_fit,
+      profile.model,
+      profile.source,
+      profile.mbti,
+      profile.disc,
+    ],
+  );
+}
+
 // ── POST /quiz/voice/submit ──────────────────────────────────────────────
 // Final step of the voice interview. Stores the student's spoken-answer
 // transcripts on their quiz_answers row and re-derives their AI personality
@@ -560,44 +601,58 @@ router.post('/voice/submit', requireAuth, async (req, res) => {
       });
     }
 
-    // Re-derive the personality profile with quiz + voice signal combined.
-    // Async + best-effort: derivePersonality() never rejects, and a DB
-    // failure here is logged, not fatal. Response is sent without waiting.
-    (async () => {
-      const { rows } = await pool.query(
-        'SELECT answers FROM quiz_answers WHERE user_id = $1',
-        [req.user.id],
-      );
-      const answers = (rows[0] && rows[0].answers) || {};
-      const profile = await derivePersonality(answers, voiceAnswers);
-      await pool.query(
-        `INSERT INTO personality_profiles
-           (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source, mbti, disc)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (user_id) DO UPDATE
-         SET archetype = $2, ocean = $3, summary = $4, strengths = $5,
-             growth_areas = $6, roommate_fit = $7, model = $8, source = $9,
-             mbti = $10, disc = $11, updated_at = NOW()`,
-        [
-          req.user.id,
-          profile.archetype,
-          JSON.stringify(profile.ocean),
-          profile.summary,
-          JSON.stringify(profile.strengths),
-          JSON.stringify(profile.growth_areas),
-          profile.roommate_fit,
-          profile.model,
-          profile.source,
-          profile.mbti,
-          profile.disc,
-        ],
-      );
-    })().catch(err => console.error('[voice/submit] re-derive failed:', err.message));
+    // Re-derive the personality profile with quiz + voice (+ any writing
+    // sample) signal combined. Async + best-effort, mirroring /quiz/submit —
+    // the response returns immediately and the Mirror screen picks up the
+    // richer profile on its next fetch.
+    rederivePersonalityFor(req.user.id)
+      .catch(err => console.error('[voice/submit] re-derive failed:', err.message));
 
     res.json({ success: true });
   } catch (err) {
     console.error('[voice/submit] failed:', err.message);
     res.status(500).json({ error: 'Failed to save voice interview' });
+  }
+});
+
+// ── POST /quiz/writing ───────────────────────────────────────────────────
+// Optional orthogonal input — the student volunteers a free-text writing
+// sample (an essay, paper, or personal statement). Stored on their
+// quiz_answers row and folded into the AI personality profile as extra
+// signal, exactly like the voice interview.
+const MAX_WRITING_CHARS = 6000;
+
+router.post('/writing', requireAuth, async (req, res) => {
+  try {
+    const sample = String((req.body && req.body.writingSample) || '').trim();
+    if (!sample) return res.status(400).json({ error: 'writingSample is required' });
+    if (sample.length > MAX_WRITING_CHARS) {
+      return res.status(400).json({ error: `Keep your writing sample under ${MAX_WRITING_CHARS} characters.` });
+    }
+
+    // The writing sample is optional and added after the quiz, so a
+    // quiz_answers row should already exist — a 0-row UPDATE means the
+    // student skipped the quiz.
+    const { rowCount } = await pool.query(
+      `UPDATE quiz_answers SET writing_sample = $2, updated_at = NOW()
+       WHERE user_id = $1`,
+      [req.user.id, sample],
+    );
+    if (rowCount === 0) {
+      return res.status(409).json({
+        error: 'Finish the compatibility quiz before adding a writing sample.',
+      });
+    }
+
+    // Re-derive the profile with the writing sample folded in. Async +
+    // best-effort, same pattern as /quiz/voice/submit.
+    rederivePersonalityFor(req.user.id)
+      .catch(err => console.error('[quiz/writing] re-derive failed:', err.message));
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[quiz/writing] failed:', err.message);
+    res.status(500).json({ error: 'Failed to save writing sample' });
   }
 });
 

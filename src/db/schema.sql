@@ -79,12 +79,16 @@ CREATE TABLE IF NOT EXISTS quiz_answers (
   -- Populated by /quiz/voice/submit when a student records the spoken
   -- interview; folded into the AI personality profile as richer signal.
   voice_answers JSONB,
+  -- Optional free-text writing sample (essay / paper / personal statement)
+  -- the student volunteered; folded into the AI personality profile too.
+  writing_sample TEXT,
   created_at    TIMESTAMPTZ DEFAULT NOW(),
   updated_at    TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id)
 );
--- Idempotent column add for databases created before voice_answers existed.
-ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS voice_answers JSONB;
+-- Idempotent column adds for databases created before these existed.
+ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS voice_answers  JSONB;
+ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS writing_sample TEXT;
 
 -- ── Compatibility scores ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compatibility_scores (

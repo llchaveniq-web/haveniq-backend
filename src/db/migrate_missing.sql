@@ -21,6 +21,9 @@ ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT
 -- Optional voice-interview transcripts: [{ question, transcript }, ...].
 -- Populated by /quiz/voice/submit; folded into the AI personality profile.
 ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS voice_answers JSONB;
+-- Optional free-text writing sample (essay / paper / personal statement).
+-- Populated by /quiz/writing; folded into the AI personality profile.
+ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS writing_sample TEXT;
 
 -- ── Compatibility scores ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compatibility_scores (
