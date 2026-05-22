@@ -3,6 +3,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 const { derivePersonality } = require('../services/personality');
+const { computePersonalityMatch } = require('../services/personalityPairing');
 const { textToSpeech, transcribe } = require('../services/voice');
 const multer = require('multer');
 
@@ -224,7 +225,10 @@ router.post('/submit', requireAuth, async (req, res) => {
       [req.user.id, JSON.stringify(answers)],
     ).catch(err => console.error('snapshot insert failed:', err));
 
-    // Trigger async match scoring (non-blocking)
+    // Trigger async match scoring (non-blocking). This first pass is
+    // clinical-quiz only — the submitting user's personality profile isn't
+    // derived yet. A second pass below re-scores with the 60/40 MBTI/DISC/
+    // OCEAN blend folded in once the profile exists.
     scoreNewMatches(req.user.id, answers).catch(err =>
       console.error('Async scoring error:', err)
     );
@@ -255,8 +259,9 @@ router.post('/submit', requireAuth, async (req, res) => {
           profile.mbti,
           profile.disc,
         ],
-      ))
-      .catch(err => console.error('personality store failed:', err.message));
+      ).catch(err => console.error('personality store failed:', err.message)))
+      .then(() => scoreNewMatches(req.user.id, answers))
+      .catch(err => console.error('post-submit re-score failed:', err.message));
 
     res.json({ success: true, message: 'Quiz submitted. Calculating your matches...' });
   } catch (err) {
@@ -284,6 +289,21 @@ async function scoreNewMatches(userId, newAnswers) {
     [userId]
   );
 
+  // Personality profiles feed the MBTI/DISC/OCEAN blend (the advisor's
+  // 60/40 matching input). The submitting user's profile is written just
+  // before the re-score pass that calls this (see the /submit pipeline);
+  // anyone still missing a profile simply gets a clinical-only score.
+  const { rows: meProfRows } = await pool.query(
+    'SELECT mbti, disc, ocean FROM personality_profiles WHERE user_id = $1',
+    [userId],
+  );
+  const meProfile = meProfRows[0] || null;
+  const { rows: profRows } = await pool.query(
+    'SELECT user_id, mbti, disc, ocean FROM personality_profiles',
+  );
+  const profileById = {};
+  for (const p of profRows) profileById[p.user_id] = p;
+
   // Build all the score rows in one pass, then bulk-INSERT in a single
   // round-trip. Previously this fired one INSERT per other user — at 100
   // students the 100th signup serialized 99 round-trips through the
@@ -292,17 +312,27 @@ async function scoreNewMatches(userId, newAnswers) {
   for (const other of otherUsers) {
     const result = calculateCompatibility(newAnswers, other.answers);
     if (result.isHardBlocked) continue;
+
+    // Blend: the clinical quiz stays the major factor (70%); the MBTI/DISC/
+    // OCEAN personality match is a real second factor (30%). When either
+    // side has no derived profile, fall back to the clinical score alone.
+    let finalPct = result.finalPct;
+    const personality = computePersonalityMatch(meProfile, profileById[other.user_id]);
+    if (personality !== null) {
+      finalPct = Math.round(result.finalPct * 0.7 + personality * 0.3);
+    }
+
     const [userA, userB] = userId < other.user_id
       ? [userId, other.user_id]
       : [other.user_id, userId];
     rows.push([
       userA, userB,
-      result.finalPct,
+      finalPct,
       result.isHardBlocked,
       result.isSoftBlocked,
       result.shadowPenalty,
       JSON.stringify(result.breakdown),
-      generateWhyMatched(result.breakdown, result.finalPct),
+      generateWhyMatched(result.breakdown, finalPct),
     ]);
   }
 

@@ -134,4 +134,57 @@ function computePairing(myMbti, myDisc, theirMbti, theirDisc) {
   };
 }
 
-module.exports = { computePairing };
+// ─── Personality MATCH score (the advisor's 60/40 matching input) ────────
+//
+// Unlike computePairing (a display-only readout), this produces a single
+// 0-100 number meant to be BLENDED INTO the real match score. Per the
+// advisor's design: 60 % MBTI ("personality") + 40 % DISC & OCEAN
+// ("work style"). Returns null when neither side has enough derived
+// signal — the caller then falls back to the clinical-quiz score alone.
+
+// OCEAN similarity, 0-100. Closer Big-Five profiles score higher — this
+// is the "work style" half of the blend, alongside DISC.
+function pairOcean(a, b) {
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return null;
+  const keys = ['openness', 'conscientiousness', 'extraversion', 'agreeableness', 'neuroticism'];
+  let totalDiff = 0, n = 0;
+  for (const k of keys) {
+    const va = Number(a[k]);
+    const vb = Number(b[k]);
+    if (!Number.isFinite(va) || !Number.isFinite(vb)) continue;
+    totalDiff += Math.abs(va - vb);
+    n += 1;
+  }
+  if (n === 0) return null;
+  return Math.round(100 - totalDiff / n);
+}
+
+/**
+ * Personality match score between two derived profiles, 0-100.
+ * Each profile is { mbti, disc, ocean }. Returns null when there isn't
+ * enough signal on both sides to say anything meaningful.
+ */
+function computePersonalityMatch(a, b) {
+  if (!a || !b) return null;
+  const haveMbti = isMbti(a.mbti) && isMbti(b.mbti);
+  const haveDisc = isDisc(a.disc) && isDisc(b.disc);
+  const oceanScore = pairOcean(a.ocean, b.ocean);
+  if (!haveMbti && !haveDisc && oceanScore === null) return null;
+
+  const mbtiScore = haveMbti ? pairMbti(a.mbti, b.mbti) : null;
+  const discScore = haveDisc ? pairDisc(a.disc, b.disc) : null;
+
+  // "Work style" half — DISC + OCEAN, averaged over whatever's present.
+  const workParts = [discScore, oceanScore].filter((v) => v !== null);
+  const workScore = workParts.length
+    ? workParts.reduce((s, v) => s + v, 0) / workParts.length
+    : null;
+
+  // 60 % MBTI / 40 % work, when both halves exist; otherwise whichever does.
+  if (mbtiScore !== null && workScore !== null) {
+    return Math.round(mbtiScore * 0.6 + workScore * 0.4);
+  }
+  return Math.round(mbtiScore !== null ? mbtiScore : workScore);
+}
+
+module.exports = { computePairing, computePersonalityMatch };
