@@ -3,6 +3,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { sendParentMatchEmail } = require('../services/email');
 const { isFounder } = require('../utils/founders');
+const { computePairing } = require('../services/personalityPairing');
 
 // Best-effort parent notification on a student's FIRST accepted match.
 // Called twice — once for each side of the pair. Each user's row has
@@ -56,6 +57,14 @@ router.get('/feed', requireAuth, async (req, res) => {
     const includeDemos = isFounder(userId);
     const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
 
+    // Current user's MBTI/DISC — feeds the secondary personality-pairing
+    // readout on each match card. Display-only; never touches scoring.
+    const { rows: meRows } = await pool.query(
+      'SELECT mbti, disc FROM personality_profiles WHERE user_id = $1',
+      [userId],
+    );
+    const me = meRows[0] || {};
+
     const { rows } = await pool.query(
       `SELECT
          cs.score,
@@ -78,12 +87,15 @@ router.get('/feed', requireAuth, async (req, res) => {
          u.move_in_timeline,
          u.is_verified,
          u.trust_score,
+         pp.mbti  AS pairing_mbti,
+         pp.disc  AS pairing_disc,
          cr.id     AS connect_request_id,
          cr.status AS connect_status
        FROM compatibility_scores cs
        JOIN users u ON (
          CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END = u.id
        )
+       LEFT JOIN personality_profiles pp ON pp.user_id = u.id
        LEFT JOIN connect_requests cr ON (
          (cr.from_user = $1 AND cr.to_user = u.id) OR
          (cr.to_user = $1   AND cr.from_user = u.id)
@@ -121,6 +133,9 @@ router.get('/feed', requireAuth, async (req, res) => {
       shadowPenalty: parseFloat(r.shadow_penalty),
       breakdown:     r.breakdown || {},
       whyMatched:    r.why_matched,
+      // Secondary, display-only MBTI/DISC personality lens. Never affects
+      // compatScore — see services/personalityPairing.js.
+      pairing:       computePairing(me.mbti, me.disc, r.pairing_mbti, r.pairing_disc),
       connectStatus: r.connect_status || null,
       requestId:     r.connect_request_id || null,
     }));
