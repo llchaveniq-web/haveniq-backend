@@ -13,6 +13,9 @@
 // One Anthropic call per question. Best-effort: if the API key is missing
 // or the call fails, a graceful fallback answer is returned — never a crash.
 
+const fs   = require('fs');
+const path = require('path');
+
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const MODEL             = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
@@ -41,6 +44,21 @@ Rules:
 - Stay in scope: roommates, cohabitation, conflict, compatibility, and the transition to living with someone. If asked something well outside that, gently redirect.
 - When safety is involved (threats, harassment, feeling unsafe), tell them plainly to use HavenIQ's block/report tools and to involve their RA, campus housing, or campus safety — do not try to coach them through a dangerous situation.
 - You are not a therapist or a lawyer. For a mental-health crisis, point them to campus counseling or the 988 Suicide & Crisis Lifeline.`;
+
+// HavenIQ's matching-philosophy doc — loaded into the agent's knowledge so
+// it answers grounded in how HavenIQ actually thinks about compatibility
+// (the advisor's "write an MD doc and put it in the agent" idea).
+// Best-effort: the agent still works fine if the file is missing.
+let MATCHING_PHILOSOPHY = '';
+try {
+  MATCHING_PHILOSOPHY = fs.readFileSync(
+    path.join(__dirname, '..', 'data', 'matchingPhilosophy.md'), 'utf8',
+  ).trim();
+} catch { /* file optional — agent degrades gracefully without it */ }
+
+const FULL_SYSTEM_PROMPT = MATCHING_PHILOSOPHY
+  ? `${SYSTEM_PROMPT}\n\n# Reference — HavenIQ's matching philosophy\n\n${MATCHING_PHILOSOPHY}`
+  : SYSTEM_PROMPT;
 
 /**
  * Answer one student question. Always resolves — never rejects.
@@ -71,7 +89,7 @@ async function askAssistant(question, profileContext = '') {
       body: JSON.stringify({
         model:      MODEL,
         max_tokens: 700,
-        system:     SYSTEM_PROMPT,
+        system:     FULL_SYSTEM_PROMPT,
         messages:   [{ role: 'user', content: userContent }],
       }),
     });

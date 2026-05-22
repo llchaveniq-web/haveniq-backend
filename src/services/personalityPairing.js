@@ -31,17 +31,45 @@ const MBTI_DIMS = [
   { idx: 3, idealSame: true,  weight: 30 }, // J/P
 ];
 
+// Keirsey temperament — the one genuinely well-known MBTI grouping. SJ
+// types value order and routine; SP types are easygoing and flexible; NF
+// and NT types run on ideas. For COHABITATION (not romance) the steady
+// predictor is whether two people approach a shared space the same way.
+function temperament(mbti) {
+  const t = mbti.trim().toUpperCase();
+  if (t[1] === 'S') return t[3] === 'J' ? 'SJ' : 'SP';
+  return t[2] === 'F' ? 'NF' : 'NT';
+}
+
+// Cohabitation harmony between temperaments (symmetric, 0-100). This is the
+// "which types live well together" pairing table — tuned for roommates,
+// not romance. SJ (tidy, routine-driven) + SP (relaxed, spontaneous) is the
+// classic roommate-friction pairing and scores lowest.
+const TEMPERAMENT_HARMONY = {
+  SJ: { SJ: 92, SP: 60, NF: 78, NT: 75 },
+  SP: { SJ: 60, SP: 85, NF: 72, NT: 70 },
+  NF: { SJ: 78, SP: 72, NF: 88, NT: 82 },
+  NT: { SJ: 75, SP: 70, NF: 82, NT: 84 },
+};
+
 function pairMbti(a, b) {
   const A = a.trim().toUpperCase();
   const B = b.trim().toUpperCase();
-  let score = 0;
+
+  // View 1 — per-dichotomy heuristic (E/I, S/N, T/F, J/P).
+  let dichotomy = 0;
   for (const d of MBTI_DIMS) {
     const same  = A[d.idx] === B[d.idx];
     const ideal = same === d.idealSame;
     // Non-ideal still earns half credit — no MBTI combo is a true mismatch.
-    score += ideal ? d.weight : d.weight * 0.5;
+    dichotomy += ideal ? d.weight : d.weight * 0.5;
   }
-  return Math.round(score); // ranges 50-100
+
+  // View 2 — the Keirsey-temperament cohabitation table.
+  const temp = TEMPERAMENT_HARMONY[temperament(A)][temperament(B)];
+
+  // Blend evenly — each view catches something the other misses.
+  return Math.round(dichotomy * 0.5 + temp * 0.5);
 }
 
 // Symmetric DISC pairing matrix on the primary letter. S is the universal
