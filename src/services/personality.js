@@ -67,6 +67,20 @@ function buildTranscript(flat) {
   return lines.join('\n\n');
 }
 
+// Format the optional spoken voice-interview answers into a transcript
+// block. Each entry is { question, transcript }. Returns '' when there
+// are no usable answers.
+function buildVoiceSection(voice) {
+  if (!Array.isArray(voice) || voice.length === 0) return '';
+  return voice
+    .map((v) => {
+      const q = String(v && v.question ? v.question : 'Open question').trim();
+      const a = String(v && v.transcript ? v.transcript : '').trim();
+      return `Q: ${q}\nA (spoken): "${a}"`;
+    })
+    .join('\n\n');
+}
+
 const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer a 22-question quiz grounded in clinical frameworks (Bowlby attachment, Gottman, Polyvagal, ACEs, Jungian Shadow, HEXACO, Klontz money scripts, executive function, sensory processing).
 
 Given one student's answers, derive a Big Five (OCEAN) personality profile and a roommate archetype.
@@ -75,6 +89,7 @@ Rules:
 - Score each OCEAN trait 0-100, anchored to the actual answers. Do not default everything to ~50; let the answers move the scores.
 - Be honest and clinical, not flattering or horoscopic. Name real tendencies, including less-flattering ones, but stay warm and non-judgmental.
 - Frame everything around cohabitation / being a roommate. Do NOT diagnose mental illness or use clinical disorder language.
+- Some students also record a short spoken voice interview — open-ended answers about home, past conflict, and roommate preferences, in their own words. When a voice interview is included, treat it as high-value signal: it reveals nuance, tone, and specifics the multiple-choice quiz cannot. Let it meaningfully shape the scores and narrative.
 - "summary" is 2-3 sentences. "strengths" and "growth_areas" are short concrete phrases. "roommate_fit" is 1-2 sentences on the kind of roommate this person lives well with.
 
 Pick exactly one archetype:
@@ -123,9 +138,17 @@ const TOOL = {
 };
 
 // ─── Anthropic call ──────────────────────────────────────────────────────
-async function callAnthropic(transcript) {
+async function callAnthropic(transcript, voiceSection = '') {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+
+  let userContent = `Here are the student's quiz answers:\n\n${transcript}`;
+  if (voiceSection) {
+    userContent +=
+      `\n\n──────────\nThe student also recorded a spoken voice interview. ` +
+      `These open-ended, in-their-own-words answers are richer signal than ` +
+      `the multiple-choice quiz — weight them heavily:\n\n${voiceSection}`;
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
@@ -146,7 +169,7 @@ async function callAnthropic(transcript) {
         tool_choice: { type: 'tool', name: TOOL.name },
         messages: [{
           role: 'user',
-          content: `Here are the student's quiz answers:\n\n${transcript}`,
+          content: userContent,
         }],
       }),
     });
@@ -249,22 +272,30 @@ function fallbackProfile(flat) {
 
 // ─── Public entry point ──────────────────────────────────────────────────
 /**
- * Derive a personality profile from a student's quiz answers.
+ * Derive a personality profile from a student's quiz answers, optionally
+ * enriched with their spoken voice-interview transcripts.
  * Always resolves — never rejects. Returns:
  *   { ocean, archetype, summary, strengths, growth_areas, roommate_fit,
  *     source: 'anthropic'|'fallback', model: string|null }
+ *
+ * @param {object} answers       - quiz answers (frontend wire shape)
+ * @param {Array}  voiceAnswers  - optional [{ question, transcript }, ...]
  */
-async function derivePersonality(answers) {
+async function derivePersonality(answers, voiceAnswers = []) {
   const flat = flatten(answers);
+  const voice = Array.isArray(voiceAnswers)
+    ? voiceAnswers.filter(v => v && typeof v.transcript === 'string' && v.transcript.trim())
+    : [];
 
-  if (Object.keys(flat).length < 5) {
+  if (Object.keys(flat).length < 5 && voice.length === 0) {
     // Not enough answered to say anything meaningful.
     return { ...fallbackProfile(flat), source: 'fallback', model: null };
   }
 
   try {
-    const transcript = buildTranscript(flat);
-    const raw = await callAnthropic(transcript);
+    const transcript   = buildTranscript(flat);
+    const voiceSection = buildVoiceSection(voice);
+    const raw = await callAnthropic(transcript, voiceSection);
     return { ...normalizeProfile(raw), source: 'anthropic', model: MODEL };
   } catch (err) {
     console.error('[personality] derivation failed, using fallback:', err.message);

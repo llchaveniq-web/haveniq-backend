@@ -511,4 +511,94 @@ router.post('/voice/transcribe', requireAuth, voiceAudioUpload, async (req, res)
   }
 });
 
+// ── POST /quiz/voice/submit ──────────────────────────────────────────────
+// Final step of the voice interview. Stores the student's spoken-answer
+// transcripts on their quiz_answers row and re-derives their AI personality
+// profile with the voice answers folded in as richer signal.
+//
+// Best-effort enrichment: the quiz-only profile already exists from
+// /quiz/submit — this just deepens it. The re-derivation runs async (one
+// Anthropic call, same pattern as /quiz/submit) so the response returns
+// immediately and the Mirror screen picks up the richer profile on its
+// next fetch.
+const MAX_VOICE_ANSWERS      = 10;
+const MAX_VOICE_QUESTION_LEN = 500;
+const MAX_VOICE_TEXT_LEN     = 5000;
+
+router.post('/voice/submit', requireAuth, async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body && req.body.answers) ? req.body.answers : null;
+    if (!raw) return res.status(400).json({ error: 'answers array required' });
+    if (raw.length > MAX_VOICE_ANSWERS) {
+      return res.status(400).json({ error: 'too many voice answers' });
+    }
+
+    // Normalize + cap each entry; drop anything without a real transcript.
+    const voiceAnswers = [];
+    for (const a of raw) {
+      if (!a || typeof a !== 'object') continue;
+      const question   = String(a.question   || '').trim().slice(0, MAX_VOICE_QUESTION_LEN);
+      const transcript = String(a.transcript || '').trim().slice(0, MAX_VOICE_TEXT_LEN);
+      if (!transcript) continue;
+      voiceAnswers.push({ question, transcript });
+    }
+    if (voiceAnswers.length === 0) {
+      return res.status(400).json({ error: 'no usable voice answers' });
+    }
+
+    // Persist alongside the quiz answers. The voice interview happens after
+    // the quiz, so a quiz_answers row should already exist — a 0-row UPDATE
+    // means the student skipped the quiz, which we surface clearly.
+    const { rowCount } = await pool.query(
+      `UPDATE quiz_answers SET voice_answers = $2, updated_at = NOW()
+       WHERE user_id = $1`,
+      [req.user.id, JSON.stringify(voiceAnswers)],
+    );
+    if (rowCount === 0) {
+      return res.status(409).json({
+        error: 'Finish the compatibility quiz before recording the voice interview.',
+      });
+    }
+
+    // Re-derive the personality profile with quiz + voice signal combined.
+    // Async + best-effort: derivePersonality() never rejects, and a DB
+    // failure here is logged, not fatal. Response is sent without waiting.
+    (async () => {
+      const { rows } = await pool.query(
+        'SELECT answers FROM quiz_answers WHERE user_id = $1',
+        [req.user.id],
+      );
+      const answers = (rows[0] && rows[0].answers) || {};
+      const profile = await derivePersonality(answers, voiceAnswers);
+      await pool.query(
+        `INSERT INTO personality_profiles
+           (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source, mbti, disc)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (user_id) DO UPDATE
+         SET archetype = $2, ocean = $3, summary = $4, strengths = $5,
+             growth_areas = $6, roommate_fit = $7, model = $8, source = $9,
+             mbti = $10, disc = $11, updated_at = NOW()`,
+        [
+          req.user.id,
+          profile.archetype,
+          JSON.stringify(profile.ocean),
+          profile.summary,
+          JSON.stringify(profile.strengths),
+          JSON.stringify(profile.growth_areas),
+          profile.roommate_fit,
+          profile.model,
+          profile.source,
+          profile.mbti,
+          profile.disc,
+        ],
+      );
+    })().catch(err => console.error('[voice/submit] re-derive failed:', err.message));
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[voice/submit] failed:', err.message);
+    res.status(500).json({ error: 'Failed to save voice interview' });
+  }
+});
+
 module.exports = router;

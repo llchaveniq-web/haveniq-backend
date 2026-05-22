@@ -18,6 +18,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALS
 -- with "column does not exist". Idempotent fix.
 ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS completed BOOLEAN DEFAULT FALSE;
 ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+-- Optional voice-interview transcripts: [{ question, transcript }, ...].
+-- Populated by /quiz/voice/submit; folded into the AI personality profile.
+ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS voice_answers JSONB;
 
 -- ── Compatibility scores ──────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compatibility_scores (

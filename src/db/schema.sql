@@ -71,14 +71,20 @@ CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email);
 
 -- ── Quiz answers ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS quiz_answers (
-  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
-  answers     JSONB NOT NULL,   -- { "1": 2, "2": 0, ... } question_id -> option_index
-  completed   BOOLEAN DEFAULT FALSE,
-  created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW(),
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
+  answers       JSONB NOT NULL,   -- { "1": 2, "2": 0, ... } question_id -> option_index
+  completed     BOOLEAN DEFAULT FALSE,
+  -- Optional voice-interview transcripts: [{ question, transcript }, ...].
+  -- Populated by /quiz/voice/submit when a student records the spoken
+  -- interview; folded into the AI personality profile as richer signal.
+  voice_answers JSONB,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id)
 );
+-- Idempotent column add for databases created before voice_answers existed.
+ALTER TABLE quiz_answers ADD COLUMN IF NOT EXISTS voice_answers JSONB;
 
 -- ── Compatibility scores ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compatibility_scores (
