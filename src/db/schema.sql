@@ -336,3 +336,20 @@ ALTER TABLE personality_profiles ADD COLUMN IF NOT EXISTS mbti TEXT;
 ALTER TABLE personality_profiles ADD COLUMN IF NOT EXISTS disc TEXT;
 CREATE OR REPLACE TRIGGER personality_updated_at
   BEFORE UPDATE ON personality_profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ── Partner offers (resource lead-gen) ───────────────────────────────────
+-- Sponsored perks shown to students — furniture, insurance, moving help,
+-- etc. click_count is the billable pay-per-lead metric.
+CREATE TABLE IF NOT EXISTS partner_offers (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  title         TEXT NOT NULL,
+  blurb         TEXT,
+  category      TEXT,
+  sponsor_name  TEXT,
+  cta_label     TEXT DEFAULT 'Learn more',
+  cta_url       TEXT NOT NULL,
+  is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+  click_count   INTEGER NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_partner_offers_active ON partner_offers(is_active);
