@@ -106,4 +106,45 @@ router.post('/', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /pulses/match/:requestId ─────────────────────────────────────────
+// All recorded pulses for a specific connect_request. Both sides of the
+// pairing can read each other's pulses — that mutual visibility is what
+// makes the Relationship Score screen honest (you see your roommate's
+// 'going_well' / 'having_issues' marks alongside your own). Auth-gated
+// to parties on the request only.
+//
+// Returns: Array<{
+//   id, responder_id, day_marker, status, note, created_at,
+//   is_me: boolean
+// }>
+router.get('/match/:requestId', requireAuth, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+
+    // Verify the caller is part of this connect_request.
+    const { rows: own } = await pool.query(
+      `SELECT id FROM connect_requests
+       WHERE id = $1 AND status = 'accepted' AND (from_user = $2 OR to_user = $2)`,
+      [requestId, req.user.id],
+    );
+    if (!own[0]) return res.status(403).json({ error: 'Not your match' });
+
+    const { rows } = await pool.query(
+      `SELECT id, responder_id, day_marker, status, note, created_at
+       FROM match_pulses
+       WHERE request_id = $1
+       ORDER BY created_at ASC`,
+      [requestId],
+    );
+
+    res.json(rows.map(r => ({
+      ...r,
+      is_me: r.responder_id === req.user.id,
+    })));
+  } catch (err) {
+    console.error('pulses for match lookup failed:', err);
+    res.status(500).json({ error: 'Failed to load pulses' });
+  }
+});
+
 module.exports = router;

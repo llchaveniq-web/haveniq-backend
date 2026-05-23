@@ -305,4 +305,35 @@ router.get('/requests', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /matches/:userId/score-history ──────────────────────────────────
+// Returns the historical compatibility_scores rows between the caller and
+// `userId`, ordered oldest→newest. Powers the Compatibility Timeline
+// screen. Each row in this table represents a recomputation (e.g. when
+// either party retook the quiz), so the timeline reads as score-over-
+// time for this specific pairing.
+//
+// Returns: Array<{ score, calculated_at }>
+router.get('/:userId/score-history', requireAuth, async (req, res) => {
+  try {
+    const otherId = req.params.userId;
+    const meId    = req.user.id;
+
+    const { rows } = await pool.query(
+      `SELECT score, calculated_at
+       FROM compatibility_scores
+       WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+       ORDER BY calculated_at ASC`,
+      [meId, otherId],
+    );
+
+    res.json(rows.map(r => ({
+      score:        Number(r.score),
+      calculatedAt: r.calculated_at,
+    })));
+  } catch (err) {
+    console.error('score-history failed:', err);
+    res.status(500).json({ error: 'Failed to load score history' });
+  }
+});
+
 module.exports = router;
