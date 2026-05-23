@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { requireAuth } = require('../middleware/auth');
-const { askAssistant } = require('../services/knowledgeAgent');
+const { askAssistant, chatWithPersona, PERSONAS } = require('../services/knowledgeAgent');
 
 // ── POST /assistant/ask ──────────────────────────────────────────────────
 // "Ask HavenIQ" — answers a student's roommate / cohabitation question via
@@ -16,6 +16,37 @@ router.post('/ask', requireAuth, async (req, res) => {
     res.json({ answer, source });
   } catch (err) {
     console.error('[assistant/ask] failed:', err.message);
+    res.status(500).json({ error: 'Assistant is unavailable right now.' });
+  }
+});
+
+// ── POST /assistant/chat ─────────────────────────────────────────────────
+// Multi-turn chat with one of HavenIQ's purpose-built personas
+// (advisor, mediator, profile_writer, negotiator, conflict_coach,
+// interview_coach, financial_advisor). System prompts live server-side so
+// users can't override them — they only pick a persona key.
+//
+// Body: { persona: string, messages: [{role, content}], context?: string }
+router.post('/chat', requireAuth, async (req, res) => {
+  try {
+    const { persona, messages, context } = req.body || {};
+    if (!persona || typeof persona !== 'string') {
+      return res.status(400).json({ error: 'persona is required' });
+    }
+    if (!PERSONAS[persona]) {
+      return res.status(400).json({ error: `unknown persona "${persona}"` });
+    }
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'messages must be a non-empty array' });
+    }
+    // Cap the context blob — it's user-supplied profile data, not arbitrary
+    // text, but defense-in-depth against a runaway prompt size.
+    const ctx = typeof context === 'string' ? context.slice(0, 4000) : '';
+
+    const { answer, source } = await chatWithPersona(persona, messages, ctx);
+    res.json({ answer, source });
+  } catch (err) {
+    console.error('[assistant/chat] failed:', err.message);
     res.status(500).json({ error: 'Assistant is unavailable right now.' });
   }
 });
