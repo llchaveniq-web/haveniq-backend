@@ -78,4 +78,40 @@ router.post('/vote', requireAuth, async (req, res) => {
   }
 });
 
+// ── POST /best-roommate/nominate ────────────────────────────────────────
+// Body: { nomineeName, whyBest, specificStory?, qualities?, relationship? }
+//
+// The "I want to write a glowing nomination of my roommate" flow on the
+// Best Roommate screen. Distinct from /vote (which records a count against
+// an existing user). Nominations are free-text testimonials — they go to
+// a separate table and don't yet contribute to vote_count.
+router.post('/nominate', requireAuth, async (req, res) => {
+  try {
+    const { nomineeName, whyBest, specificStory, qualities, relationship } = req.body || {};
+    if (!nomineeName || typeof nomineeName !== 'string') {
+      return res.status(400).json({ error: 'nomineeName is required' });
+    }
+    if (typeof whyBest !== 'string' || whyBest.trim().length < 50) {
+      return res.status(400).json({ error: 'whyBest must be at least 50 characters' });
+    }
+    const qArr = Array.isArray(qualities)    ? qualities.filter(s => typeof s === 'string').slice(0, 20) : [];
+    const rArr = Array.isArray(relationship) ? relationship.filter(s => typeof s === 'string').slice(0, 10) : [];
+
+    const { rows } = await pool.query(
+      `INSERT INTO best_roommate_nominations
+         (nominator_id, nominee_name, why_best, specific_story, qualities, relationship)
+       VALUES ($1, $2, $3, $4, $5::TEXT[], $6::TEXT[])
+       RETURNING id, nominee_name, created_at`,
+      [
+        req.user.id, nomineeName.trim(), whyBest.trim(),
+        specificStory?.trim() || null, qArr, rArr,
+      ],
+    );
+    res.status(201).json({ nomination: rows[0] });
+  } catch (err) {
+    console.error('nomination failed:', err);
+    res.status(500).json({ error: 'Failed to save nomination' });
+  }
+});
+
 module.exports = router;

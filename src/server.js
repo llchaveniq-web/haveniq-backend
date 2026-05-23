@@ -220,6 +220,10 @@ app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
 app.use('/best-roommate', require('./routes/votes'));
 app.use('/plaid',    require('./routes/plaid'));
+app.use('/house-rules', require('./routes/houseRules'));
+const sharedReviews = require('./routes/sharedReviews');
+app.use('/landlord-reviews', sharedReviews.landlordRouter);
+app.use('/building-reviews', sharedReviews.buildingRouter);
 
 // Health check
 app.get('/health', (req, res) => res.json({
