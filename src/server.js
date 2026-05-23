@@ -219,6 +219,7 @@ app.use('/assistant', require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
 app.use('/best-roommate', require('./routes/votes'));
+app.use('/plaid',    require('./routes/plaid'));
 
 // Health check
 app.get('/health', (req, res) => res.json({
