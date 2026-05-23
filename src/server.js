@@ -221,6 +221,7 @@ app.use('/stories',   require('./routes/stories'));
 app.use('/best-roommate', require('./routes/votes'));
 app.use('/plaid',    require('./routes/plaid'));
 app.use('/house-rules', require('./routes/houseRules'));
+app.use('/identity', require('./routes/identity'));
 const sharedReviews = require('./routes/sharedReviews');
 app.use('/landlord-reviews', sharedReviews.landlordRouter);
 app.use('/building-reviews', sharedReviews.buildingRouter);
