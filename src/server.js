@@ -217,6 +217,8 @@ app.use('/premium',  require('./routes/premium'));
 app.use('/admin',    require('./routes/admin'));
 app.use('/assistant', require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
+app.use('/stories',   require('./routes/stories'));
+app.use('/best-roommate', require('./routes/votes'));
 
 // Health check
 app.get('/health', (req, res) => res.json({
