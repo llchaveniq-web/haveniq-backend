@@ -69,10 +69,10 @@ function requirePlaid(res) {
 // scoped to this user (client_user_id) so Plaid associates the resulting
 // Item with the right person. Tokens are single-use and expire in 4 hours.
 //
-// We request Identity + Auth products. Auth covers account verification
-// (proving the user owns the account). Identity covers name/address match
-// (useful later for KYC overlap). Income/asset products require Production
-// access — we add those when the user upgrades from sandbox.
+// We request Auth + Identity + Transactions products. Transactions powers
+// the Spending Dashboard — without it we couldn't show real merchant /
+// category data. In sandbox, transactions are simulated and free; in
+// production each linked Item with Transactions costs ~$0.30/mo.
 router.post('/link-token', requireAuth, async (req, res) => {
   const client = requirePlaid(res);
   if (!client) return;
@@ -80,7 +80,7 @@ router.post('/link-token', requireAuth, async (req, res) => {
     const r = await client.linkTokenCreate({
       user:          { client_user_id: String(req.user.id) },
       client_name:   'HavenIQ',
-      products:      [Products.Auth, Products.Identity],
+      products:      [Products.Auth, Products.Identity, Products.Transactions],
       country_codes: [CountryCode.Us],
       language:      'en',
     });
@@ -88,6 +88,75 @@ router.post('/link-token', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[plaid/link-token] failed:', err?.response?.data || err.message);
     res.status(500).json({ error: 'Could not start bank connection. Please try again.' });
+  }
+});
+
+// ── GET /plaid/transactions?days=30 ───────────────────────────────────────
+// Pulls real transactions from Plaid for the user's most recent connected
+// item. Returns a normalized shape the Spending Dashboard knows how to read
+// (date, merchant, amount, category). Best-effort: returns empty array if
+// Plaid is unreachable so the screen degrades gracefully.
+router.get('/transactions', requireAuth, async (req, res) => {
+  const client = requirePlaid(res);
+  if (!client) return;
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 90);
+    const { rows } = await pool.query(
+      `SELECT access_token, institution_name FROM plaid_items
+        WHERE user_id = $1 AND is_active = TRUE
+        ORDER BY created_at DESC LIMIT 1`,
+      [req.user.id],
+    );
+    if (rows.length === 0) {
+      return res.json({ connected: false, transactions: [], institutionName: null });
+    }
+    const accessToken     = rows[0].access_token;
+    const institutionName = rows[0].institution_name;
+
+    const today = new Date();
+    const start = new Date(today.getTime() - days * 24 * 60 * 60 * 1000);
+    const fmt   = (d) => d.toISOString().slice(0, 10);
+
+    let txns = [];
+    try {
+      const r = await client.transactionsGet({
+        access_token: accessToken,
+        start_date:   fmt(start),
+        end_date:     fmt(today),
+        options:      { count: 250, offset: 0 },
+      });
+      txns = r.data.transactions || [];
+    } catch (err) {
+      // Common in sandbox right after linking — Plaid needs a few seconds
+      // to provision transactions. Return empty + a flag so the UI can
+      // show "Transactions still syncing" instead of crashing.
+      const code = err?.response?.data?.error_code;
+      if (code === 'PRODUCT_NOT_READY') {
+        return res.json({
+          connected: true, syncing: true, transactions: [], institutionName,
+        });
+      }
+      throw err;
+    }
+
+    const normalized = txns.map((t) => ({
+      id:          t.transaction_id,
+      date:        t.date,
+      merchant:    t.merchant_name || t.name || 'Unknown',
+      amount:      t.amount,                       // Plaid: positive = debit (money out)
+      category:    Array.isArray(t.category) ? t.category[0] : null,
+      pending:     !!t.pending,
+    }));
+
+    res.json({
+      connected:       true,
+      syncing:         false,
+      transactions:    normalized,
+      institutionName,
+    });
+  } catch (err) {
+    console.error('[plaid/transactions] failed:', err?.response?.data || err.message);
+    res.status(500).json({ error: 'Could not load transactions.' });
   }
 });
 
