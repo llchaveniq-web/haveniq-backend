@@ -84,6 +84,61 @@ router.get('/signup-stats', async (req, res) => {
   }
 });
 
+// ── GET /users/leaderboard ────────────────────────────────────────────────
+// Real leaderboard from the `users` table — ranks by validation_score
+// (HavenIQ's behavioral-trust signal) within the caller's school by
+// default, or globally if ?scope=global. No fake data; if no users have
+// scores yet, returns an empty list and the frontend renders an honest
+// empty state.
+//
+// Query: ?scope=school|global  (default: school)
+// Returns: Array<{ rank, id, firstName, lastInitial, school, validationScore, isMe }>
+router.get('/leaderboard', requireAuth, async (req, res) => {
+  try {
+    const scope = (req.query.scope || 'school').toString();
+
+    let query;
+    let params;
+    if (scope === 'global') {
+      query = `
+        SELECT id, first_name, last_name, school, validation_score
+        FROM users
+        WHERE is_paused = FALSE
+          AND email NOT LIKE '%@haveniq-demo.edu'
+          AND validation_score IS NOT NULL
+        ORDER BY validation_score DESC NULLS LAST
+        LIMIT 50`;
+      params = [];
+    } else {
+      query = `
+        SELECT id, first_name, last_name, school, validation_score
+        FROM users
+        WHERE school = $1
+          AND is_paused = FALSE
+          AND email NOT LIKE '%@haveniq-demo.edu'
+          AND validation_score IS NOT NULL
+        ORDER BY validation_score DESC NULLS LAST
+        LIMIT 50`;
+      params = [req.user.school];
+    }
+
+    const { rows } = await pool.query(query, params);
+
+    res.json(rows.map((row, idx) => ({
+      rank:            idx + 1,
+      id:              row.id,
+      firstName:       row.first_name,
+      lastInitial:     (row.last_name || '').charAt(0) || '',
+      school:          row.school,
+      validationScore: Number(row.validation_score),
+      isMe:            row.id === req.user.id,
+    })));
+  } catch (err) {
+    console.error('leaderboard failed:', err);
+    res.status(500).json({ error: 'leaderboard query failed' });
+  }
+});
+
 // ── GET /users/me ─────────────────────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res) => {
   try {
