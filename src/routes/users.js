@@ -2,7 +2,7 @@ const router  = require('express').Router();
 const multer  = require('multer');
 const pool    = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-const { uploadProfilePhoto, deleteProfilePhoto } = require('../services/cloudinary');
+const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { isFounder } = require('../utils/founders');
 const { sendParentInviteEmail } = require('../services/email');
 
@@ -199,7 +199,10 @@ const validators = {
   bio:             v => typeof v === 'string' && v.length <= 2000,
   major:           v => typeof v === 'string' && v.length <= 100,
   school_year:     v => typeof v === 'string' && SCHOOL_YEARS.has(v),
-  age:             v => Number.isInteger(v) && v >= 16 && v <= 99,
+  // 18+ only — TOS section 1 requires it. Server validation here is
+  // the authoritative gate; the frontend's input restriction is a UX
+  // nicety, not a security boundary.
+  age:             v => Number.isInteger(v) && v >= 18 && v <= 99,
   gender:          v => typeof v === 'string' && GENDERS.has(v),
   looking_for:     v => Array.isArray(v) && v.length <= 10 && v.every(x => typeof x === 'string' && LOOKING_FOR.has(x)),
   photo_url:       v => typeof v === 'string' && v.length <= 500 && /^https?:\/\//.test(v),
@@ -438,6 +441,12 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
     res.json({ url });
   } catch (err) {
     console.error('photo upload error:', err);
+    // Moderation rejection — user error, not a server bug. Surface the
+    // specific reason from the moderator (e.g. "Explicit Nudity") so the
+    // user knows what to fix instead of seeing a generic 500.
+    if (err instanceof ModerationRejectedError) {
+      return res.status(400).json({ error: err.message });
+    }
     if (err && err.message && err.message.includes('Cloudinary not configured')) {
       return res.status(503).json({ error: 'Photo storage not configured. Contact support.' });
     }
