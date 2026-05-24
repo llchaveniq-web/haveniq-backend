@@ -361,4 +361,118 @@ Output ONLY the 4 chips, one per line. No preamble, no extras.`;
   }
 }
 
-module.exports = { askAssistant, chatWithPersona, generateSuggestions, PERSONAS };
+/**
+ * Generate an entire wizard's question set + answer options dynamically.
+ * Used to replace hardcoded MCQ forms (profile-writer, mediator, etc.)
+ * with AI-generated questions tailored to the user's context.
+ *
+ * Returns { questions: [{ text, options }] } — always resolves. Falls
+ * back to a persona-appropriate default question set if Anthropic is
+ * unreachable, so the wizard renders something either way.
+ */
+async function generateWizardQuestions({ persona, kind, questionCount = 5, optionsPerQuestion = 4, context = '' }) {
+  // Per-wizard fallbacks — used when Anthropic is unreachable. Match the
+  // shape the frontend wizard expects so it renders cleanly either way.
+  const FALLBACKS = {
+    profile_writer: [
+      { text: "What's your vibe as a roommate?",       options: ['Homebody', 'Adventurous', 'Balanced', 'Social butterfly'] },
+      { text: 'Your study style?',                     options: ['Night owl', 'Early bird', 'Flexible', 'Library only'] },
+      { text: 'Cleanliness level?',                    options: ['Spotless', 'Tidy', 'Relaxed', 'Organized chaos'] },
+      { text: 'Biggest roommate priority?',            options: ['Quiet environment', 'Shared social life', 'Splitting costs fairly', 'Similar schedules'] },
+      { text: 'One thing you want roommates to know?', options: ["I'm very respectful of space", 'I love cooking', 'I keep a consistent schedule', "I'm easy-going"] },
+    ],
+    mediator: [
+      { text: "What's the main issue?",            options: ['Cleanliness', 'Noise/Sleep', 'Guests', 'Bills/Money', 'Communication'] },
+      { text: 'How serious does this feel?',       options: ['1-3 Minor', '4-6 Moderate', '7-10 Serious'] },
+      { text: 'Have you tried talking about it?',  options: ["Yes, didn't help", "No, not yet", "I'm afraid to bring it up"] },
+    ],
+    interview_coach: [
+      { text: 'What do you want practice with first?',  options: ['Cleanliness expectations', 'Conflict style', 'Sleep schedule', 'Guests + boundaries'] },
+      { text: 'How direct are you when bringing things up?', options: ['Very direct', 'Hint first', 'Avoid until it boils over'] },
+    ],
+  };
+
+  const personaPrompt = PERSONAS[persona];
+  if (!personaPrompt) return { questions: FALLBACKS[kind] ?? [] };
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return { questions: FALLBACKS[kind] ?? [] };
+
+  // Per-kind prompt — describes what the wizard needs in a way Claude
+  // can shape into structured questions.
+  const KIND_PURPOSE = {
+    profile_writer:  `The wizard gathers ${questionCount} pieces of info needed to write a personal, voice-matching roommate bio. Cover: living vibe, schedule, cleanliness, social style, and one thing they want a future roommate to know.`,
+    mediator:        `The wizard gathers ${questionCount} pieces of info about a roommate conflict so we can prescribe specific tips + a draft message. Cover: what the issue is, how serious it feels, and whether they've tried talking yet.`,
+    interview_coach: `The wizard gathers ${questionCount} pieces of info about what kind of roommate-interview practice the user wants. Cover: topic areas they care most about, their own communication style, and any specific fear (saying yes to bad fits, asking awkward questions, etc.).`,
+  };
+  const purpose = KIND_PURPOSE[kind];
+  if (!purpose) return { questions: FALLBACKS[kind] ?? [] };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const userPrompt = `Generate a ${questionCount}-step wizard for the user. ${purpose}
+
+${context ? `Context on this user:\n${context}\n\n` : ''}Rules:
+- Exactly ${questionCount} questions.
+- Each question is one short sentence, second person ("you"), under 8 words.
+- Each question has exactly ${optionsPerQuestion} answer options.
+- Options are 2-5 words each. Concrete, not abstract. No emojis.
+- Cover the full design space — options should be meaningfully different, not synonyms.
+
+Output ONLY a valid JSON array with this exact shape — no markdown fences, no preamble, no trailing text:
+[
+  { "text": "question 1?", "options": ["opt1","opt2","opt3","opt4"] },
+  { "text": "question 2?", "options": ["opt1","opt2","opt3","opt4"] }
+]`;
+
+    const res = await fetch(ANTHROPIC_URL, {
+      method:  'POST',
+      signal:  controller.signal,
+      headers: {
+        'content-type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify({
+        model:      MODEL,
+        max_tokens: 800,
+        system:     personaPrompt,
+        messages:   [{ role: 'user', content: userPrompt }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Anthropic API ${res.status}`);
+    const data = await res.json();
+    const block = (data.content || []).find(b => b.type === 'text');
+    let text = block?.text?.trim() || '';
+    if (!text) throw new Error('empty');
+    // Strip accidental markdown fences if Claude included them despite
+    // the instruction.
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) throw new Error('not an array');
+    const cleaned = parsed
+      .filter(q => q && typeof q.text === 'string' && Array.isArray(q.options))
+      .map(q => ({
+        text:    String(q.text).slice(0, 200),
+        options: q.options.map(o => String(o).slice(0, 80)).filter(Boolean).slice(0, optionsPerQuestion),
+      }))
+      .filter(q => q.options.length >= 2)
+      .slice(0, questionCount);
+    if (cleaned.length < questionCount) {
+      // Model returned fewer than asked — top up from the fallback list
+      // so the wizard always gets the full count it expects.
+      const need = questionCount - cleaned.length;
+      const fb   = FALLBACKS[kind] ?? [];
+      return { questions: [...cleaned, ...fb.slice(0, need)] };
+    }
+    return { questions: cleaned };
+  } catch (err) {
+    console.error(`[assistant:${persona}/wizard:${kind}] failed:`, err.message);
+    return { questions: FALLBACKS[kind] ?? [] };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+module.exports = { askAssistant, chatWithPersona, generateSuggestions, generateWizardQuestions, PERSONAS };

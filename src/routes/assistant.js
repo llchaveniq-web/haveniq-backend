@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { requireAuth } = require('../middleware/auth');
-const { askAssistant, chatWithPersona, generateSuggestions, PERSONAS } = require('../services/knowledgeAgent');
+const { askAssistant, chatWithPersona, generateSuggestions, generateWizardQuestions, PERSONAS } = require('../services/knowledgeAgent');
 
 // ── POST /assistant/ask ──────────────────────────────────────────────────
 // "Ask HavenIQ" — answers a student's roommate / cohabitation question via
@@ -72,6 +72,34 @@ router.post('/suggestions', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[assistant/suggestions] failed:', err.message);
     res.status(500).json({ error: 'Could not generate suggestions.' });
+  }
+});
+
+// ── POST /assistant/wizard ────────────────────────────────────────────────
+// Generates a wizard's question set + options dynamically. Used to
+// replace hardcoded MCQ forms on profile-writer, mediator, etc.
+//
+// Body: { persona, kind, questionCount?, optionsPerQuestion?, context? }
+// Returns: { questions: [{ text, options }] }
+router.post('/wizard', requireAuth, async (req, res) => {
+  try {
+    const { persona, kind, questionCount, optionsPerQuestion, context } = req.body || {};
+    if (!persona || typeof persona !== 'string' || !PERSONAS[persona]) {
+      return res.status(400).json({ error: 'valid persona is required' });
+    }
+    if (!kind || typeof kind !== 'string') {
+      return res.status(400).json({ error: 'kind is required' });
+    }
+    const qc  = Math.min(Math.max(parseInt(questionCount, 10) || 5, 1), 10);
+    const opc = Math.min(Math.max(parseInt(optionsPerQuestion, 10) || 4, 2), 6);
+    const ctx = typeof context === 'string' ? context.slice(0, 4000) : '';
+    const { questions } = await generateWizardQuestions({
+      persona, kind, questionCount: qc, optionsPerQuestion: opc, context: ctx,
+    });
+    res.json({ questions });
+  } catch (err) {
+    console.error('[assistant/wizard] failed:', err.message);
+    res.status(500).json({ error: 'Could not generate wizard.' });
   }
 });
 
