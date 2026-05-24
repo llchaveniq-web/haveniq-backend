@@ -2,7 +2,7 @@ const router = require('express').Router();
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
 const pool     = require('../db/pool');
-const { generateOTP, sendOTPEmail } = require('../services/email');
+const { generateOTP, sendOTPEmail, sendWelcomeEmail } = require('../services/email');
 const { signToken } = require('../middleware/auth');
 
 // Rate limiters — TWO buckets per route: per-email (so a single victim
@@ -211,6 +211,15 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
       );
       user      = ins.rows[0];
       isNewUser = true;
+
+      // Fire-and-forget welcome email. The user has already moved past
+      // this point in the UX (we return their token below) — they won't
+      // wait on Resend. If it errors (Resend down, address bounces),
+      // log it and move on; they got the OTP successfully so we know
+      // the address works.
+      sendWelcomeEmail(emailLower).catch(err => {
+        console.error('[auth] welcome email failed:', err.message);
+      });
     }
 
     const token = signToken(user.id);

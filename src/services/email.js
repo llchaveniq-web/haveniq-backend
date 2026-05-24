@@ -172,4 +172,60 @@ async function sendParentInviteEmail({ parentEmail, studentName }) {
   });
 }
 
-module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail, sendParentInviteEmail };
+// Welcome email — fires once, after a brand-new user finishes signup
+// (i.e. /auth/verify-code creates a fresh `users` row). Sets expectations
+// for what happens next + surfaces the support inbox. Best-effort; if
+// Resend is down or the user opted out of email later, we don't retry.
+//
+// `email` — verified academic address (what we just used to send the OTP)
+async function sendWelcomeEmail(email) {
+  await getResend().emails.send({
+    from:    'HavenIQ <noreply@haveniq.org>',
+    to:      email,
+    subject: `Welcome to HavenIQ ✦ Your first match is one quiz away`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#F5FAFA; margin:0; padding:40px 20px;">
+          <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+            <div style="background:#2CBFBE; padding:36px; text-align:center;">
+              <p style="font-size:32px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
+              <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Roommate matching for verified college students</p>
+            </div>
+            <div style="padding:36px 32px;">
+              <p style="color:#2B2B3C; font-size:18px; margin:0 0 18px; font-weight:600;">You're in. Welcome to HavenIQ.</p>
+              <p style="color:#2B2B3C; font-size:15px; line-height:1.7; margin:0 0 22px;">
+                Every account on HavenIQ has a verified academic email — including yours now. No catfishing, no scammers, no marketing bots. Just real students looking for the right person to live with.
+              </p>
+
+              <div style="background:#F5FAFA; border-left:4px solid #2CBFBE; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
+                <p style="font-size:15px; color:#2B2B3C; margin:0 0 12px; font-weight:600;">3 things to do this week:</p>
+                <p style="font-size:14px; color:#6B7280; line-height:1.8; margin:0;">
+                  <strong>1.</strong> Take the quiz — ~10 minutes, 55 questions, clinical-framework backed.<br/>
+                  <strong>2.</strong> Add a photo + a 3-sentence bio (the AI writer screen helps).<br/>
+                  <strong>3.</strong> Browse your matches and send your first connect request.
+                </p>
+              </div>
+
+              <p style="color:#2B2B3C; font-size:14px; line-height:1.7; margin:0 0 18px;">
+                <strong>One thing to know:</strong> the quiz isn't a personality test for fun — it's how we predict roommate compatibility from things like attachment style, conflict patterns, and sleep schedule. The more honestly you answer, the better the matches.
+              </p>
+
+              <p style="color:#6B7280; font-size:13px; line-height:1.7; margin:0 0 8px;">
+                Questions? Hit us at <a href="mailto:support@haveniq.org" style="color:#2CBFBE; text-decoration:none;">support@haveniq.org</a>.
+              </p>
+              <p style="color:#6B7280; font-size:13px; line-height:1.7; margin:0;">
+                See you in the matches feed.
+              </p>
+            </div>
+            <div style="background:#F5FAFA; padding:18px 32px; text-align:center; border-top:1px solid #E0EDED;">
+              <p style="color:#6B7280; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+  });
+}
+
+module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail, sendParentInviteEmail, sendWelcomeEmail };
