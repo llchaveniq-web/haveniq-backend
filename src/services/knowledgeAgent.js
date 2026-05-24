@@ -284,4 +284,81 @@ async function askAssistant(question, profileContext = '') {
   }
 }
 
-module.exports = { askAssistant, chatWithPersona, PERSONAS };
+/**
+ * Generate AI-personalized question starters for an AI screen. Used to
+ * replace hardcoded suggestion chips with dynamic chips that reference
+ * the user's actual context (e.g. "Why did Marcus rank above Sam?"
+ * instead of "Who is my best match?").
+ *
+ * Returns { suggestions: string[] } — typically 4-6 short questions
+ * ready to drop into chips. Always resolves; falls back to a small
+ * persona-appropriate default list if Anthropic is unreachable.
+ */
+async function generateSuggestions(persona, context = '') {
+  const personaPrompt = PERSONAS[persona];
+  // Fallback chips per persona — used when Anthropic isn't reachable.
+  // These are still useful prompts; they just don't reference user data.
+  const FALLBACKS = {
+    advisor:           ['Who is my best match and why?', 'What does my personality type mean?', 'Help me message my top match'],
+    mediator:          ['My roommate is messy', "We have different sleep schedules", "How do I bring up rent fairness?"],
+    profile_writer:    ['Rewrite my bio in my voice', 'Make it shorter', 'Add a line about my study habits'],
+    negotiator:        ['Lower my rent', 'Negotiate a shorter lease', 'Get the security deposit reduced'],
+    conflict_coach:    ["I'm too angry to talk right now", "What do I say to repair this?", "How do I not freeze up?"],
+    interview_coach:   ['How do I screen for cleanliness?', "What questions reveal conflict style?", 'Best follow-up questions?'],
+    financial_advisor: ['Should I open a Roth IRA?', 'How do I build credit safely?', 'Where should I keep my savings?'],
+  };
+  if (!personaPrompt) return { suggestions: FALLBACKS[persona] ?? [] };
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return { suggestions: FALLBACKS[persona] ?? [] };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const userPrompt = `Generate 4 short, specific, first-message question starters a student might tap to open a conversation with this assistant. Use the user's context — names, scores, situations — when relevant so the chips feel personal, not generic.
+
+${context ? `Context on this user:\n${context}\n\n` : ''}Rules:
+- Each chip 4-8 words. Phone-readable.
+- Use the SECOND person ("you", "your") so the student feels addressed.
+- Concrete + specific beats vague.
+- Don't ask the user a question — write the question THEY would ask the assistant.
+- No emojis, no quotation marks, no numbering.
+
+Output ONLY the 4 chips, one per line. No preamble, no extras.`;
+
+    const res = await fetch(ANTHROPIC_URL, {
+      method:  'POST',
+      signal:  controller.signal,
+      headers: {
+        'content-type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+      },
+      body: JSON.stringify({
+        model:      MODEL,
+        max_tokens: 200,
+        system:     personaPrompt,
+        messages:   [{ role: 'user', content: userPrompt }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Anthropic API ${res.status}`);
+    const data = await res.json();
+    const block = (data.content || []).find(b => b.type === 'text');
+    const text  = block?.text?.trim() || '';
+    if (!text) throw new Error('empty');
+    // Split lines, trim, drop empties + any leftover bullet/number prefixes.
+    const lines = text.split('\n')
+      .map(s => s.replace(/^[-*•\d.\)\s]+/, '').trim())
+      .filter(Boolean)
+      .slice(0, 6);
+    if (lines.length === 0) throw new Error('no chips parsed');
+    return { suggestions: lines };
+  } catch (err) {
+    console.error(`[assistant:${persona}/suggestions] failed:`, err.message);
+    return { suggestions: FALLBACKS[persona] ?? [] };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+module.exports = { askAssistant, chatWithPersona, generateSuggestions, PERSONAS };
