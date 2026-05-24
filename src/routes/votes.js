@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { submitNomination, quickAction } = require('../middleware/rateLimits');
 
 // ═══════════════════════════════════════════════════════════════════════
 // Best Roommate Award — vote tallies for the /best-roommate screen.
@@ -49,7 +50,7 @@ router.get('/nominees', requireAuth, async (req, res) => {
 // ── POST /best-roommate/vote ─────────────────────────────────────────────
 // Body: { nomineeId, reason? }
 // UNIQUE (voter, nominee) means re-voting is a no-op (rejected at DB level).
-router.post('/vote', requireAuth, async (req, res) => {
+router.post('/vote', requireAuth, quickAction, async (req, res) => {
   try {
     const { nomineeId, reason } = req.body || {};
     if (!nomineeId) return res.status(400).json({ error: 'nomineeId required' });
@@ -85,7 +86,7 @@ router.post('/vote', requireAuth, async (req, res) => {
 // Best Roommate screen. Distinct from /vote (which records a count against
 // an existing user). Nominations are free-text testimonials — they go to
 // a separate table and don't yet contribute to vote_count.
-router.post('/nominate', requireAuth, async (req, res) => {
+router.post('/nominate', requireAuth, submitNomination, async (req, res) => {
   try {
     const { nomineeName, whyBest, specificStory, qualities, relationship } = req.body || {};
     if (!nomineeName || typeof nomineeName !== 'string') {

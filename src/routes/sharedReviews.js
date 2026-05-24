@@ -9,6 +9,7 @@
 
 const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { writeReview } = require('../middleware/rateLimits');
 
 // ── Landlord reviews ──────────────────────────────────────────────────────
 const landlordRouter = require('express').Router();
@@ -16,7 +17,7 @@ const landlordRouter = require('express').Router();
 // POST /landlord-reviews
 // Body: { landlordName, ratingOverall, ratingResponse?, ratingMaintenance?,
 //         ratingFairness?, reviewText, isAnonymous? }
-landlordRouter.post('/', requireAuth, async (req, res) => {
+landlordRouter.post('/', requireAuth, writeReview, async (req, res) => {
   try {
     const {
       landlordName, ratingOverall, ratingResponse, ratingMaintenance,
@@ -101,7 +102,7 @@ const buildingRouter = require('express').Router();
 // Body: { buildingAddress, moveInDate?, moveOutDate?, ratingOverall,
 //         ratingNoise?, ratingPest?, ratingHvac?, ratingManagement?,
 //         recommend?, pros?, cons?, tips? }
-buildingRouter.post('/', requireAuth, async (req, res) => {
+buildingRouter.post('/', requireAuth, writeReview, async (req, res) => {
   try {
     const {
       buildingAddress, moveInDate, moveOutDate, ratingOverall,

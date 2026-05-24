@@ -8,6 +8,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { submitRule, quickAction } = require('../middleware/rateLimits');
 
 const VALID_CATEGORIES = new Set([
   'Temperature', 'Quiet Hours', 'Guests', 'Cleanliness', 'Pets',
@@ -32,7 +33,7 @@ router.get('/', requireAuth, async (req, res) => {
 
 // POST /house-rules — create a new rule.
 // Body: { category, text, why?, voteRequired? }
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, submitRule, async (req, res) => {
   try {
     const { category, text, why, voteRequired = true } = req.body || {};
     if (!category || !VALID_CATEGORIES.has(category)) {
@@ -58,7 +59,7 @@ router.post('/', requireAuth, async (req, res) => {
 // Idempotent in the sense that calling it twice does NOT double-count —
 // frontend tracks the local "thumbed" set per session, this just records
 // the +1 if it's a fresh thumb.
-router.post('/:id/thumb', requireAuth, async (req, res) => {
+router.post('/:id/thumb', requireAuth, quickAction, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE house_rules

@@ -3,6 +3,7 @@ const multer  = require('multer');
 const pool    = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
+const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
 const { sendParentInviteEmail } = require('../services/email');
 
@@ -244,6 +245,7 @@ router.patch('/me', requireAuth, async (req, res) => {
     };
 
     const invalid = [];
+    const changed = [];
     for (const [camel, snake] of Object.entries(fieldMap)) {
       if (req.body[camel] === undefined) continue;
       const v = req.body[camel];
@@ -254,6 +256,7 @@ router.patch('/me', requireAuth, async (req, res) => {
       }
       updates.push(`${snake} = $${idx++}`);
       values.push(v);
+      changed.push(camel);
     }
 
     if (invalid.length > 0) {
@@ -269,6 +272,10 @@ router.patch('/me', requireAuth, async (req, res) => {
       `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${idx} RETURNING *`,
       values
     );
+
+    // Audit which fields changed (names only, never values — keeps PII
+    // out of the audit log).
+    audit(req, 'profile.patch', { fields: changed }).catch(() => {});
 
     res.json({ success: true, user: rows[0] });
   } catch (err) {
@@ -342,6 +349,11 @@ router.get('/me/export', requireAuth, async (req, res) => {
 // separately (best-effort) so we don't keep orphan photos in storage.
 router.delete('/me', requireAuth, async (req, res) => {
   try {
+    // Audit BEFORE deletion so we still have user_id on the row. The FK
+    // on audit_log.user_id is ON DELETE SET NULL so the row survives;
+    // the user_id column becomes the historical "this user, now gone."
+    await audit(req, 'account.delete');
+
     // Best-effort photo cleanup — never block account deletion on this.
     deleteProfilePhoto(req.user.id).catch(() => {});
 
@@ -438,6 +450,7 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
       [url, req.user.id]
     );
 
+    audit(req, 'photo.upload').catch(() => {});
     res.json({ url });
   } catch (err) {
     console.error('photo upload error:', err);
@@ -445,6 +458,7 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
     // specific reason from the moderator (e.g. "Explicit Nudity") so the
     // user knows what to fix instead of seeing a generic 500.
     if (err instanceof ModerationRejectedError) {
+      audit(req, 'photo.upload.rejected', { reason: err.message }).catch(() => {});
       return res.status(400).json({ error: err.message });
     }
     if (err && err.message && err.message.includes('Cloudinary not configured')) {

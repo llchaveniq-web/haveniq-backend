@@ -15,6 +15,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const stripeUtil = require('../utils/stripe');
+const { audit } = require('../services/auditLog');
 
 // The URL the user is bounced back to after Stripe finishes. The path
 // matters — our frontend reads it to know to refetch status.
@@ -65,6 +66,7 @@ router.post('/start', requireAuth, async (req, res) => {
       [req.user.id, session.id, session.status],
     );
 
+    audit(req, 'identity.start', { sessionId: session.id }).catch(() => {});
     res.json({ url: session.url, sessionId: session.id, status: session.status });
   } catch (err) {
     console.error('[identity/start] failed:', err?.message);
