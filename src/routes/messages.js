@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, refuseBanned } = require('../middleware/auth');
 
 // ── GET /messages/conversations ───────────────────────────────────────────
 // All conversations for the current user with last message
@@ -109,7 +109,7 @@ router.get('/:conversationId', requireAuth, async (req, res) => {
 // join (which selects the full body for the messages tab preview).
 const MAX_MESSAGE_CHARS = 10000;
 
-router.post('/:conversationId', requireAuth, async (req, res) => {
+router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { body } = req.body || {};
     if (!body?.trim()) return res.status(400).json({ error: 'body required' });

@@ -27,7 +27,7 @@ async function requireAuth(req, res, next) {
 
     // Pull fresh user from DB on every request (catches banned/deleted accounts)
     const { rows } = await pool.query(
-      'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score FROM users WHERE id = $1',
+      'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason FROM users WHERE id = $1',
       [decoded.userId]
     );
 
@@ -45,10 +45,29 @@ async function requireAuth(req, res, next) {
   }
 }
 
+/**
+ * Stricter gate for write actions — refuses banned users with a clear
+ * 403. Banned users can still call requireAuth (so they can see why
+ * they were banned + reach support) but cannot send messages, connect
+ * requests, reviews, etc. Stack after requireAuth on the routes that
+ * matter:
+ *   router.post('/...', requireAuth, refuseBanned, async (req, res) => ...)
+ */
+function refuseBanned(req, res, next) {
+  if (req.user?.is_banned) {
+    return res.status(403).json({
+      error:     'Your account has been suspended. Contact support@haveniq.org if you believe this is in error.',
+      banned:    true,
+      banReason: req.user.ban_reason || null,
+    });
+  }
+  next();
+}
+
 function signToken(userId) {
   return jwt.sign({ userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '30d',
   });
 }
 
-module.exports = { requireAuth, signToken };
+module.exports = { requireAuth, refuseBanned, signToken };

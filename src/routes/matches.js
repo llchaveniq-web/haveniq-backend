@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, refuseBanned } = require('../middleware/auth');
 const { sendParentMatchEmail, sendSafetyAlertEmail } = require('../services/email');
 const { isFounder } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
@@ -106,6 +106,7 @@ router.get('/feed', requireAuth, async (req, res) => {
          AND cs.is_hard_blocked = FALSE
          AND cs.score >= 65
          AND u.is_paused = FALSE
+         AND u.is_banned = FALSE
          AND u.quiz_completed = TRUE
          -- Honor user_blocks in BOTH directions. If either side has
          -- blocked the other, the pair never appears in the feed.
@@ -160,7 +161,7 @@ router.get('/feed', requireAuth, async (req, res) => {
 // ── POST /matches/connect ─────────────────────────────────────────────────
 // Send a connect request
 const CONNECT_MIN_SCORE = 65;
-router.post('/connect', requireAuth, async (req, res) => {
+router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { toUserId } = req.body || {};
     if (!toUserId) return res.status(400).json({ error: 'toUserId required' });
@@ -239,7 +240,7 @@ router.post('/connect', requireAuth, async (req, res) => {
 
 // ── POST /matches/respond ─────────────────────────────────────────────────
 // Accept or decline a connect request
-router.post('/respond', requireAuth, async (req, res) => {
+router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { fromUserId, action } = req.body; // action: 'accept' | 'decline'
     if (!fromUserId || !['accept', 'decline'].includes(action)) {
