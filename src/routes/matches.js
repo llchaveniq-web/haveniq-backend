@@ -107,6 +107,14 @@ router.get('/feed', requireAuth, async (req, res) => {
          AND cs.score >= 65
          AND u.is_paused = FALSE
          AND u.quiz_completed = TRUE
+         -- Honor user_blocks in BOTH directions. If either side has
+         -- blocked the other, the pair never appears in the feed.
+         -- Algorithmic-block via cs.is_hard_blocked is separate.
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks ub
+           WHERE (ub.blocker_id = $1 AND ub.blocked_id = u.id)
+              OR (ub.blocker_id = u.id AND ub.blocked_id = $1)
+         )
          ${demoFilter}
          ${school ? 'AND u.school = $2' : ''}
        ORDER BY cs.score DESC
@@ -178,6 +186,21 @@ router.post('/connect', requireAuth, async (req, res) => {
     }
     if (parseFloat(compat[0].score) < CONNECT_MIN_SCORE) {
       return res.status(403).json({ error: 'Compatibility too low to connect' });
+    }
+
+    // Refuse if either side has blocked the other. Generic error to avoid
+    // leaking the existence of a block to the would-be sender ("user not
+    // found / eligible" looks the same whether they were blocked or never
+    // existed).
+    const { rows: blockRows } = await pool.query(
+      `SELECT 1 FROM user_blocks
+        WHERE (blocker_id = $1 AND blocked_id = $2)
+           OR (blocker_id = $2 AND blocked_id = $1)
+        LIMIT 1`,
+      [req.user.id, toUserId],
+    );
+    if (blockRows[0]) {
+      return res.status(404).json({ error: 'Match not found' });
     }
 
     // Check if already connected or pending

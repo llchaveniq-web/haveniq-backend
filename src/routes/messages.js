@@ -34,7 +34,15 @@ router.get('/conversations', requireAuth, async (req, res) => {
          (cs.user_a = $1 AND cs.user_b = u.id) OR
          (cs.user_b = $1 AND cs.user_a = u.id)
        )
-       WHERE c.user_a = $1 OR c.user_b = $1
+       WHERE (c.user_a = $1 OR c.user_b = $1)
+         -- Hide conversations where either side has blocked the other.
+         -- We don't delete the conversation row (audit trail) — just
+         -- filter it from this user's list.
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks ub
+           WHERE (ub.blocker_id = $1 AND ub.blocked_id = u.id)
+              OR (ub.blocker_id = u.id AND ub.blocked_id = $1)
+         )
        ORDER BY COALESCE(m.created_at, c.created_at) DESC`,
       [req.user.id]
     );
@@ -116,18 +124,34 @@ router.post('/:conversationId', requireAuth, async (req, res) => {
     );
     if (!convRows[0]) return res.status(403).json({ error: 'Not authorized' });
 
+    // Block the send if either side has blocked the other. We refuse
+    // BOTH directions — a blocked user can't message the blocker, and
+    // the blocker (who chose to block) shouldn't accidentally reach out
+    // either, since the conversation is filtered from their list anyway.
+    const otherUserId = convRows[0].user_a === req.user.id
+      ? convRows[0].user_b
+      : convRows[0].user_a;
+    const { rows: blockRows } = await pool.query(
+      `SELECT 1 FROM user_blocks
+        WHERE (blocker_id = $1 AND blocked_id = $2)
+           OR (blocker_id = $2 AND blocked_id = $1)
+        LIMIT 1`,
+      [req.user.id, otherUserId],
+    );
+    if (blockRows[0]) {
+      return res.status(403).json({ error: 'Unable to send message in this conversation.' });
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO messages (conversation_id, sender_id, body)
        VALUES ($1, $2, $3) RETURNING *`,
       [req.params.conversationId, req.user.id, body.trim()]
     );
 
-    // Push notification to recipient (fire-and-forget)
+    // Push notification to recipient (fire-and-forget). `otherUserId`
+    // was computed above for the block check; reuse it here.
     const sendPushToUser = req.app.get('sendPushToUser');
     if (sendPushToUser) {
-      const otherUserId = convRows[0].user_a === req.user.id
-        ? convRows[0].user_b
-        : convRows[0].user_a;
       sendPushToUser(otherUserId, {
         title: `${req.user.first_name} sent a message`,
         body: body.trim().slice(0, 80),
