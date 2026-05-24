@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { signToken } = require('../middleware/auth');
@@ -15,8 +16,12 @@ const sendLimitEmail = rateLimit({
   windowMs: 15 * 60 * 1000,  // 15 min
   max: 5,
   message: { error: 'Too many OTP requests for this email. Try again in 15 minutes.' },
+  // Use the library's ipKeyGenerator helper for the IP fallback — it
+  // collapses IPv6 addresses by /64 prefix so an attacker can't rotate
+  // through trillions of IPv6 addresses to bypass the limit. The express-
+  // rate-limit v8 validator warns when you use req.ip directly without it.
   keyGenerator: (req) =>
-    (req.body?.email || '').toString().toLowerCase().trim() || req.ip,
+    (req.body?.email || '').toString().toLowerCase().trim() || ipKeyGenerator(req),
 });
 
 // Per-IP signup limiter — caps total signup attempts from one egress,
@@ -35,7 +40,7 @@ const verifyLimitEmail = rateLimit({
   max: 5,
   message: { error: 'Too many verification attempts.' },
   keyGenerator: (req) =>
-    (req.body?.email || '').toString().toLowerCase().trim() || req.ip,
+    (req.body?.email || '').toString().toLowerCase().trim() || ipKeyGenerator(req),
 });
 
 const verifyLimitIp = rateLimit({
