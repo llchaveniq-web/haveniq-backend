@@ -69,4 +69,32 @@ const quickAction = rateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { writeReview, submitRule, submitNomination, quickAction };
+/**
+ * Safety reports — tightest limiter. Abuse pattern: someone mass-reports
+ * an account they don't like to harass them off the platform. 5/day is
+ * enough for legitimate reporting (you're rarely going to legitimately
+ * file 5 reports on different users in one day).
+ */
+const safetyReport = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 5,
+  message: { error: 'Report limit reached for today. Email support@haveniq.org if it\'s urgent.' },
+  keyGenerator: userOrIpKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/**
+ * Blocks — more generous than reports. A user might block several
+ * people in a row when cleaning up their feed; 30/day is plenty.
+ */
+const safetyBlock = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  max: 30,
+  message: { error: 'Block limit reached. Try again tomorrow.' },
+  keyGenerator: userOrIpKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+module.exports = { writeReview, submitRule, submitNomination, quickAction, safetyReport, safetyBlock };

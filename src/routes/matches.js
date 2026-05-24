@@ -1,9 +1,11 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-const { sendParentMatchEmail } = require('../services/email');
+const { sendParentMatchEmail, sendSafetyAlertEmail } = require('../services/email');
 const { isFounder } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
+const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
+const { audit } = require('../services/auditLog');
 
 // Best-effort parent notification on a student's FIRST accepted match.
 // Called twice — once for each side of the pair. Each user's row has
@@ -333,6 +335,118 @@ router.get('/:userId/score-history', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('score-history failed:', err);
     res.status(500).json({ error: 'Failed to load score history' });
+  }
+});
+
+// ── POST /matches/:matchId/block ─────────────────────────────────────────
+// Permanently block another user. Filter rules elsewhere (feed, messages)
+// honor user_blocks rows so the blocker stops seeing this user in either
+// direction. UNIQUE (blocker, blocked) makes this idempotent — second
+// block is a no-op.
+router.post('/:matchId/block', requireAuth, safetyBlock, async (req, res) => {
+  try {
+    const blockerId = req.user.id;
+    const blockedId = req.params.matchId;
+    if (!blockedId) return res.status(400).json({ error: 'matchId is required' });
+    if (blockedId === blockerId) {
+      return res.status(400).json({ error: "You can't block yourself" });
+    }
+    const reason = typeof req.body?.reason === 'string'
+      ? req.body.reason.slice(0, 500)
+      : null;
+
+    await pool.query(
+      `INSERT INTO user_blocks (blocker_id, blocked_id, reason)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (blocker_id, blocked_id) DO NOTHING`,
+      [blockerId, blockedId, reason],
+    );
+
+    // Soft-cancel any open connect-requests between the two so the UI
+    // can't keep surfacing them. Hard delete would lose audit trail.
+    await pool.query(
+      `UPDATE connect_requests SET status = 'declined', updated_at = NOW()
+        WHERE status = 'pending'
+          AND ((from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1))`,
+      [blockerId, blockedId],
+    );
+
+    audit(req, 'user.block', { blocked: blockedId }).catch(() => {});
+    res.json({ blocked: true });
+  } catch (err) {
+    console.error('block failed:', err);
+    res.status(500).json({ error: 'Could not block user' });
+  }
+});
+
+// ── DELETE /matches/:matchId/block ───────────────────────────────────────
+// Undo a previous block. Useful if the user changes their mind.
+router.delete('/:matchId/block', requireAuth, async (req, res) => {
+  try {
+    await pool.query(
+      `DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2`,
+      [req.user.id, req.params.matchId],
+    );
+    audit(req, 'user.unblock', { blocked: req.params.matchId }).catch(() => {});
+    res.json({ blocked: false });
+  } catch (err) {
+    console.error('unblock failed:', err);
+    res.status(500).json({ error: 'Could not unblock user' });
+  }
+});
+
+// ── POST /matches/:matchId/report ────────────────────────────────────────
+// Body: { reason?, category?, severity?, details? }
+//
+// File a safety report against another user. Persists to user_reports,
+// fires a Resend email to the founder for triage, writes an audit row.
+// Best-effort on the email so a Resend hiccup never breaks the report.
+router.post('/:matchId/report', requireAuth, safetyReport, async (req, res) => {
+  try {
+    const reporterId = req.user.id;
+    const reportedId = req.params.matchId;
+    if (!reportedId) return res.status(400).json({ error: 'matchId is required' });
+
+    const {
+      reason   = null,
+      category = 'other',
+      severity = 'medium',
+      details  = null,
+    } = req.body || {};
+
+    const validCats     = ['harassment', 'spam', 'fake_profile', 'inappropriate_content', 'safety', 'other'];
+    const validSevs     = ['low', 'medium', 'high', 'urgent'];
+    const safeCat       = validCats.includes(String(category)) ? category : 'other';
+    const safeSev       = validSevs.includes(String(severity)) ? severity : 'medium';
+    const safeReason    = reason  ? String(reason).slice(0, 200) : null;
+    const safeDetails   = details ? String(details).slice(0, 4000) : null;
+
+    const { rows } = await pool.query(
+      `INSERT INTO user_reports
+         (reporter_id, reported_id, category, severity, reason, details)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, created_at`,
+      [reporterId, reportedId, safeCat, safeSev, safeReason, safeDetails],
+    );
+    const reportId = rows[0].id;
+
+    // Fire safety alert email to the founder. Fire-and-forget — never
+    // block the report response on Resend.
+    sendSafetyAlertEmail({
+      reportId,
+      category:   safeCat,
+      severity:   safeSev,
+      reason:     safeReason,
+      details:    safeDetails,
+      reporterId,
+      reportedId,
+    }).catch(err => console.error('[safety alert email] failed:', err.message));
+
+    audit(req, 'user.report', { reported: reportedId, category: safeCat, severity: safeSev }).catch(() => {});
+    res.status(201).json({ reported: true, reportId });
+  } catch (err) {
+    console.error('report failed:', err);
+    res.status(500).json({ error: 'Could not file report' });
   }
 });
 

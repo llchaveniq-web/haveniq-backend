@@ -228,4 +228,50 @@ async function sendWelcomeEmail(email) {
   });
 }
 
-module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail, sendParentInviteEmail, sendWelcomeEmail };
+// Safety alert email to the founder when a new user report comes in.
+// Best-effort: we never want a Resend hiccup to break the report flow.
+//
+// Founder address resolution: env var SAFETY_ALERT_EMAIL wins, else falls
+// back to support@haveniq.org which Cloudflare Email Routing forwards
+// to the founder anyway.
+async function sendSafetyAlertEmail({ reportId, category, severity, reason, details, reporterId, reportedId }) {
+  const to = process.env.SAFETY_ALERT_EMAIL || 'support@haveniq.org';
+  await getResend().emails.send({
+    from:    'HavenIQ Safety <noreply@haveniq.org>',
+    to,
+    subject: `[${severity.toUpperCase()}] New report — ${category}${reportedId ? ` against user ${reportedId.slice(0, 8)}` : ''}`,
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FAFAFA; margin:0; padding:24px 16px;">
+          <div style="max-width:560px; margin:0 auto; background:#fff; border-radius:12px; overflow:hidden; border:1px solid #E5E7EB;">
+            <div style="background:#DC2626; padding:18px 24px;">
+              <p style="font-size:14px; font-weight:700; color:#fff; margin:0; letter-spacing:0.5px; text-transform:uppercase;">⚠ Safety alert — ${severity}</p>
+            </div>
+            <div style="padding:24px;">
+              <table style="width:100%; font-size:14px; color:#111827; border-collapse:collapse;">
+                <tr><td style="padding:6px 0; color:#6B7280; width:120px;">Report ID</td><td style="padding:6px 0; font-family:monospace;">${reportId}</td></tr>
+                <tr><td style="padding:6px 0; color:#6B7280;">Category</td><td style="padding:6px 0;"><strong>${category}</strong></td></tr>
+                <tr><td style="padding:6px 0; color:#6B7280;">Severity</td><td style="padding:6px 0;"><strong>${severity}</strong></td></tr>
+                ${reason ? `<tr><td style="padding:6px 0; color:#6B7280;">Reason</td><td style="padding:6px 0;">${reason}</td></tr>` : ''}
+                ${reporterId ? `<tr><td style="padding:6px 0; color:#6B7280;">Reporter</td><td style="padding:6px 0; font-family:monospace;">${reporterId}</td></tr>` : '<tr><td style="padding:6px 0; color:#6B7280;">Reporter</td><td style="padding:6px 0;"><em>anonymous</em></td></tr>'}
+                ${reportedId ? `<tr><td style="padding:6px 0; color:#6B7280;">Reported user</td><td style="padding:6px 0; font-family:monospace;">${reportedId}</td></tr>` : ''}
+              </table>
+              ${details ? `
+                <div style="margin-top:18px; padding:14px; background:#F9FAFB; border-radius:8px; border-left:3px solid #DC2626;">
+                  <p style="margin:0 0 6px; font-size:12px; color:#6B7280; text-transform:uppercase; letter-spacing:0.5px;">Details</p>
+                  <p style="margin:0; font-size:14px; color:#111827; line-height:1.6; white-space:pre-wrap;">${details}</p>
+                </div>
+              ` : ''}
+              <p style="margin:18px 0 0; font-size:12px; color:#6B7280;">
+                Triage in Railway → user_reports table, or hit GET /admin/reports with founder auth.
+              </p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `,
+  });
+}
+
+module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail, sendParentInviteEmail, sendWelcomeEmail, sendSafetyAlertEmail };
