@@ -6,6 +6,7 @@ const { isFounder } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
+const analytics = require('../services/analytics');
 
 // Best-effort parent notification on a student's FIRST accepted match.
 // Called twice — once for each side of the pair. Each user's row has
@@ -33,6 +34,7 @@ async function maybeNotifyParent(studentId, matchUserId) {
       matchName:        `${row.match_first} ${(row.match_last || '').charAt(0)}.`,
       matchSchool:      row.match_school,
       compatibilityPct: Math.round(Number(row.compatibility) || 0),
+      userId:           studentId,
     });
 
     await pool.query(
@@ -220,6 +222,14 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
       [req.user.id, toUserId, 'pending']
     );
 
+    // Recipient-side analytics. The frontend already fires connect_request_sent
+    // on the sender; this captures the matching event for the user being
+    // contacted so it appears on BOTH users' PostHog timelines.
+    analytics.track(analytics.EVENTS.connect_request_received, toUserId, {
+      from_user_id: req.user.id,
+      score: parseFloat(compat[0].score),
+    });
+
     // Push notification to recipient (fire-and-forget)
     const sendPushToUser = req.app.get('sendPushToUser');
     if (sendPushToUser) {
@@ -396,6 +406,7 @@ router.post('/:matchId/block', requireAuth, safetyBlock, async (req, res) => {
     );
 
     audit(req, 'user.block', { blocked: blockedId }).catch(() => {});
+    analytics.track(analytics.EVENTS.user_blocked, blockerId, { target_user_id: blockedId });
     res.json({ blocked: true });
   } catch (err) {
     console.error('block failed:', err);
@@ -467,6 +478,10 @@ router.post('/:matchId/report', requireAuth, safetyReport, async (req, res) => {
     }).catch(err => console.error('[safety alert email] failed:', err.message));
 
     audit(req, 'user.report', { reported: reportedId, category: safeCat, severity: safeSev }).catch(() => {});
+    analytics.track(analytics.EVENTS.report_submitted, reporterId, {
+      target_user_id: reportedId,
+      reason: safeCat,
+    });
     res.status(201).json({ reported: true, reportId });
   } catch (err) {
     console.error('report failed:', err);

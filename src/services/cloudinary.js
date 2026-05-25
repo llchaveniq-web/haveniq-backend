@@ -10,6 +10,7 @@
 // "storage not configured" to the dev than save photos to /dev/null.
 
 const cloudinary = require('cloudinary').v2;
+const analytics  = require('./analytics');
 
 let configured = false;
 function ensureConfigured() {
@@ -92,6 +93,9 @@ function uploadProfilePhoto(userId, buffer) {
           catch { /* swallow; the rejection itself is what matters */ }
           const labels = verdict.response?.moderation_labels || verdict.response?.moderationLabels || [];
           const topLabel = labels[0]?.name || labels[0]?.Name || 'inappropriate content';
+          analytics.track(analytics.EVENTS.photo_flagged_nsfw, userId, {
+            source: 'profile_photo',
+          });
           return reject(new ModerationRejectedError(
             `Photo blocked (${topLabel}). Please upload a clear, family-friendly photo of your face.`,
           ));

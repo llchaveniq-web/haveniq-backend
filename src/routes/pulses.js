@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const analytics = require('../services/analytics');
 
 // ── GET /pulses/pending ──────────────────────────────────────────────────
 // Returns up to one outcome-pulse prompt the user currently owes. We pick
@@ -98,6 +99,11 @@ router.post('/', requireAuth, async (req, res) => {
        ON CONFLICT (request_id, responder_id, day_marker) DO NOTHING`,
       [requestId, req.user.id, dayMarker, status, note ?? null],
     );
+
+    analytics.track(analytics.EVENTS.pulse_submitted, req.user.id, {
+      stage: dayMarker,
+      status,
+    });
 
     res.json({ recorded: true });
   } catch (err) {

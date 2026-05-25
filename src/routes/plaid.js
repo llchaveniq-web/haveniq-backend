@@ -23,6 +23,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { audit } = require('../services/auditLog');
+const analytics = require('../services/analytics');
 const {
   Configuration, PlaidApi, PlaidEnvironments,
   Products, CountryCode,
@@ -222,6 +223,9 @@ router.post('/exchange', requireAuth, async (req, res) => {
     );
 
     audit(req, 'plaid.connect', { institution: institutionName || null }).catch(() => {});
+    analytics.track(analytics.EVENTS.plaid_linked, req.user.id, {
+      institution_name: institutionName || null,
+    });
     res.json({
       connected:       true,
       institutionName,
@@ -285,6 +289,7 @@ router.post('/disconnect', requireAuth, async (req, res) => {
       [req.user.id],
     );
     audit(req, 'plaid.disconnect').catch(() => {});
+    analytics.track(analytics.EVENTS.plaid_disconnected, req.user.id);
     res.json({ connected: false });
   } catch (err) {
     console.error('[plaid/disconnect] failed:', err.message);

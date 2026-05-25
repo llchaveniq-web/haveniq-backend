@@ -1,4 +1,5 @@
 const { Resend } = require('resend');
+const analytics = require('./analytics');
 
 // Lazy-initialize so the server doesn't crash if env var loads after module
 function getResend() {
@@ -10,60 +11,74 @@ function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// Send OTP verification email
-async function sendOTPEmail(email, code, firstName = '') {
+// Send OTP verification email. `userId` is optional because OTP fires before
+// the user row exists; pass null in that case — PostHog will bucket under
+// 'system'.
+async function sendOTPEmail(email, code, firstName = '', userId = null) {
   const greeting = firstName ? `Hi ${firstName},` : 'Hi there,';
 
-  await getResend().emails.send({
-    from: 'HavenIQ <noreply@haveniq.org>',
-    to:      email,
-    subject: `${code} is your HavenIQ verification code`,
-    html: `
-      <!DOCTYPE html>
-      <html>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#F5FAFA; margin:0; padding:40px 20px;">
-          <div style="max-width:480px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-            <div style="background:#2CBFBE; padding:32px; text-align:center;">
-              <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
-              <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Your perfect roommate match</p>
-            </div>
-            <div style="padding:40px 32px;">
-              <p style="color:#2B2B3C; font-size:16px; margin:0 0 24px;">${greeting}</p>
-              <p style="color:#6B7280; font-size:15px; line-height:1.6; margin:0 0 32px;">
-                Use the code below to verify your .edu email and access your HavenIQ matches.
-              </p>
-              <div style="background:#F5FAFA; border:2px dashed #2CBFBE; border-radius:16px; padding:28px; text-align:center; margin-bottom:32px;">
-                <p style="font-size:48px; font-weight:900; color:#2CBFBE; letter-spacing:12px; margin:0;">${code}</p>
+  try {
+    await getResend().emails.send({
+      from: 'HavenIQ <noreply@haveniq.org>',
+      to:      email,
+      subject: `${code} is your HavenIQ verification code`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+          <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#F5FAFA; margin:0; padding:40px 20px;">
+            <div style="max-width:480px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+              <div style="background:#2CBFBE; padding:32px; text-align:center;">
+                <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
+                <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Your perfect roommate match</p>
               </div>
-              <p style="color:#6B7280; font-size:13px; line-height:1.6; margin:0 0 8px;">⏱ This code expires in <strong>10 minutes</strong>.</p>
-              <p style="color:#6B7280; font-size:13px; line-height:1.6; margin:0;">🔒 HavenIQ will <strong>never</strong> call, text, or email you asking for this code.</p>
+              <div style="padding:40px 32px;">
+                <p style="color:#2B2B3C; font-size:16px; margin:0 0 24px;">${greeting}</p>
+                <p style="color:#6B7280; font-size:15px; line-height:1.6; margin:0 0 32px;">
+                  Use the code below to verify your .edu email and access your HavenIQ matches.
+                </p>
+                <div style="background:#F5FAFA; border:2px dashed #2CBFBE; border-radius:16px; padding:28px; text-align:center; margin-bottom:32px;">
+                  <p style="font-size:48px; font-weight:900; color:#2CBFBE; letter-spacing:12px; margin:0;">${code}</p>
+                </div>
+                <p style="color:#6B7280; font-size:13px; line-height:1.6; margin:0 0 8px;">⏱ This code expires in <strong>10 minutes</strong>.</p>
+                <p style="color:#6B7280; font-size:13px; line-height:1.6; margin:0;">🔒 HavenIQ will <strong>never</strong> call, text, or email you asking for this code.</p>
+              </div>
+              <div style="background:#F5FAFA; padding:20px 32px; text-align:center; border-top:1px solid #E0EDED;">
+                <p style="color:#6B7280; font-size:12px; margin:0;">
+                  You're receiving this because someone entered your .edu email on HavenIQ. If this wasn't you, ignore this email.
+                </p>
+              </div>
             </div>
-            <div style="background:#F5FAFA; padding:20px 32px; text-align:center; border-top:1px solid #E0EDED;">
-              <p style="color:#6B7280; font-size:12px; margin:0;">
-                You're receiving this because someone entered your .edu email on HavenIQ. If this wasn't you, ignore this email.
-              </p>
-            </div>
-          </div>
-        </body>
-      </html>
-    `,
-  });
+          </body>
+        </html>
+      `,
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'otp' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'otp', error: err.message });
+    throw err;
+  }
 }
 
 // Send new match notification email
-async function sendMatchEmail(toEmail, toName, matchName, score) {
-  await getResend().emails.send({
-    from: 'HavenIQ <noreply@haveniq.org>',
-    to:      toEmail,
-    subject: `You have a new ${score}% match on HavenIQ ✦`,
-    html: `
-      <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-        <h2 style="color:#2CBFBE;">Hi ${toName}! You have a new match ✦</h2>
-        <p style="color:#6B7280;"><strong>${matchName}</strong> is <strong>${score}% compatible</strong> with you.</p>
-        <p style="color:#6B7280;">Open HavenIQ to see their full profile and connect.</p>
-      </div>
-    `,
-  });
+async function sendMatchEmail(toEmail, toName, matchName, score, userId = null) {
+  try {
+    await getResend().emails.send({
+      from: 'HavenIQ <noreply@haveniq.org>',
+      to:      toEmail,
+      subject: `You have a new ${score}% match on HavenIQ ✦`,
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+          <h2 style="color:#2CBFBE;">Hi ${toName}! You have a new match ✦</h2>
+          <p style="color:#6B7280;"><strong>${matchName}</strong> is <strong>${score}% compatible</strong> with you.</p>
+          <p style="color:#6B7280;">Open HavenIQ to see their full profile and connect.</p>
+        </div>
+      `,
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'match' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'match', error: err.message });
+    throw err;
+  }
 }
 
 // One-time "your student just matched" email to a student's parent the
@@ -75,11 +90,12 @@ async function sendMatchEmail(toEmail, toName, matchName, score) {
 // `matchName`       — first name + last initial of the matched roommate
 // `matchSchool`     — school name (shared, since this is roommate-matching)
 // `compatibilityPct` — the algorithm's score (0-100)
-async function sendParentMatchEmail({ parentEmail, studentName, matchName, matchSchool, compatibilityPct }) {
-  await getResend().emails.send({
-    from:    'HavenIQ <noreply@haveniq.org>',
-    to:      parentEmail,
-    subject: `${studentName} just matched with a verified roommate on HavenIQ ✦`,
+async function sendParentMatchEmail({ parentEmail, studentName, matchName, matchSchool, compatibilityPct, userId = null }) {
+  try {
+    await getResend().emails.send({
+      from:    'HavenIQ <noreply@haveniq.org>',
+      to:      parentEmail,
+      subject: `${studentName} just matched with a verified roommate on HavenIQ ✦`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -117,7 +133,12 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
         </body>
       </html>
     `,
-  });
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'parent_match' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'parent_match', error: err.message });
+    throw err;
+  }
 }
 
 // Warm intro email sent when a student invites a parent/guardian into the
@@ -127,12 +148,13 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
 //
 // `parentEmail` — recipient
 // `studentName` — first name of the student doing the inviting
-async function sendParentInviteEmail({ parentEmail, studentName }) {
+async function sendParentInviteEmail({ parentEmail, studentName, userId = null }) {
   const name = studentName || 'Your student';
-  await getResend().emails.send({
-    from:    'HavenIQ <noreply@haveniq.org>',
-    to:      parentEmail,
-    subject: `${name} added you to their HavenIQ roommate search ✦`,
+  try {
+    await getResend().emails.send({
+      from:    'HavenIQ <noreply@haveniq.org>',
+      to:      parentEmail,
+      subject: `${name} added you to their HavenIQ roommate search ✦`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -169,7 +191,12 @@ async function sendParentInviteEmail({ parentEmail, studentName }) {
         </body>
       </html>
     `,
-  });
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'parent_invite' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'parent_invite', error: err.message });
+    throw err;
+  }
 }
 
 // Welcome email — fires once, after a brand-new user finishes signup
@@ -178,11 +205,12 @@ async function sendParentInviteEmail({ parentEmail, studentName }) {
 // Resend is down or the user opted out of email later, we don't retry.
 //
 // `email` — verified academic address (what we just used to send the OTP)
-async function sendWelcomeEmail(email) {
-  await getResend().emails.send({
-    from:    'HavenIQ <noreply@haveniq.org>',
-    to:      email,
-    subject: `Welcome to HavenIQ ✦ Your first match is one quiz away`,
+async function sendWelcomeEmail(email, userId = null) {
+  try {
+    await getResend().emails.send({
+      from:    'HavenIQ <noreply@haveniq.org>',
+      to:      email,
+      subject: `Welcome to HavenIQ ✦ Your first match is one quiz away`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -225,7 +253,12 @@ async function sendWelcomeEmail(email) {
         </body>
       </html>
     `,
-  });
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'welcome' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'welcome', error: err.message });
+    throw err;
+  }
 }
 
 // Safety alert email to the founder when a new user report comes in.
@@ -236,10 +269,11 @@ async function sendWelcomeEmail(email) {
 // to the founder anyway.
 async function sendSafetyAlertEmail({ reportId, category, severity, reason, details, reporterId, reportedId }) {
   const to = process.env.SAFETY_ALERT_EMAIL || 'support@haveniq.org';
-  await getResend().emails.send({
-    from:    'HavenIQ Safety <noreply@haveniq.org>',
-    to,
-    subject: `[${severity.toUpperCase()}] New report — ${category}${reportedId ? ` against user ${reportedId.slice(0, 8)}` : ''}`,
+  try {
+    await getResend().emails.send({
+      from:    'HavenIQ Safety <noreply@haveniq.org>',
+      to,
+      subject: `[${severity.toUpperCase()}] New report — ${category}${reportedId ? ` against user ${reportedId.slice(0, 8)}` : ''}`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -271,7 +305,13 @@ async function sendSafetyAlertEmail({ reportId, category, severity, reason, deta
         </body>
       </html>
     `,
-  });
+    });
+    // No user context — safety alerts go to a fixed founder address.
+    analytics.track(analytics.EVENTS.email_sent, null, { kind: 'safety_alert', report_id: reportId });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, null, { kind: 'safety_alert', error: err.message });
+    throw err;
+  }
 }
 
 module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail, sendParentInviteEmail, sendWelcomeEmail, sendSafetyAlertEmail };

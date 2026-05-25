@@ -4,6 +4,7 @@ const { ipKeyGenerator } = require('express-rate-limit');
 const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail, sendWelcomeEmail } = require('../services/email');
 const { signToken } = require('../middleware/auth');
+const analytics = require('../services/analytics');
 
 // Rate limiters — TWO buckets per route: per-email (so a single victim
 // can't be bombarded) AND per-IP (so a single attacker can't rotate
@@ -217,10 +218,27 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
       // wait on Resend. If it errors (Resend down, address bounces),
       // log it and move on; they got the OTP successfully so we know
       // the address works.
-      sendWelcomeEmail(emailLower).catch(err => {
+      sendWelcomeEmail(emailLower, user.id).catch(err => {
         console.error('[auth] welcome email failed:', err.message);
       });
+
+      // Server-side signup analytics — fires once, immediately after the
+      // user row exists + JWT is about to be issued.
+      const emailDomain = emailLower.split('@')[1] || null;
+      analytics.track(analytics.EVENTS.signup_completed_server, user.id, {
+        school: user.school,
+        email_domain: emailDomain,
+      });
+      analytics.identify(user.id, {
+        school: user.school,
+        email_verified: false,
+        signup_at: new Date().toISOString(),
+      });
     }
+
+    // Every successful verify-code is, by definition, an email verification.
+    analytics.track(analytics.EVENTS.email_verified, user.id);
+    analytics.identify(user.id, { email_verified: true });
 
     const token = signToken(user.id);
 

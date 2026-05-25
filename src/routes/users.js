@@ -530,7 +530,7 @@ router.post('/parent-invite', requireAuth, async (req, res) => {
     );
 
     try {
-      await sendParentInviteEmail({ parentEmail, studentName: req.user.first_name });
+      await sendParentInviteEmail({ parentEmail, studentName: req.user.first_name, userId: req.user.id });
     } catch (e) {
       console.error('[parent-invite] email send failed:', e.message);
       return res.status(502).json({ error: "Saved your parent's email, but the invite couldn't send. Try again." });

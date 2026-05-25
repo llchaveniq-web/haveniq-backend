@@ -9,6 +9,7 @@ const rateLimit  = require('express-rate-limit');
 const pool       = require('./db/pool');
 const { requireAuth }  = require('./middleware/auth');
 const sentry            = require('./utils/sentry');
+const analytics         = require('./services/analytics');
 
 // ── CORS configuration ────────────────────────────────────────────────────
 // Production requires an explicit CLIENT_URL (comma-separated list of
@@ -43,6 +44,21 @@ const corsOrigin = allowedOrigins.includes('*')
 // instructions. Initialize as early as possible so initialization
 // errors elsewhere still get captured.
 sentry.tryInit();
+
+// PostHog — opt-in server-side product analytics. No-op unless
+// POSTHOG_API_KEY is set. Catches the half of the funnel that the
+// frontend can't see (offline notifications, async match creation,
+// email deliveries, AI cost per call, safety actions).
+analytics.init();
+
+// Graceful shutdown — flush queued PostHog events so we don't lose
+// the last 10s of activity when Railway redeploys.
+['SIGTERM', 'SIGINT'].forEach((sig) => {
+  process.on(sig, async () => {
+    try { await analytics.shutdown(); } catch {}
+    process.exit(0);
+  });
+});
 
 const app    = express();
 app.set('trust proxy', 1); // Required for Railway / reverse proxies

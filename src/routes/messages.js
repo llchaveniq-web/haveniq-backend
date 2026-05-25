@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
+const analytics = require('../services/analytics');
 
 // ── GET /messages/conversations ───────────────────────────────────────────
 // All conversations for the current user with last message
@@ -147,6 +148,13 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
        VALUES ($1, $2, $3) RETURNING *`,
       [req.params.conversationId, req.user.id, body.trim()]
     );
+
+    // Recipient-side analytics — appears on the receiver's PostHog timeline
+    // even though the frontend can only fire send-side events.
+    analytics.track(analytics.EVENTS.message_received, otherUserId, {
+      from_user_id: req.user.id,
+      conversation_id: req.params.conversationId,
+    });
 
     // Push notification to recipient (fire-and-forget). `otherUserId`
     // was computed above for the block check; reuse it here.

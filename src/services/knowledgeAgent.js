@@ -15,6 +15,7 @@
 
 const fs   = require('fs');
 const path = require('path');
+const analytics = require('./analytics');
 
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -249,7 +250,7 @@ Be specific. Use real dollar amounts and timelines. The user is in college — a
  * @param context  optional string of user data (matches, quiz, etc.) the
  *                 persona can reference
  */
-async function chatWithPersona(persona, messages, context = '') {
+async function chatWithPersona(persona, messages, context = '', userId = null) {
   const personaPrompt = PERSONAS[persona];
   if (!personaPrompt) return { answer: FALLBACK_ANSWER, source: 'fallback' };
 
@@ -299,9 +300,20 @@ async function chatWithPersona(persona, messages, context = '') {
     const block = (data.content || []).find(b => b.type === 'text');
     const answer = block && typeof block.text === 'string' ? block.text.trim() : '';
     if (!answer) throw new Error('empty response');
+    analytics.track(analytics.EVENTS.ai_call_made, userId, {
+      persona,
+      tokens_in:  data.usage?.input_tokens ?? null,
+      tokens_out: data.usage?.output_tokens ?? null,
+      model:      MODEL,
+    });
     return { answer, source: 'anthropic' };
   } catch (err) {
     console.error(`[assistant:${persona}] failed:`, err.message);
+    analytics.track(analytics.EVENTS.ai_call_failed, userId, {
+      persona,
+      error: err.message,
+      model: MODEL,
+    });
     return { answer: FALLBACK_ANSWER, source: 'fallback' };
   } finally {
     clearTimeout(timer);
@@ -312,7 +324,7 @@ async function chatWithPersona(persona, messages, context = '') {
  * Answer one student question. Always resolves — never rejects.
  * Returns { answer: string, source: 'anthropic' | 'fallback' }.
  */
-async function askAssistant(question, profileContext = '') {
+async function askAssistant(question, profileContext = '', userId = null) {
   const q = String(question || '').trim().slice(0, MAX_QUESTION_CHARS);
   if (!q) return { answer: 'Ask me anything about living with a roommate.', source: 'fallback' };
 
@@ -349,9 +361,20 @@ async function askAssistant(question, profileContext = '') {
     const block = (data.content || []).find(b => b.type === 'text');
     const answer = block && typeof block.text === 'string' ? block.text.trim() : '';
     if (!answer) throw new Error('empty response');
+    analytics.track(analytics.EVENTS.ai_call_made, userId, {
+      persona:    'ask_assistant',
+      tokens_in:  data.usage?.input_tokens ?? null,
+      tokens_out: data.usage?.output_tokens ?? null,
+      model:      MODEL,
+    });
     return { answer, source: 'anthropic' };
   } catch (err) {
     console.error('[assistant] failed:', err.message);
+    analytics.track(analytics.EVENTS.ai_call_failed, userId, {
+      persona: 'ask_assistant',
+      error:   err.message,
+      model:   MODEL,
+    });
     return { answer: FALLBACK_ANSWER, source: 'fallback' };
   } finally {
     clearTimeout(timer);

@@ -12,7 +12,7 @@ router.post('/ask', requireAuth, async (req, res) => {
     const question = String((req.body && req.body.question) || '').trim();
     if (!question) return res.status(400).json({ error: 'question is required' });
 
-    const { answer, source } = await askAssistant(question);
+    const { answer, source } = await askAssistant(question, '', req.user.id);
     res.json({ answer, source });
   } catch (err) {
     console.error('[assistant/ask] failed:', err.message);
@@ -43,7 +43,7 @@ router.post('/chat', requireAuth, async (req, res) => {
     // text, but defense-in-depth against a runaway prompt size.
     const ctx = typeof context === 'string' ? context.slice(0, 4000) : '';
 
-    const { answer, source } = await chatWithPersona(persona, messages, ctx);
+    const { answer, source } = await chatWithPersona(persona, messages, ctx, req.user.id);
     res.json({ answer, source });
   } catch (err) {
     console.error('[assistant/chat] failed:', err.message);

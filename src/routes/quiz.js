@@ -6,6 +6,7 @@ const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch } = require('../services/personalityPairing');
 const { textToSpeech, transcribe } = require('../services/voice');
 const { analyzeVoiceEmotion } = require('../services/voiceEmotion');
+const analytics = require('../services/analytics');
 const multer = require('multer');
 
 // In-memory upload for voice-interview audio answers (<= 25 MB).
@@ -238,7 +239,7 @@ router.post('/submit', requireAuth, async (req, res) => {
     // submit. Non-blocking + best-effort: derivePersonality() never rejects
     // (it falls back to a deterministic profile), and a DB failure here is
     // logged, not fatal. The /submit response is sent without waiting.
-    derivePersonality(answers)
+    derivePersonality(answers, [], '', req.user.id)
       .then(profile => pool.query(
         `INSERT INTO personality_profiles
            (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source, mbti, disc)
@@ -363,6 +364,26 @@ async function scoreNewMatches(userId, newAnswers) {
          calculated_at   = NOW()`,
     params,
   );
+
+  // Fire match_created on BOTH users' timelines. The compatibility row
+  // captures a pair, but being matched is an event for each side — they
+  // should each see "match created" in their own PostHog history.
+  // rows are [userA, userB, score, ...] tuples — pull from the same array
+  // we just inserted so the analytics line up exactly with what landed
+  // in the DB.
+  const tierFor = (pct) => {
+    if (pct >= 90) return 'soulmate';
+    if (pct >= 80) return 'high';
+    if (pct >= 70) return 'good';
+    if (pct >= 65) return 'surface';
+    return 'low';
+  };
+  for (const r of rows) {
+    const [a, b, score] = r;
+    const tier = tierFor(score);
+    analytics.track(analytics.EVENTS.match_created, a, { other_user_id: b, score, tier });
+    analytics.track(analytics.EVENTS.match_created, b, { other_user_id: a, score, tier });
+  }
 }
 
 // ── DELETE /quiz/reset ─────────────────────────────────────────────────────
@@ -566,6 +587,7 @@ async function rederivePersonalityFor(userId) {
     rows[0].answers || {},
     rows[0].voice_answers || [],
     rows[0].writing_sample || '',
+    userId,
   );
   await pool.query(
     `INSERT INTO personality_profiles

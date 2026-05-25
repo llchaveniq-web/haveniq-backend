@@ -22,6 +22,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder } = require('../utils/founders');
 const { audit } = require('../services/auditLog');
+const analytics = require('../services/analytics');
 
 function requireFounder(req, res, next) {
   if (!isFounder(req.user.id)) {
@@ -131,6 +132,10 @@ router.post('/users/:id/ban', requireAuth, requireFounder, async (req, res) => {
     );
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     audit(req, 'admin.user.ban', { userId: req.params.id, reason }).catch(() => {});
+    analytics.track(analytics.EVENTS.user_banned, req.user.id, {
+      target_user_id: req.params.id,
+      reason,
+    });
     res.json({ user: rows[0] });
   } catch (err) {
     console.error('[admin/safety/ban] failed:', err.message);
@@ -150,6 +155,9 @@ router.post('/users/:id/unban', requireAuth, requireFounder, async (req, res) =>
     );
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     audit(req, 'admin.user.unban', { userId: req.params.id }).catch(() => {});
+    analytics.track(analytics.EVENTS.user_unbanned, req.user.id, {
+      target_user_id: req.params.id,
+    });
     res.json({ user: rows[0] });
   } catch (err) {
     console.error('[admin/safety/unban] failed:', err.message);

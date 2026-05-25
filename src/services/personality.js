@@ -18,6 +18,7 @@
 // gets a usable profile and the quiz flow never breaks.
 
 const QUESTIONS = require('../data/quizQuestions');
+const analytics = require('./analytics');
 
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -150,7 +151,7 @@ const TOOL = {
 };
 
 // ─── Anthropic call ──────────────────────────────────────────────────────
-async function callAnthropic(transcript, voiceSection = '', writingSection = '') {
+async function callAnthropic(transcript, voiceSection = '', writingSection = '', userId = null) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
 
@@ -200,6 +201,12 @@ async function callAnthropic(transcript, voiceSection = '', writingSection = '')
     const data = await res.json();
     const toolUse = (data.content || []).find(b => b.type === 'tool_use');
     if (!toolUse || !toolUse.input) throw new Error('no tool_use block in response');
+    analytics.track(analytics.EVENTS.ai_call_made, userId, {
+      persona:    'personality',
+      tokens_in:  data.usage?.input_tokens ?? null,
+      tokens_out: data.usage?.output_tokens ?? null,
+      model:      MODEL,
+    });
     return toolUse.input;
   } finally {
     clearTimeout(timer);
@@ -323,7 +330,7 @@ function fallbackProfile(flat) {
  * @param {object} answers       - quiz answers (frontend wire shape)
  * @param {Array}  voiceAnswers  - optional [{ question, transcript }, ...]
  */
-async function derivePersonality(answers, voiceAnswers = [], writingSample = '') {
+async function derivePersonality(answers, voiceAnswers = [], writingSample = '', userId = null) {
   const flat = flatten(answers);
   const voice = Array.isArray(voiceAnswers)
     ? voiceAnswers.filter(v => v && typeof v.transcript === 'string' && v.transcript.trim())
@@ -339,10 +346,15 @@ async function derivePersonality(answers, voiceAnswers = [], writingSample = '')
     const transcript     = buildTranscript(flat);
     const voiceSection   = buildVoiceSection(voice);
     const writingSection = buildWritingSection(writing);
-    const raw = await callAnthropic(transcript, voiceSection, writingSection);
+    const raw = await callAnthropic(transcript, voiceSection, writingSection, userId);
     return { ...normalizeProfile(raw), source: 'anthropic', model: MODEL };
   } catch (err) {
     console.error('[personality] derivation failed, using fallback:', err.message);
+    analytics.track(analytics.EVENTS.ai_call_failed, userId, {
+      persona: 'personality',
+      error:   err.message,
+      model:   MODEL,
+    });
     return { ...fallbackProfile(flat), source: 'fallback', model: null };
   }
 }

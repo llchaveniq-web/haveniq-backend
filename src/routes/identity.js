@@ -16,6 +16,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const stripeUtil = require('../utils/stripe');
 const { audit } = require('../services/auditLog');
+const analytics = require('../services/analytics');
 
 // The URL the user is bounced back to after Stripe finishes. The path
 // matters — our frontend reads it to know to refetch status.
@@ -116,6 +117,10 @@ router.post('/refresh', requireAuth, async (req, res) => {
     if (rows.length === 0) return res.json({ status: 'none' });
 
     const session = await stripe.identity.verificationSessions.retrieve(rows[0].stripe_session_id);
+    const { rows: prev } = await pool.query(
+      `SELECT status FROM identity_verifications WHERE stripe_session_id = $1`,
+      [session.id],
+    );
     await pool.query(
       `UPDATE identity_verifications
          SET status = $1,
@@ -124,6 +129,11 @@ router.post('/refresh', requireAuth, async (req, res) => {
        WHERE stripe_session_id = $3`,
       [session.status, session.last_error?.code ?? null, session.id],
     );
+    // Only fire on the transition into verified — avoid double-counting
+    // a user refreshing the screen multiple times after success.
+    if (session.status === 'verified' && prev[0]?.status !== 'verified') {
+      analytics.track(analytics.EVENTS.identity_verified, req.user.id);
+    }
     res.json({
       status:        session.status,
       sessionId:     session.id,
@@ -169,6 +179,13 @@ router.post('/webhook', async (req, res) => {
     if (t.startsWith('identity.verification_session.')) {
       const obj = event.data?.object || {};
       if (obj.id) {
+        // Look up the prior status + user to fire identity_verified
+        // exactly once on the verified-state transition.
+        const { rows: prev } = await pool.query(
+          `SELECT status, user_id FROM identity_verifications
+            WHERE stripe_session_id = $1`,
+          [obj.id],
+        );
         await pool.query(
           `UPDATE identity_verifications
              SET status = $1,
@@ -177,6 +194,9 @@ router.post('/webhook', async (req, res) => {
            WHERE stripe_session_id = $3`,
           [obj.status, obj.last_error?.code ?? null, obj.id],
         );
+        if (obj.status === 'verified' && prev[0] && prev[0].status !== 'verified') {
+          analytics.track(analytics.EVENTS.identity_verified, prev[0].user_id);
+        }
       }
       console.log(`[identity/webhook] ${t} → ${obj.id} = ${obj.status}`);
     }
