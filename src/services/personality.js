@@ -254,10 +254,34 @@ function fallbackProfile(flat) {
   const norm = (v, max) => (v === null ? null : v / max);
   const inv  = (v, max) => (v === null ? null : 1 - v / max);
 
-  const conscientiousness = blend(inv(get(50), 3), inv(get(57), 3));
-  const extraversion      = blend(norm(get(48), 3), norm(get(37), 3));
-  const agreeableness     = blend(get(14), get(31), get(32), inv(get(60), 3));
-  const neuroticism       = blend(inv(get(9), 2), inv(get(34), 2), norm(get(40), 3), norm(get(3), 3));
+  // v5: prefer the DIRECT Big Five screens (Q15/25/35/45) when answered,
+  // and fall back to the indirect-signal blend if they're missing (e.g.
+  // partial-submit user who bailed before the personality section).
+  // Direct readings:
+  //   Q15  index 0 → introvert, 3 → extravert  → norm(_, 3)
+  //   Q25  index 0 → high C,    3 → low C     → inv(_, 3)
+  //   Q35  index 0 → high A,    3 → low A     → inv(_, 3)
+  //   Q45  index 0 → stable,    3 → neurotic  → norm(_, 3)
+  const extraversion = blend(
+    norm(get(15), 3),                                  // direct
+    norm(get(48), 3), norm(get(37), 3),                // indirect confirmations
+  );
+  const conscientiousness = blend(
+    inv(get(25), 3),                                   // direct
+    inv(get(50), 3), inv(get(57), 3),                  // indirect confirmations
+  );
+  const agreeableness = blend(
+    inv(get(35), 3),                                   // direct
+    get(14), get(31), get(32), inv(get(60), 3),        // indirect (forced-choice + repair)
+  );
+  const neuroticism = blend(
+    norm(get(45), 3),                                  // direct
+    inv(get(9), 2), inv(get(34), 2),
+    norm(get(40), 3), norm(get(3), 3),                 // indirect confirmations
+  );
+  // Openness still has no direct screen — kept as the lighter
+  // money-script-derived approximation. Add a direct Openness question
+  // in a future iteration if it becomes a matching signal worth tuning.
   const openness          = blend(norm(get(56), 3) === null ? null : 0.4 + norm(get(56), 3) * 0.3);
 
   const ocean = {

@@ -14,6 +14,8 @@
 // ═══════════════════════════════════════════════════════════════
 
 // Per-question point values — must match the app's quizStore.ts QUESTION_POINTS.
+// Keep this in lockstep with the frontend, or backend-computed scores will
+// drift from anything the app shows.
 const QUESTION_POINTS = {
   1: 40,  3: 40, 22: 25,        // attachment
   9: 35,                        // emotional regulation
@@ -23,18 +25,30 @@ const QUESTION_POINTS = {
   37: 14, 40: 12, 59: 14,       // nervous system
   57: 30,                       // control / executive function
   48: 5,  49: 5,  50: 4, 51: 5, 54: 5, 56: 20, // lifestyle
+  // Big Five Personality (v5 — added May 2026). Weights tuned to the
+  // cohabitation-research hierarchy: Conscientiousness > Agreeableness
+  // > Emotional Stability > Extraversion. ~21% of total max. Retune
+  // after N=50 paired 60-day check-ins land. See frontend quizStore.ts
+  // for the full rationale.
+  15: 20,  // Extraversion
+  25: 45,  // Conscientiousness
+  35: 40,  // Agreeableness
+  45: 32,  // Emotional Stability
 };
 
-// Category → question ids (v4 22-question set).
+// Category → question ids. The new `personality` bucket holds the
+// four Big Five items (HEXACO Honesty-Humility stays in `shadow` since
+// it's a more diagnostic dark-trait signal there).
 const CATEGORIES = {
-  attachment:    { ids: [1, 3, 22],          label: 'Attachment Style' },
-  emotional:     { ids: [9],                 label: 'Emotional Style' },
-  communication: { ids: [14, 17, 60],        label: 'Communication' },
-  childhood:     { ids: [29],                label: 'Childhood' },
-  shadow:        { ids: [31, 32, 34, 58],    label: 'Shadow Traits' },
-  nervous:       { ids: [37, 40, 59],        label: 'Nervous System' },
-  control:       { ids: [57],                label: 'Control Style' },
-  lifestyle:     { ids: [48, 49, 50, 51, 54, 56], label: 'Lifestyle' },
+  attachment:    { ids: [1, 3, 22],               label: 'Attachment Style' },
+  emotional:     { ids: [9],                      label: 'Emotional Style'  },
+  communication: { ids: [14, 17, 60],             label: 'Communication'    },
+  childhood:     { ids: [29],                     label: 'Childhood'        },
+  shadow:        { ids: [31, 32, 34, 58],         label: 'Shadow Traits'    },
+  nervous:       { ids: [37, 40, 59],             label: 'Nervous System'   },
+  control:       { ids: [57],                     label: 'Control Style'    },
+  personality:   { ids: [15, 25, 35, 45],         label: 'Personality'      },
+  lifestyle:     { ids: [48, 49, 50, 51, 54, 56], label: 'Lifestyle'        },
 };
 
 // Shadow-trait questions: index of the "worst" answer + index of the
@@ -180,6 +194,7 @@ function generateWhyMatched(breakdown, score) {
     childhood:     'background and upbringing',
     shadow:        'honesty and self-awareness',
     nervous:       'energy and rhythm',
+    personality:   'personality fit',
     lifestyle:     'daily lifestyle habits',
   };
 

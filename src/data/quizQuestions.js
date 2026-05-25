@@ -6,9 +6,11 @@
 // QUESTION TEXT and OPTION TEXT to send the AI something meaningful.
 //
 // This file is a deliberate mirror of the frontend's constants/quiz.ts
-// QUESTIONS array (the 22-question v4 set). If the quiz changes there, mirror
-// the change here. IDs are non-contiguous on purpose — they're preserved from
-// the original 60-question set.
+// QUESTIONS array (the v5 26-question set). v5 added Q15/25/35/45 — the
+// Big Five direct screens (Extraversion / Conscientiousness / Agreeableness
+// / Emotional Stability) that round out HEXACO Honesty-Humility (Q58). If
+// the quiz changes there, mirror the change here. IDs are non-contiguous
+// on purpose — preserved from the original 60-question set.
 
 module.exports = [
   { id: 1,  category: 'attachment',
@@ -121,5 +123,39 @@ module.exports = [
       'Accept it but stay guarded for a few days',
       'Need to talk through it more before I can let go',
       "Say I'm fine but the resentment lingers honestly",
+    ] },
+
+  // ── Big Five (v5) ───────────────────────────────────────────────────
+  { id: 15, category: 'personality / extraversion',
+    text: "At the end of a long day, you'd rather come home to…",
+    options: [
+      'A quiet apartment with no one around',
+      'Roommates around but doing their own thing',
+      'Casual conversation in the kitchen',
+      'A few friends over — the more the merrier',
+    ] },
+  { id: 25, category: 'personality / conscientiousness',
+    text: "You told your roommate you'd handle something by Friday. Most likely outcome:",
+    options: [
+      'Done by Wednesday, with time to spare',
+      'Done Friday, on time',
+      'Done Friday but rushed',
+      "Done late — I'll mention it when I get to it",
+    ] },
+  { id: 35, category: 'personality / agreeableness',
+    text: "When a roommate suggests something you'd rather not do, you usually…",
+    options: [
+      'Go along with it — keeping the peace matters more',
+      'Suggest a small tweak that works for both of us',
+      'Say no and explain why',
+      'Push back firmly — they should pick something else',
+    ] },
+  { id: 45, category: 'personality / emotional stability',
+    text: 'Something unexpected goes wrong at home — locked out, AC broken, surprise charge on the bill. Your first reaction is…',
+    options: [
+      'Calm — work the problem step by step',
+      'A little stressed but I figure it out',
+      "Pretty anxious until it's resolved",
+      'I spiral — everything feels worse than it actually is',
     ] },
 ];
