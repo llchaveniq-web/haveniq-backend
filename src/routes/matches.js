@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
+const suspicious = require('../middleware/suspiciousActivity');
 const { sendParentMatchEmail, sendSafetyAlertEmail } = require('../services/email');
 const { isFounder } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
@@ -48,7 +49,10 @@ async function maybeNotifyParent(studentId, matchUserId) {
 
 // ── GET /matches/feed ─────────────────────────────────────────────────────
 // Returns scored, filtered matches for the current user
-router.get('/feed', requireAuth, async (req, res) => {
+// Feed gets pulled on every app open + manual refresh — 100/5min is the
+// threshold. A user who refreshes 20x is still fine; one pulling the feed
+// programmatically every 3 seconds (200/5min) trips the audit log.
+router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (req, res) => {
   try {
     const userId = req.user.id;
     const { school } = req.query;  // optional school filter

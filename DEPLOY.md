@@ -33,7 +33,7 @@ git push -u origin main
 | `DATABASE_URL` | (paste from Railway PostgreSQL) |
 | `JWT_SECRET` | (any long random string, 64+ chars) |
 | `SENDGRID_API_KEY` | (from sendgrid.com — free tier = 100 emails/day) |
-| `FROM_EMAIL` | noreply@haveniq.com |
+| `FROM_EMAIL` | noreply@haveniq.org |
 | `FROM_NAME` | HavenIQ |
 | `NODE_ENV` | production |
 | `CLIENT_URL` | * |

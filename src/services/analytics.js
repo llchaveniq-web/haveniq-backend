@@ -138,6 +138,12 @@ const EVENTS = {
   plaid_linked:               'plaid_linked',
   plaid_disconnected:         'plaid_disconnected',
   identity_verified:          'identity_verified',        // Stripe Identity success
+
+  // ── Security / abuse signals ─────────────────────────────────────
+  // Emitted by middleware/suspiciousActivity.js when a logged-in user
+  // exceeds a per-route per-window threshold. Use to drive a PostHog
+  // alert: "if suspicious_activity count > 0 in last 1h, email me."
+  suspicious_activity:        'suspicious_activity',
 };
 
 module.exports = { init, track, identify, shutdown, EVENTS };

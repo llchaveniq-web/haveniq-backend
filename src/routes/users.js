@@ -2,6 +2,7 @@ const router  = require('express').Router();
 const multer  = require('multer');
 const pool    = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const suspicious = require('../middleware/suspiciousActivity');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
@@ -372,7 +373,10 @@ router.delete('/me', requireAuth, async (req, res) => {
 
 // ── GET /users/:id ────────────────────────────────────────────────────────
 // Public profile view (only basic info visible)
-router.get('/:id', requireAuth, async (req, res) => {
+// 50 profile lookups in 5 min is the threshold — well above normal browsing
+// (you might look at 10–20 profiles in an active session) but well below
+// what a scraper trying to harvest all profiles in a school would generate.
+router.get('/:id', requireAuth, suspicious.track('profile.lookup', 50), async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, first_name, last_name, school, school_year, major, bio,

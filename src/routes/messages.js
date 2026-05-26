@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
+const suspicious = require('../middleware/suspiciousActivity');
 const analytics = require('../services/analytics');
 
 // ── GET /messages/conversations ───────────────────────────────────────────
@@ -72,7 +73,10 @@ router.get('/conversations', requireAuth, async (req, res) => {
 
 // ── GET /messages/:conversationId ─────────────────────────────────────────
 // Messages thread
-router.get('/:conversationId', requireAuth, async (req, res) => {
+// 60 thread fetches in 5 min is high — normal usage is opening a few chats
+// and seeing live updates via socket.io. A scraper iterating through every
+// conversationId looking for stored messages would trip this fast.
+router.get('/:conversationId', requireAuth, suspicious.track('messages.thread', 60), async (req, res) => {
   try {
     // Verify user is part of this conversation
     const { rows: convRows } = await pool.query(
