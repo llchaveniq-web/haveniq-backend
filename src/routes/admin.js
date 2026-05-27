@@ -325,4 +325,115 @@ router.post('/parent-digest/send-week', requireAuth, requireFounder, async (req,
   }
 });
 
+// ── POST /admin/seed-demos ───────────────────────────────────────────────
+//
+// One-shot demo-user seeder. Railway's dashboard Query interface rewrites
+// SELECT-shaped INSERTs by appending LIMIT (which Postgres doesn't allow
+// on INSERT...RETURNING + DO blocks), so the seed_200_demo_users.sql
+// file can't be pasted into Railway directly. This endpoint runs the
+// same logic server-side via pg.Pool, which has no such rewriting.
+//
+// Founder-gated. Idempotent via ON CONFLICT (email) DO NOTHING — safe
+// to re-run; existing demos stay put. Inserts up to 200 demo users +
+// their user_profile_snapshot quiz answers. Demos are gated to the
+// @haveniq-demo.edu domain so they never appear in real students' feeds.
+router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
+  try {
+    // First INSERT: the 200 demo user rows.
+    const insertUsers = await pool.query(`
+      WITH varied AS (
+        SELECT
+          n,
+          (ARRAY['Aisha','Maya','Jordan','Sam','Priya','Olivia','Riley','Alex','Morgan','Casey','Sofia','Noah','Emma','Liam','Ava','Ethan','Isabella','Mason','Mia','Lucas','Charlotte','Logan','Amelia','Oliver','Harper','Elijah','Evelyn','Carter','Aria','Sebastian'])[1 + (n - 1) % 30] AS first_name,
+          chr(65 + ((n - 1) % 26))::TEXT AS last_initial,
+          (ARRAY['UC Berkeley','UCLA','USC','Stanford','Cal Poly SLO','UC San Diego','UC Irvine','San Diego State'])[1 + (n - 1) % 8] AS school,
+          (ARRAY['berkeley.edu','ucla.edu','usc.edu','stanford.edu','calpoly.edu','ucsd.edu','uci.edu','sdsu.edu'])[1 + (n - 1) % 8] AS school_domain,
+          (ARRAY['Freshman','Sophomore','Sophomore','Junior','Junior','Senior'])[1 + (n - 1) % 6] AS school_year,
+          18 + (n % 6) AS age,
+          (ARRAY['Psychology','Computer Science','Biology','Business','English','Engineering','Communications','Economics','Art History','Political Science'])[1 + (n - 1) % 10] AS major,
+          (ARRAY['Woman','Man','Woman','Man','Nonbinary','Woman','Man'])[1 + (n - 1) % 7] AS gender,
+          (ARRAY[
+            'Early riser, lots of coffee, library is my second home. Looking for someone tidy who respects quiet study time.',
+            'Night owl — I do my best work after 11pm. Promise to be quiet when youre sleeping. Big fan of meal-prep Sundays.',
+            'Pre-med, so my schedules intense. Need someone who gets that and doesnt take it personally when Im buried in books.',
+            'Love hosting small dinners, hate big parties at home. Looking for someone with a similar energy.',
+            'Im a chaos-good kind of clean — surfaces are tidy, my desk is a wreck. Honesty about how you actually live > pretending.',
+            'Cross-country runner, so up at 6am most days. Bed by 10pm. If youre a night owl well need to negotiate.',
+            'Art major, so my room often has supplies everywhere. Communal spaces stay clean though. Promise.',
+            'Quiet, low-maintenance, and I dont need to be best friends — just respectful roommates who get the basics right.',
+            'Love cooking, hate cleaning dishes. If youre the opposite this is a match made in heaven.',
+            'Im a planner — Id rather over-communicate than guess. Looking for someone whos on the same page.',
+            'Music major, mostly headphones, occasionally need to practice out loud. Will warn you. Will not surprise you.',
+            'Engineering, lots of group projects on Zoom. Decent at chores, terrible at remembering to take out the trash. Working on it.'
+          ])[1 + (n - 1) % 12] AS bio,
+          700 + ((n % 8) * 100) AS budget_min,
+          1100 + ((n % 6) * 200) AS budget_max
+        FROM generate_series(1, 200) AS n
+      )
+      INSERT INTO users (
+        email, school, school_domain, first_name, last_name,
+        bio, major, school_year, age, gender,
+        budget_min, budget_max, is_verified, quiz_completed, trust_score
+      )
+      SELECT
+        'demo' || lpad(n::TEXT, 3, '0') || '@haveniq-demo.edu',
+        school, school_domain, first_name, last_initial,
+        bio, major, school_year, age, gender,
+        budget_min, budget_max, TRUE, TRUE, 85
+      FROM varied
+      ON CONFLICT (email) DO NOTHING
+      RETURNING id
+    `);
+
+    // Second INSERT: varied profile-snapshot quiz answers for each new
+    // demo. Without this, all 200 demos score the same against each
+    // other and the matches feed reads as broken. We seed direct to
+    // user_profile_snapshot (the denormalized recent-quiz-state table)
+    // rather than going through /quiz/submit so we don't spend 200x
+    // derivePersonality AI calls (which would cost real Anthropic
+    // tokens). MBTI/DISC stay NULL for demos; the matching engine
+    // handles that gracefully.
+    const insertSnapshots = await pool.query(`
+      INSERT INTO user_profile_snapshot (
+        user_id, cleanliness, sleep, noise, guests, alcohol,
+        pets, money, communication, space
+      )
+      SELECT
+        u.id,
+        (ARRAY['Very tidy','Tidy','Average','Relaxed'])[1 + (random() * 3)::INT],
+        (ARRAY['Early bird (before 10pm)','Night owl (after midnight)','Flexible'])[1 + (random() * 2)::INT],
+        (ARRAY['Very quiet','Quiet','Moderate','Lively'])[1 + (random() * 3)::INT],
+        (ARRAY['Rarely','Occasionally','Frequently'])[1 + (random() * 2)::INT],
+        (ARRAY['Never','Occasionally','Regularly'])[1 + (random() * 2)::INT],
+        (ARRAY['No pets','Pet-friendly','Allergic'])[1 + (random() * 2)::INT],
+        (ARRAY['Split evenly','Track everything','Flexible'])[1 + (random() * 2)::INT],
+        (ARRAY['Direct','Indirect','Mixed'])[1 + (random() * 2)::INT],
+        (ARRAY['Need lots of space','Some space','Social'])[1 + (random() * 2)::INT]
+      FROM users u
+      WHERE u.email LIKE 'demo%@haveniq-demo.edu'
+      ON CONFLICT (user_id) DO NOTHING
+      RETURNING user_id
+    `);
+
+    // Summary counts — final state of demos in the DB after this seed.
+    const counts = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE email LIKE 'demo%@haveniq-demo.edu') AS total,
+        COUNT(DISTINCT school) FILTER (WHERE email LIKE 'demo%@haveniq-demo.edu') AS schools
+      FROM users
+    `);
+
+    res.json({
+      ok: true,
+      usersInsertedThisRun:     insertUsers.rowCount,
+      snapshotsInsertedThisRun: insertSnapshots.rowCount,
+      demoUsersTotal:           parseInt(counts.rows[0].total),
+      demoSchoolsTotal:         parseInt(counts.rows[0].schools),
+    });
+  } catch (err) {
+    console.error('[admin/seed-demos] failed:', err);
+    res.status(500).json({ error: 'Seed failed', detail: err.message });
+  }
+});
+
 module.exports = router;
