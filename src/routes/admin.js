@@ -157,16 +157,25 @@ router.post('/backfill-personality', requireAuth, requireFounder, async (req, re
 // GET /admin/review/pending — newest first, demos excluded
 router.get('/review/pending', requireAuth, requireFounder, async (req, res) => {
   try {
-    // Join user_profile_snapshot so we can run honesty-flag detection on
-    // the bio vs the actual quiz answers. Snapshot column names mirror
-    // the quiz answer schema (cleanliness, sleep, noise, etc.).
+    // LATERAL join pulls the user's MOST RECENT user_profile_snapshot
+    // (one row per quiz_submit historically), and we read quiz dimensions
+    // out of the JSONB `snapshot` blob — NOT as columns on the snapshot
+    // table (which doesn't have them; see schema.sql:194). Earlier
+    // version of this code assumed column-per-dimension and threw a
+    // "column does not exist" error on every founder-queue load.
     const { rows } = await pool.query(`
       SELECT u.id, u.email, u.school, u.first_name, u.last_initial, u.age,
              u.school_year, u.major, u.bio, u.photo_url, u.created_at,
              u.quiz_completed, u.is_banned,
-             ups.cleanliness, ups.sleep, ups.noise, ups.guests, ups.alcohol
+             ups.snapshot AS quiz_snapshot
         FROM users u
-        LEFT JOIN user_profile_snapshot ups ON ups.user_id = u.id
+        LEFT JOIN LATERAL (
+          SELECT snapshot
+            FROM user_profile_snapshot
+           WHERE user_id = u.id
+           ORDER BY created_at DESC
+           LIMIT 1
+        ) ups ON TRUE
        WHERE u.email NOT LIKE '%@haveniq-demo.edu'
          AND u.is_verified = FALSE
          AND u.is_banned = FALSE
@@ -175,33 +184,39 @@ router.get('/review/pending', requireAuth, requireFounder, async (req, res) => {
     `);
     const { detectHonestyFlags } = require('../services/honestyFlags');
     res.json({
-      pending: rows.map(r => ({
-        id:            r.id,
-        email:         r.email,
-        school:        r.school,
-        firstName:     r.first_name,
-        lastInitial:   r.last_initial,
-        age:           r.age,
-        schoolYear:    r.school_year,
-        major:         r.major,
-        bio:           r.bio,
-        photoUrl:      r.photo_url,
-        createdAt:     r.created_at,
-        quizCompleted: r.quiz_completed,
-        // Honesty flags — bio claims vs quiz answers. Surfaced to the
-        // founder so unusual mismatches get extra eyeballs. Empty array
-        // = no flags = nothing unusual. Never user-visible.
-        honestyFlags:  detectHonestyFlags({
-          bio: r.bio,
-          quiz: {
-            cleanliness: r.cleanliness,
-            sleep:       r.sleep,
-            noise:       r.noise,
-            guests:      r.guests,
-            alcohol:     r.alcohol,
-          },
-        }),
-      })),
+      pending: rows.map(r => {
+        // pg auto-parses JSONB columns to JS objects, so r.quiz_snapshot
+        // is already { cleanliness, sleep, ... } — or null if the user
+        // hasn't taken the quiz yet.
+        const quiz = r.quiz_snapshot || {};
+        return {
+          id:            r.id,
+          email:         r.email,
+          school:        r.school,
+          firstName:     r.first_name,
+          lastInitial:   r.last_initial,
+          age:           r.age,
+          schoolYear:    r.school_year,
+          major:         r.major,
+          bio:           r.bio,
+          photoUrl:      r.photo_url,
+          createdAt:     r.created_at,
+          quizCompleted: r.quiz_completed,
+          // Honesty flags — bio claims vs quiz answers. Surfaced to the
+          // founder so unusual mismatches get extra eyeballs. Empty array
+          // = no flags = nothing unusual. Never user-visible.
+          honestyFlags:  detectHonestyFlags({
+            bio: r.bio,
+            quiz: {
+              cleanliness: quiz.cleanliness,
+              sleep:       quiz.sleep,
+              noise:       quiz.noise,
+              guests:      quiz.guests,
+              alcohol:     quiz.alcohol,
+            },
+          }),
+        };
+      }),
       count: rows.length,
     });
   } catch (err) {
@@ -386,32 +401,35 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
     `);
 
     // Second INSERT: varied profile-snapshot quiz answers for each new
-    // demo. Without this, all 200 demos score the same against each
-    // other and the matches feed reads as broken. We seed direct to
-    // user_profile_snapshot (the denormalized recent-quiz-state table)
-    // rather than going through /quiz/submit so we don't spend 200x
-    // derivePersonality AI calls (which would cost real Anthropic
-    // tokens). MBTI/DISC stay NULL for demos; the matching engine
-    // handles that gracefully.
+    // demo. The actual schema is JSONB-blob-based (see schema.sql:194 —
+    // columns are user_id, trigger, snapshot::JSONB) NOT column-per-
+    // dimension as the previous version of this code assumed. Build
+    // the JSONB blob via jsonb_build_object so values land in the
+    // expected nested shape the matching engine reads from.
+    //
+    // No UNIQUE constraint on user_id means multiple snapshots per user
+    // are legal (one per quiz_submit historically). We use NOT EXISTS
+    // to make re-running this endpoint idempotent for already-snapshotted
+    // demos — only newly-added demos get a snapshot.
     const insertSnapshots = await pool.query(`
-      INSERT INTO user_profile_snapshot (
-        user_id, cleanliness, sleep, noise, guests, alcohol,
-        pets, money, communication, space
-      )
+      INSERT INTO user_profile_snapshot (user_id, trigger, snapshot)
       SELECT
         u.id,
-        (ARRAY['Very tidy','Tidy','Average','Relaxed'])[1 + (random() * 3)::INT],
-        (ARRAY['Early bird (before 10pm)','Night owl (after midnight)','Flexible'])[1 + (random() * 2)::INT],
-        (ARRAY['Very quiet','Quiet','Moderate','Lively'])[1 + (random() * 3)::INT],
-        (ARRAY['Rarely','Occasionally','Frequently'])[1 + (random() * 2)::INT],
-        (ARRAY['Never','Occasionally','Regularly'])[1 + (random() * 2)::INT],
-        (ARRAY['No pets','Pet-friendly','Allergic'])[1 + (random() * 2)::INT],
-        (ARRAY['Split evenly','Track everything','Flexible'])[1 + (random() * 2)::INT],
-        (ARRAY['Direct','Indirect','Mixed'])[1 + (random() * 2)::INT],
-        (ARRAY['Need lots of space','Some space','Social'])[1 + (random() * 2)::INT]
+        'demo_seed',
+        jsonb_build_object(
+          'cleanliness',   (ARRAY['Very tidy','Tidy','Average','Relaxed'])[1 + (random() * 3)::INT],
+          'sleep',         (ARRAY['Early bird (before 10pm)','Night owl (after midnight)','Flexible'])[1 + (random() * 2)::INT],
+          'noise',         (ARRAY['Very quiet','Quiet','Moderate','Lively'])[1 + (random() * 3)::INT],
+          'guests',        (ARRAY['Rarely','Occasionally','Frequently'])[1 + (random() * 2)::INT],
+          'alcohol',       (ARRAY['Never','Occasionally','Regularly'])[1 + (random() * 2)::INT],
+          'pets',          (ARRAY['No pets','Pet-friendly','Allergic'])[1 + (random() * 2)::INT],
+          'money',         (ARRAY['Split evenly','Track everything','Flexible'])[1 + (random() * 2)::INT],
+          'communication', (ARRAY['Direct','Indirect','Mixed'])[1 + (random() * 2)::INT],
+          'space',         (ARRAY['Need lots of space','Some space','Social'])[1 + (random() * 2)::INT]
+        )
       FROM users u
       WHERE u.email LIKE 'demo%@haveniq-demo.edu'
-      ON CONFLICT (user_id) DO NOTHING
+        AND NOT EXISTS (SELECT 1 FROM user_profile_snapshot WHERE user_id = u.id)
       RETURNING user_id
     `);
 
