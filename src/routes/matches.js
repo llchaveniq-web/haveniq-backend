@@ -158,6 +158,13 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // Secondary, display-only MBTI/DISC personality lens. Never affects
       // compatScore — see services/personalityPairing.js.
       pairing:       computePairing(me.mbti, me.disc, r.pairing_mbti, r.pairing_disc),
+      // Direct MBTI / DISC strings for surfacing on the match card.
+      // (`pairing` above already encodes the *relationship* between two
+      // profiles; these are the raw type strings — "INFJ", "D" — that the
+      // UI displays as a small pill so students see the psychology piece
+      // they were promised, not just an opaque score.)
+      mbti:          r.pairing_mbti || null,
+      disc:          r.pairing_disc || null,
       connectStatus: r.connect_status || null,
       requestId:     r.connect_request_id || null,
     }));

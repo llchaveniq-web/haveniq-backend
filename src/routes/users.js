@@ -222,6 +222,12 @@ const validators = {
     typeof x === 'string' &&
     ['sleep', 'cleanliness', 'substances', 'alcohol', 'money', 'guests', 'communication', 'noise', 'space'].includes(x)
   ),
+  // Voluntary writing sample — feeds derivePersonality with richer tone +
+  // voice signal than multiple-choice alone (Chad's "orthogonal info"
+  // recommendation from the 2026-05-26 product session). 1000-char cap
+  // keeps initial-profile-derivation token cost bounded; empty strings
+  // are valid (resets the sample).
+  writing_sample:  v => typeof v === 'string' && v.length <= 1000,
 };
 
 router.patch('/me', requireAuth, async (req, res) => {
@@ -256,6 +262,8 @@ router.patch('/me', requireAuth, async (req, res) => {
       // validator below caps the array length and tag vocabulary so a
       // malformed payload can't flood the scorer with bogus IDs.
       dealbreakers:   'dealbreakers',
+      // Voluntary writing sample — see validator for rationale + cap.
+      writingSample:  'writing_sample',
     };
 
     const invalid = [];
