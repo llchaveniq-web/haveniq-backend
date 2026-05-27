@@ -381,9 +381,98 @@ async function sendFounderSignupAlert({
   }
 }
 
+// ─── Weekly parent digest ────────────────────────────────────────────────
+//
+// Sent every Sunday (via an admin/cron endpoint) to every parent whose
+// student has parent_email set + parent_notified=TRUE (i.e., the student
+// has already opted-in via the first-match email flow). Summarizes the
+// past week's activity: new matches, connections accepted, profile
+// progress — but NEVER the names or photos of the people the student
+// matched with (privacy gate; parents see their child's *engagement*,
+// not the other students).
+async function sendParentDigestEmail({
+  parentEmail, studentFirstName,
+  matchesThisWeek, connectionsThisWeek, conversationsActive,
+  profilePctComplete, hasQuizCompleted, hasPhoto,
+}) {
+  if (!parentEmail) return;
+  const safeStudent = studentFirstName || 'your student';
+  const pct = Math.max(0, Math.min(100, Math.round(profilePctComplete || 0)));
+
+  // Privacy-conscious copy: never says "Matched with Aisha." Says
+  // "X new matches this week" so the parent sees engagement, not
+  // identities of other students.
+  try {
+    await getResend().emails.send({
+      from:    'HavenIQ <noreply@haveniq.org>',
+      to:      parentEmail,
+      subject: `${safeStudent}'s HavenIQ week`,
+      html: `
+        <!DOCTYPE html>
+        <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#F6EEDF; margin:0; padding:32px 16px;">
+          <div style="max-width:560px; margin:0 auto; background:#fff; border-radius:16px; overflow:hidden;">
+            <div style="padding:32px 28px 16px; text-align:center;">
+              <p style="margin:0; font-size:13px; color:#75695A; letter-spacing:0.8px; text-transform:uppercase; font-weight:600;">Weekly digest</p>
+              <p style="margin:8px 0 0; font-size:24px; font-weight:700; color:#2D2620; font-family:'Fraunces', serif;">${safeStudent}'s HavenIQ week</p>
+            </div>
+
+            <div style="padding:16px 28px 8px;">
+              <p style="margin:0 0 20px; color:#75695A; font-size:14px; line-height:1.6;">
+                A short, private summary of how ${safeStudent}'s roommate search is going. We don't share match names or messages — only their activity. They control what they share with you directly.
+              </p>
+
+              <table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
+                <tr>
+                  <td style="padding:14px; background:#F1E6D2; border-radius:12px 0 0 12px; text-align:center;">
+                    <p style="margin:0; font-size:28px; font-weight:800; color:#B85738;">${matchesThisWeek}</p>
+                    <p style="margin:4px 0 0; font-size:11px; color:#75695A; text-transform:uppercase; letter-spacing:0.5px;">New matches</p>
+                  </td>
+                  <td style="padding:14px; background:#F1E6D2; text-align:center; border-left:1px solid #E8DCC6; border-right:1px solid #E8DCC6;">
+                    <p style="margin:0; font-size:28px; font-weight:800; color:#B85738;">${connectionsThisWeek}</p>
+                    <p style="margin:4px 0 0; font-size:11px; color:#75695A; text-transform:uppercase; letter-spacing:0.5px;">Connected</p>
+                  </td>
+                  <td style="padding:14px; background:#F1E6D2; border-radius:0 12px 12px 0; text-align:center;">
+                    <p style="margin:0; font-size:28px; font-weight:800; color:#B85738;">${conversationsActive}</p>
+                    <p style="margin:4px 0 0; font-size:11px; color:#75695A; text-transform:uppercase; letter-spacing:0.5px;">Active chats</p>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:8px 0 6px; color:#2D2620; font-size:14px; font-weight:600;">Profile progress</p>
+              <div style="background:#F1E6D2; border-radius:8px; height:8px; overflow:hidden; margin-bottom:8px;">
+                <div style="background:#B85738; height:100%; width:${pct}%;"></div>
+              </div>
+              <p style="margin:0 0 16px; color:#75695A; font-size:12px;">
+                ${pct}% complete · ${hasQuizCompleted ? 'Compatibility quiz ✓' : 'Quiz pending'} · ${hasPhoto ? 'Photo ✓' : 'No photo yet'}
+              </p>
+
+              <p style="margin:24px 0 8px; color:#2D2620; font-size:14px; line-height:1.6;">
+                Want a deeper look or have questions? ${safeStudent} can show you the full app anytime — they have direct control over what's shared.
+              </p>
+            </div>
+
+            <div style="padding:20px 28px; background:#F6EEDF; border-top:1px solid #E8DCC6;">
+              <p style="margin:0; font-size:11px; color:#75695A; line-height:1.5; text-align:center;">
+                You're receiving this because ${safeStudent} added your email as a parent contact on HavenIQ.
+                <br>
+                To stop these digests, ${safeStudent} can remove your email from their profile settings.
+              </p>
+            </div>
+          </div>
+        </body></html>
+      `,
+    });
+    analytics.track(analytics.EVENTS.email_sent, null, { kind: 'parent_digest' });
+  } catch (err) {
+    console.error('[sendParentDigestEmail] failed:', err.message);
+    analytics.track(analytics.EVENTS.email_failed, null, { kind: 'parent_digest', error: err.message });
+  }
+}
+
 module.exports = {
   generateOTP, sendOTPEmail, sendMatchEmail,
   sendParentMatchEmail, sendParentInviteEmail,
   sendWelcomeEmail, sendSafetyAlertEmail,
   sendFounderSignupAlert,
+  sendParentDigestEmail,
 };

@@ -157,16 +157,23 @@ router.post('/backfill-personality', requireAuth, requireFounder, async (req, re
 // GET /admin/review/pending — newest first, demos excluded
 router.get('/review/pending', requireAuth, requireFounder, async (req, res) => {
   try {
+    // Join user_profile_snapshot so we can run honesty-flag detection on
+    // the bio vs the actual quiz answers. Snapshot column names mirror
+    // the quiz answer schema (cleanliness, sleep, noise, etc.).
     const { rows } = await pool.query(`
-      SELECT id, email, school, first_name, last_initial, age, school_year,
-             major, bio, photo_url, created_at, quiz_completed, is_banned
-        FROM users
-       WHERE email NOT LIKE '%@haveniq-demo.edu'
-         AND is_verified = FALSE
-         AND is_banned = FALSE
-       ORDER BY created_at DESC
+      SELECT u.id, u.email, u.school, u.first_name, u.last_initial, u.age,
+             u.school_year, u.major, u.bio, u.photo_url, u.created_at,
+             u.quiz_completed, u.is_banned,
+             ups.cleanliness, ups.sleep, ups.noise, ups.guests, ups.alcohol
+        FROM users u
+        LEFT JOIN user_profile_snapshot ups ON ups.user_id = u.id
+       WHERE u.email NOT LIKE '%@haveniq-demo.edu'
+         AND u.is_verified = FALSE
+         AND u.is_banned = FALSE
+       ORDER BY u.created_at DESC
        LIMIT 100
     `);
+    const { detectHonestyFlags } = require('../services/honestyFlags');
     res.json({
       pending: rows.map(r => ({
         id:            r.id,
@@ -181,6 +188,19 @@ router.get('/review/pending', requireAuth, requireFounder, async (req, res) => {
         photoUrl:      r.photo_url,
         createdAt:     r.created_at,
         quizCompleted: r.quiz_completed,
+        // Honesty flags — bio claims vs quiz answers. Surfaced to the
+        // founder so unusual mismatches get extra eyeballs. Empty array
+        // = no flags = nothing unusual. Never user-visible.
+        honestyFlags:  detectHonestyFlags({
+          bio: r.bio,
+          quiz: {
+            cleanliness: r.cleanliness,
+            sleep:       r.sleep,
+            noise:       r.noise,
+            guests:      r.guests,
+            alcohol:     r.alcohol,
+          },
+        }),
       })),
       count: rows.length,
     });
@@ -228,6 +248,80 @@ router.post('/review/:userId/reject', requireAuth, requireFounder, async (req, r
   } catch (err) {
     console.error('[admin/review/reject] failed:', err);
     res.status(500).json({ error: 'Reject failed' });
+  }
+});
+
+// ── Weekly parent digest trigger ─────────────────────────────────────────
+//
+// POST /admin/parent-digest/send-week
+// Sends the weekly parent-digest email to every parent whose student has
+// (a) parent_email set, (b) parent_notified=TRUE (opted in via first-
+// match), and (c) any meaningful activity in the past 7 days (matches,
+// connections, or quiz progress). Founder-gated so it can't be abused
+// by ordinary users.
+//
+// Manual today; Railway cron job can hit this on a Sunday schedule
+// without code changes — just POST to this endpoint with the founder JWT.
+router.post('/parent-digest/send-week', requireAuth, requireFounder, async (req, res) => {
+  const { sendParentDigestEmail } = require('../services/email');
+  try {
+    // Pull eligible parent/student pairs + their week-over-week activity.
+    // LEFT JOINs on connect_requests + conversations + match counts let us
+    // build the digest from a single round-trip rather than N queries.
+    const { rows } = await pool.query(`
+      SELECT
+        u.id, u.first_name, u.parent_email, u.quiz_completed, u.photo_url,
+        u.bio, u.major, u.school_year,
+        (SELECT COUNT(*) FROM compatibility_scores cs
+           WHERE (cs.user_a = u.id OR cs.user_b = u.id)
+             AND cs.created_at > NOW() - INTERVAL '7 days')                AS matches_week,
+        (SELECT COUNT(*) FROM connect_requests cr
+           WHERE (cr.from_user_id = u.id OR cr.to_user_id = u.id)
+             AND cr.status = 'accepted'
+             AND cr.accepted_at > NOW() - INTERVAL '7 days')               AS connections_week,
+        (SELECT COUNT(*) FROM conversations c
+           WHERE (c.user_a = u.id OR c.user_b = u.id))                     AS conversations_active
+        FROM users u
+       WHERE u.parent_email IS NOT NULL
+         AND u.parent_email <> ''
+         AND u.parent_notified = TRUE
+         AND u.is_banned = FALSE
+         AND u.email NOT LIKE '%@haveniq-demo.edu'
+    `);
+
+    let sent = 0;
+    const errors = [];
+    for (const r of rows) {
+      // Profile-completeness pct mirrors the frontend's calculation —
+      // a rough proxy so the parent sees their student's progress arc.
+      const items = [
+        !!r.first_name, !!r.major, !!r.bio, !!r.school_year,
+        !!r.photo_url, !!r.quiz_completed,
+      ];
+      const pct = Math.round(items.filter(Boolean).length / items.length * 100);
+
+      try {
+        await sendParentDigestEmail({
+          parentEmail:         r.parent_email,
+          studentFirstName:    r.first_name,
+          matchesThisWeek:     parseInt(r.matches_week)      || 0,
+          connectionsThisWeek: parseInt(r.connections_week)  || 0,
+          conversationsActive: parseInt(r.conversations_active) || 0,
+          profilePctComplete:  pct,
+          hasQuizCompleted:    !!r.quiz_completed,
+          hasPhoto:            !!r.photo_url,
+        });
+        sent++;
+      } catch (err) {
+        errors.push({ userId: r.id, error: err.message });
+      }
+    }
+
+    console.log(`[admin/parent-digest] sent=${sent}, errors=${errors.length}`);
+    res.json({ ok: true, sent, eligible: rows.length, errors });
+  } catch (err) {
+    console.error('[admin/parent-digest] failed:', err);
+    res.status(500).json({ error: 'Parent digest send failed' });
   }
 });
 

@@ -228,6 +228,13 @@ const validators = {
   // keeps initial-profile-derivation token cost bounded; empty strings
   // are valid (resets the sample).
   writing_sample:  v => typeof v === 'string' && v.length <= 1000,
+  // Instagram handle — text-only collection today (no OAuth scraping).
+  // Strip leading @ in the validator so we store the bare username
+  // consistently regardless of how the user typed it. The 30-char IG
+  // cap is real; we mirror it. Empty string resets the field.
+  instagram_handle: v => typeof v === 'string'
+    && v.length <= 30
+    && (v === '' || /^@?[a-zA-Z0-9._]{1,30}$/.test(v)),
 };
 
 router.patch('/me', requireAuth, async (req, res) => {
@@ -264,6 +271,10 @@ router.patch('/me', requireAuth, async (req, res) => {
       dealbreakers:   'dealbreakers',
       // Voluntary writing sample — see validator for rationale + cap.
       writingSample:  'writing_sample',
+      // Instagram handle — collected as text today; OAuth scraping is a
+      // future, separate project (multi-week platform approval). Stored
+      // bare (no leading @) — frontend / backend both strip on read/write.
+      instagramHandle: 'instagram_handle',
     };
 
     const invalid = [];
@@ -277,7 +288,14 @@ router.patch('/me', requireAuth, async (req, res) => {
         continue;
       }
       updates.push(`${snake} = $${idx++}`);
-      values.push(v);
+      // Instagram handle is the one field that needs a normalization pass —
+      // strip a leading @ so we store the bare username regardless of how
+      // it was typed. Everything else writes through untouched.
+      if (snake === 'instagram_handle' && typeof v === 'string' && v.startsWith('@')) {
+        values.push(v.slice(1));
+      } else {
+        values.push(v);
+      }
       changed.push(camel);
     }
 
