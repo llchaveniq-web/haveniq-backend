@@ -360,12 +360,12 @@ async function sendFounderSignupAlert({
 
               <p style="margin:0 0 8px; color:#75695A; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">❌ Reject (paste into Railway)</p>
               <div style="background:#FAE5E5; border-radius:8px; padding:12px;">
-                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#2D2620; word-break:break-all;">UPDATE users SET banned = TRUE, ban_reason = 'failed manual review', ban_at = NOW() WHERE id = '${newUserId}';</code>
+                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#2D2620; word-break:break-all;">UPDATE users SET is_banned = TRUE, ban_reason = 'failed manual review', banned_at = NOW() WHERE id = '${newUserId}';</code>
               </div>
 
               <p style="margin:24px 0 0; color:#75695A; font-size:12px; line-height:1.5;">
                 Tip: come back in 24 hours and run<br>
-                <code style="font-family:monospace; font-size:11px;">SELECT id, email, school, first_name, photo_url, bio FROM users WHERE is_verified = FALSE AND banned = FALSE AND created_at &gt; NOW() - INTERVAL '7 days' ORDER BY created_at DESC;</code><br>
+                <code style="font-family:monospace; font-size:11px;">SELECT id, email, school, first_name, photo_url, bio FROM users WHERE is_verified = FALSE AND is_banned = FALSE AND created_at &gt; NOW() - INTERVAL '7 days' ORDER BY created_at DESC;</code><br>
                 for a batch view of everyone pending.
               </p>
             </div>

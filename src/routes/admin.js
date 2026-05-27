@@ -159,11 +159,11 @@ router.get('/review/pending', requireAuth, requireFounder, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT id, email, school, first_name, last_initial, age, school_year,
-             major, bio, photo_url, created_at, quiz_completed, banned
+             major, bio, photo_url, created_at, quiz_completed, is_banned
         FROM users
        WHERE email NOT LIKE '%@haveniq-demo.edu'
          AND is_verified = FALSE
-         AND banned = FALSE
+         AND is_banned = FALSE
        ORDER BY created_at DESC
        LIMIT 100
     `);
@@ -215,9 +215,9 @@ router.post('/review/:userId/reject', requireAuth, requireFounder, async (req, r
   try {
     const { rows } = await pool.query(
       `UPDATE users
-          SET banned = TRUE,
+          SET is_banned = TRUE,
               ban_reason = $2,
-              ban_at = NOW()
+              banned_at = NOW()
         WHERE id = $1 AND email NOT LIKE '%@haveniq-demo.edu'
         RETURNING id, email`,
       [req.params.userId, reason],
