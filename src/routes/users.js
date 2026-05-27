@@ -215,6 +215,13 @@ const validators = {
   roommate_status: v => typeof v === 'string' && STATUSES.has(v),
   is_paused:       v => typeof v === 'boolean',
   parent_email:    v => typeof v === 'string' && v.length <= 200 && EMAIL_RE.test(v),
+  // Dealbreaker tags — capped at 3 picks from a fixed vocab so a bad
+  // payload can't fan out into weird scoring behavior. Vocab must stay
+  // in lockstep with scoring.js DEALBREAKER_QUESTIONS keys.
+  dealbreakers:    v => Array.isArray(v) && v.length <= 3 && v.every(x =>
+    typeof x === 'string' &&
+    ['sleep', 'cleanliness', 'substances', 'alcohol', 'money', 'guests', 'communication', 'noise', 'space'].includes(x)
+  ),
 };
 
 router.patch('/me', requireAuth, async (req, res) => {
@@ -243,6 +250,12 @@ router.patch('/me', requireAuth, async (req, res) => {
       roommateStatus: 'roommate_status',
       isPaused:       'is_paused',
       parentEmail:    'parent_email',
+      // Up-to-3 "what matters most to me" tags chosen during profile setup.
+      // Stored as TEXT[] on users; consumed by scoring.js to amplify the
+      // question weights for those categories at match-scoring time. The
+      // validator below caps the array length and tag vocabulary so a
+      // malformed payload can't flood the scorer with bogus IDs.
+      dealbreakers:   'dealbreakers',
     };
 
     const invalid = [];

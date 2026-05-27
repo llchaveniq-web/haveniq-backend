@@ -196,6 +196,40 @@ router.post('/submit', requireAuth, async (req, res) => {
     const err = validateAnswers(answers);
     if (err) return res.status(400).json({ error: err });
 
+    // ── Per-semester reassessment gate ────────────────────────────────────
+    // Each completed quiz triggers one Anthropic call (derivePersonality)
+    // — at scale that becomes expensive if students re-submit on a whim.
+    // Chad's advice from the 2026-05-26 product session: lock re-takes to
+    // twice a year (start of fall + start of spring). 180 days is the
+    // hard floor; this matches the "twice a semester" cadence and gives
+    // students who really need an edit a clear "you can re-take in X
+    // days" response instead of a silent re-bill.
+    //
+    // First-time submitters (no completed row yet) sail through. Honest
+    // edits within the cooldown are blocked at the API; a future support
+    // path can override via /admin if a student needs help.
+    const REASSESS_COOLDOWN_DAYS = 180;
+    const { rows: priorRows } = await pool.query(
+      `SELECT updated_at FROM quiz_answers
+       WHERE user_id = $1 AND completed = TRUE
+       LIMIT 1`,
+      [req.user.id]
+    );
+    if (priorRows[0]) {
+      const lastMs   = new Date(priorRows[0].updated_at).getTime();
+      const elapsed  = Date.now() - lastMs;
+      const cooldown = REASSESS_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+      if (elapsed < cooldown) {
+        const daysLeft = Math.ceil((cooldown - elapsed) / (24 * 60 * 60 * 1000));
+        return res.status(429).json({
+          error: 'reassessment_cooldown',
+          message: `You can re-take the compatibility quiz in ${daysLeft} day${daysLeft === 1 ? '' : 's'}. Re-assessments are limited to roughly twice a year so your match profile stays meaningful between cohorts.`,
+          daysLeft,
+          nextAvailable: new Date(lastMs + cooldown).toISOString(),
+        });
+      }
+    }
+
     // Save final answers and mark completed
     await pool.query(
       `INSERT INTO quiz_answers (user_id, answers, completed)
@@ -274,15 +308,21 @@ router.post('/submit', requireAuth, async (req, res) => {
 
 // ── Async: score against all other completed users ────────────────────────
 async function scoreNewMatches(userId, newAnswers) {
-  // Get all other users who completed the quiz, same school
+  // Get school + the submitting user's dealbreakers (their "what matters
+  // most" picks from profile setup). These get UNIONED with each candidate's
+  // dealbreakers and passed into calculateCompatibility so flagged
+  // categories carry amplified weight in the pair's score.
   const { rows: userRow } = await pool.query(
-    'SELECT school FROM users WHERE id = $1',
+    'SELECT school, dealbreakers FROM users WHERE id = $1',
     [userId]
   );
   if (!userRow[0]) return;
+  const myDealbreakers = Array.isArray(userRow[0].dealbreakers) ? userRow[0].dealbreakers : [];
 
+  // Pull each candidate's quiz answers AND their dealbreakers in the same
+  // query — saves an N+1 round-trip we'd otherwise pay on the per-user loop.
   const { rows: otherUsers } = await pool.query(
-    `SELECT qa.user_id, qa.answers
+    `SELECT qa.user_id, qa.answers, u.dealbreakers
      FROM quiz_answers qa
      JOIN users u ON u.id = qa.user_id
      WHERE qa.completed = TRUE
@@ -312,7 +352,13 @@ async function scoreNewMatches(userId, newAnswers) {
   // connection pool. Batching collapses that to a single statement.
   const rows = [];
   for (const other of otherUsers) {
-    const result = calculateCompatibility(newAnswers, other.answers);
+    // Union both users' dealbreaker tags — either side flagging cleanliness
+    // (etc.) amplifies that question's weight in the pair's score.
+    const theirDealbreakers = Array.isArray(other.dealbreakers) ? other.dealbreakers : [];
+    const combinedDealbreakers = [...new Set([...myDealbreakers, ...theirDealbreakers])];
+    const result = calculateCompatibility(newAnswers, other.answers, {
+      dealbreakers: combinedDealbreakers,
+    });
     if (result.isHardBlocked) continue;
 
     // Blend: the clinical quiz stays the major factor (70%); the MBTI/DISC/

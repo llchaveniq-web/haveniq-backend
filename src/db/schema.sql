@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS users (
   move_in_timeline  TEXT,   -- '1 month' / '2 months' / etc.
   neighborhoods     TEXT[], -- ['Westwood','North Berkeley',...]
   roommate_status   TEXT,   -- 'actively_looking' | 'open_to_offers' | 'found_roommate'
+  dealbreakers      TEXT[] DEFAULT '{}', -- up to 3 "what matters most" tags;
+                                         -- vocab: sleep, cleanliness, noise,
+                                         -- guests, substances, alcohol, money,
+                                         -- communication, space (mirror of
+                                         -- scoring.js DEALBREAKER_QUESTIONS keys)
 
   -- Status flags
   is_verified       BOOLEAN DEFAULT FALSE,   -- selfie + enrollment verified
@@ -56,6 +61,12 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status  TEXT;
 -- verified" email — converts the parent from a veto-risk into a buy-in.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_email     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALSE;
+-- Per-user dealbreaker tags — up to 3 "what matters most" picks chosen
+-- in profile setup. Backend scoring.js unions both users' tags and
+-- amplifies the relevant question weights, so each student gets matches
+-- tuned to their personal priorities. Empty array = "no priorities set,
+-- score me with the default weights."
+ALTER TABLE users ADD COLUMN IF NOT EXISTS dealbreakers     TEXT[] DEFAULT '{}';
 
 -- ── OTP codes ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS otp_codes (

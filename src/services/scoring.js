@@ -59,6 +59,40 @@ const CATEGORIES = {
 const SHADOW_WORST_INDEX = { 14: 0, 31: 0, 32: 0, 58: 0 };
 const SHADOW_BEST_INDEX  = { 14: 1, 31: 1, 32: 1, 58: 3 };
 
+// ── Dealbreaker → amplified question IDs ─────────────────────────────────
+// Each student picks up to 3 "what matters most to you" tags during
+// profile setup. At scoring time we union both users' tags and amplify
+// (×1.75) the QUESTION_POINTS for every question those tags map to.
+//
+// Symmetric by design: if EITHER side flagged cleanliness, cleanliness
+// becomes weighty for the pair. This trades some asymmetric purity
+// (one student doesn't care about X, the other does) for a single
+// stored compatibility row per pair — keeps the data model simple at
+// 1k users, can revisit at 100k.
+//
+// Tag → question IDs:
+//   sleep        → Q49 (bedtime)
+//   cleanliness  → Q50 (shared-space cleanliness)
+//   substances   → Q51 (smoke/vape/cannabis at home)
+//   alcohol      → Q54 (alcohol comfort)
+//   money        → Q56 (spending alignment)
+//   guests       → Q48 (guest frequency)
+//   communication→ Q14, Q17, Q60 (contempt, directness, repair)
+//   noise        → Q59 (sensory disturbance)
+//   space        → Q37 (alone-time recharge needs)
+const DEALBREAKER_QUESTIONS = {
+  sleep:         [49],
+  cleanliness:   [50],
+  substances:    [51],
+  alcohol:       [54],
+  money:         [56],
+  guests:        [48],
+  communication: [14, 17, 60],
+  noise:         [59],
+  space:         [37],
+};
+const DEALBREAKER_MULTIPLIER = 1.75;
+
 // ── Answer normalization ─────────────────────────────────────────────────
 // quiz_answers.answers is stored in the app's wire shape, one of:
 //   { type: 'option', index: N }  ·  { type: 'scale', value: N }  ·  bare N
@@ -90,9 +124,27 @@ function diffScore(pts, diff) {
   return 0;
 }
 
-function calculateCompatibility(rawA, rawB) {
+/**
+ * @param rawA, rawB — answer maps (wire shape or flat)
+ * @param opts.dealbreakers — array of dealbreaker tags from the UNION of
+ *   both users' picks (e.g., ['sleep', 'cleanliness']). The QUESTION_POINTS
+ *   for every question in those tags get amplified by DEALBREAKER_MULTIPLIER
+ *   before scoring, so a mismatch on a flagged dimension hits the score
+ *   harder than a mismatch on a non-flagged one. Empty / undefined disables
+ *   the amplification (falls back to vanilla weights).
+ */
+function calculateCompatibility(rawA, rawB, opts = {}) {
   const A = flatten(rawA);
   const B = flatten(rawB);
+
+  // Build the amplified-question set from the union of both users' tags.
+  // Stored as a Set<number> for O(1) lookup inside the inner loop.
+  const amplifiedQids = new Set();
+  const tagsRaw = Array.isArray(opts.dealbreakers) ? opts.dealbreakers : [];
+  for (const tag of tagsRaw) {
+    const ids = DEALBREAKER_QUESTIONS[String(tag).toLowerCase()];
+    if (ids) for (const id of ids) amplifiedQids.add(id);
+  }
 
   let rawScore     = 0;
   let maxScore     = 0;
@@ -105,7 +157,15 @@ function calculateCompatibility(rawA, rawB) {
   for (const [cat, { ids }] of Object.entries(CATEGORIES)) {
     catScores[cat] = { earned: 0, max: 0 };
     for (const qid of ids) {
-      const pts = QUESTION_POINTS[qid] || 0;
+      const basePts = QUESTION_POINTS[qid] || 0;
+      // Amplify questions flagged as dealbreakers by either user. Math.round
+      // keeps the points an integer for consistent ratios downstream; the
+      // multiplier is conservative (1.75×) — strong enough that a flagged
+      // mismatch reshapes the ranking, gentle enough that it doesn't fully
+      // override the deep psych dimensions (attachment, shadow).
+      const pts = amplifiedQids.has(qid)
+        ? Math.round(basePts * DEALBREAKER_MULTIPLIER)
+        : basePts;
       if (pts === 0) continue;
 
       const ai = optIdx(A, qid);
@@ -219,7 +279,7 @@ function generateWhyMatched(breakdown, score) {
  * normalizes either). Returns null when either group has zero quiz-completed
  * members — caller should hide those groups rather than show a misleading 0%.
  */
-function calculateGroupCompatibility(membersA, membersB) {
+function calculateGroupCompatibility(membersA, membersB, opts = {}) {
   if (!Array.isArray(membersA) || !Array.isArray(membersB)) return null;
   if (membersA.length === 0 || membersB.length === 0) return null;
 
@@ -228,7 +288,7 @@ function calculateGroupCompatibility(membersA, membersB) {
   let softBlocked = false;
   for (const a of membersA) {
     for (const b of membersB) {
-      const r = calculateCompatibility(a, b);
+      const r = calculateCompatibility(a, b, opts);
       if (r.isHardBlocked) {
         return { finalPct: 0, isHardBlocked: true, isSoftBlocked: false, pairs: count };
       }
@@ -246,4 +306,10 @@ function calculateGroupCompatibility(membersA, membersB) {
   };
 }
 
-module.exports = { calculateCompatibility, generateWhyMatched, calculateGroupCompatibility };
+module.exports = {
+  calculateCompatibility,
+  generateWhyMatched,
+  calculateGroupCompatibility,
+  DEALBREAKER_QUESTIONS,
+  DEALBREAKER_MULTIPLIER,
+};
