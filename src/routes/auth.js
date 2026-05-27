@@ -192,7 +192,8 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     // leak them through this auth response.
     let { rows: userRows } = await pool.query(
       `SELECT id, email, school, first_name, last_name,
-              is_verified, trust_score, quiz_completed
+              is_verified, trust_score, quiz_completed,
+              identity_verified_at
        FROM users WHERE email = $1`,
       [emailLower]
     );
@@ -207,7 +208,8 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
         `INSERT INTO users (email, school, school_domain, trust_score)
          VALUES ($1, $2, $3, 20)
          RETURNING id, email, school, first_name, last_name,
-                   is_verified, trust_score, quiz_completed`,
+                   is_verified, trust_score, quiz_completed,
+                   identity_verified_at`,
         [emailLower, school || '', schoolDomain || '']
       );
       user      = ins.rows[0];
@@ -257,6 +259,10 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
         isVerified:  user.is_verified,
         trustScore:  user.trust_score,
         quizCompleted: user.quiz_completed,
+        // ID-verification timestamp (Stripe Identity). Null when the user
+        // hasn't completed the selfie+ID flow; non-null = the "ID ✓"
+        // trust badge shows on their match card.
+        identityVerifiedAt: user.identity_verified_at,
       },
     });
   } catch (err) {

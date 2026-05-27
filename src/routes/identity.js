@@ -130,8 +130,16 @@ router.post('/refresh', requireAuth, async (req, res) => {
       [session.status, session.last_error?.code ?? null, session.id],
     );
     // Only fire on the transition into verified — avoid double-counting
-    // a user refreshing the screen multiple times after success.
+    // a user refreshing the screen multiple times after success. We also
+    // stamp `users.identity_verified_at` on the same transition so match
+    // cards + the verified-badge UI can read straight from the user row
+    // without joining identity_verifications on every read.
     if (session.status === 'verified' && prev[0]?.status !== 'verified') {
+      await pool.query(
+        `UPDATE users SET identity_verified_at = NOW(), updated_at = NOW()
+          WHERE id = $1 AND identity_verified_at IS NULL`,
+        [req.user.id],
+      );
       analytics.track(analytics.EVENTS.identity_verified, req.user.id);
     }
     res.json({
@@ -195,6 +203,14 @@ router.post('/webhook', async (req, res) => {
           [obj.status, obj.last_error?.code ?? null, obj.id],
         );
         if (obj.status === 'verified' && prev[0] && prev[0].status !== 'verified') {
+          // Promote the verified status onto the users row so match cards
+          // can show "ID ✓" without joining identity_verifications. Idempotent
+          // — only stamps if the column is still NULL.
+          await pool.query(
+            `UPDATE users SET identity_verified_at = NOW(), updated_at = NOW()
+              WHERE id = $1 AND identity_verified_at IS NULL`,
+            [prev[0].user_id],
+          );
           analytics.track(analytics.EVENTS.identity_verified, prev[0].user_id);
         }
       }

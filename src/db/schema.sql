@@ -67,6 +67,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALS
 -- tuned to their personal priorities. Empty array = "no priorities set,
 -- score me with the default weights."
 ALTER TABLE users ADD COLUMN IF NOT EXISTS dealbreakers     TEXT[] DEFAULT '{}';
+-- Stripe Identity verification — denormalized timestamp on users (vs.
+-- joining against identity_verifications every read). Set by the Stripe
+-- webhook + /identity/refresh when status flips to 'verified'. NULL when
+-- the user hasn't completed Stripe's selfie+ID flow. Surfaces on match
+-- cards as the "ID ✓" trust badge — meaningful escalation above the
+-- baseline ".edu verified" because it confirms a real human matches the
+-- ID photo (not just that they own a school email).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ;
 
 -- ── OTP codes ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS otp_codes (

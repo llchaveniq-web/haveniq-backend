@@ -95,6 +95,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          u.move_in_timeline,
          u.is_verified,
          u.trust_score,
+         u.identity_verified_at,
          pp.mbti  AS pairing_mbti,
          pp.disc  AS pairing_disc,
          cr.id     AS connect_request_id,
@@ -145,6 +146,10 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       moveInTimeline:r.move_in_timeline,
       isVerified:    r.is_verified,
       trustScore:    r.trust_score,
+      // ID-verified timestamp from Stripe Identity. Null when the user
+      // hasn't done selfie+ID; non-null = the "ID ✓" badge renders on
+      // their match card. Distinct from `isVerified` (= .edu email).
+      identityVerifiedAt: r.identity_verified_at,
       compatScore:   parseFloat(r.score),
       isSoftBlocked: r.is_soft_blocked,
       shadowPenalty: parseFloat(r.shadow_penalty),
