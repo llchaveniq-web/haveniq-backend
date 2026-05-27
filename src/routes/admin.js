@@ -172,8 +172,8 @@ router.get('/review/pending', requireAuth, requireFounder, async (req, res) => {
         LEFT JOIN LATERAL (
           SELECT snapshot
             FROM user_profile_snapshot
-           WHERE user_id = u.id
-           ORDER BY created_at DESC
+           WHERE user_id = u.id::text  -- prod schema: user_id is TEXT, not UUID
+           ORDER BY updated_at DESC    -- prod schema has updated_at, not created_at
            LIMIT 1
         ) ups ON TRUE
        WHERE u.email NOT LIKE '%@haveniq-demo.edu'
@@ -401,20 +401,18 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
     `);
 
     // Second INSERT: varied profile-snapshot quiz answers for each new
-    // demo. The actual schema is JSONB-blob-based (see schema.sql:194 —
-    // columns are user_id, trigger, snapshot::JSONB) NOT column-per-
-    // dimension as the previous version of this code assumed. Build
-    // the JSONB blob via jsonb_build_object so values land in the
-    // expected nested shape the matching engine reads from.
-    //
-    // No UNIQUE constraint on user_id means multiple snapshots per user
-    // are legal (one per quiz_submit historically). We use NOT EXISTS
-    // to make re-running this endpoint idempotent for already-snapshotted
-    // demos — only newly-added demos get a snapshot.
+    // demo. PROD SCHEMA NOTE (verified 2026-05-27 via information_schema):
+    // user_profile_snapshot.user_id is TEXT in production, not UUID as
+    // schema.sql suggests. There's been schema drift between code and
+    // prod — the prod table has 16 columns (writing_fingerprint,
+    // typing_fingerprint, top_values, etc.) from a richer earlier design,
+    // while the code only knows about the trigger + snapshot pair.
+    // Both trigger + snapshot columns DO exist in prod (positions 15-16),
+    // so we just cast u.id to text on the way in.
     const insertSnapshots = await pool.query(`
       INSERT INTO user_profile_snapshot (user_id, trigger, snapshot)
       SELECT
-        u.id,
+        u.id::text,
         'demo_seed',
         jsonb_build_object(
           'cleanliness',   (ARRAY['Very tidy','Tidy','Average','Relaxed'])[1 + (random() * 3)::INT],
@@ -429,7 +427,7 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
         )
       FROM users u
       WHERE u.email LIKE 'demo%@haveniq-demo.edu'
-        AND NOT EXISTS (SELECT 1 FROM user_profile_snapshot WHERE user_id = u.id)
+        AND NOT EXISTS (SELECT 1 FROM user_profile_snapshot WHERE user_id = u.id::text)
       RETURNING user_id
     `);
 
