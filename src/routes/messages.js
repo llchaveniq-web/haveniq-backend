@@ -122,7 +122,13 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
       return res.status(400).json({ error: `message exceeds ${MAX_MESSAGE_CHARS} char limit` });
     }
 
-    // Verify user is part of conversation
+    // Accept-before-comms invariant: a `conversations` row only exists
+    // once a connect_request has flipped to status='accepted' (see
+    // routes/matches.js line ~284). So this membership check ALSO gates
+    // pre-accept messaging — no conversation row → 403 here → no DM
+    // possible until both sides agree to connect. Do NOT remove this
+    // check, and do not add a code path that creates a conversation
+    // outside the accept handler in matches.js.
     const { rows: convRows } = await pool.query(
       'SELECT user_a, user_b FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
       [req.params.conversationId, req.user.id]
