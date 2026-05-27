@@ -2,7 +2,7 @@ const router = require('express').Router();
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
 const pool     = require('../db/pool');
-const { generateOTP, sendOTPEmail, sendWelcomeEmail } = require('../services/email');
+const { generateOTP, sendOTPEmail, sendWelcomeEmail, sendFounderSignupAlert } = require('../services/email');
 const { signToken } = require('../middleware/auth');
 const analytics = require('../services/analytics');
 
@@ -222,6 +222,21 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
       // the address works.
       sendWelcomeEmail(emailLower, user.id).catch(err => {
         console.error('[auth] welcome email failed:', err.message);
+      });
+
+      // Founder-side alert: every new signup pings llchaveniq@gmail.com
+      // (or whichever ADMIN_ALERT_EMAIL is set) with the new user's row +
+      // ready-to-paste SQL for approve/reject. Replaces the "founder
+      // polls Railway daily" workflow with "founder eyeballs inbox."
+      // Also fire-and-forget — never blocks signup if Resend hiccups.
+      sendFounderSignupAlert({
+        newUserId:    user.id,
+        email:        emailLower,
+        school:       user.school,
+        firstName:    user.first_name,
+        schoolDomain: schoolDomain || '',
+      }).catch(err => {
+        console.error('[auth] founder signup alert failed:', err.message);
       });
 
       // Server-side signup analytics — fires once, immediately after the

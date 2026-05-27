@@ -141,4 +141,94 @@ router.post('/backfill-personality', requireAuth, requireFounder, async (req, re
   }
 });
 
+// ── Founder review queue ─────────────────────────────────────────────────
+//
+// Manual identity-vetting workflow used in lieu of paying Stripe Identity
+// per-verification. The founder eyeballs each new signup against their
+// .edu + photo + bio + signup-pattern. Approved users get is_verified=TRUE
+// and the `.edu ✓` badge appears on their match cards; rejected users are
+// banned. Until a user is reviewed, they're functional in-app but don't
+// carry the trust badge to other students.
+//
+// Once daily volume exceeds ~30 signups/day we should bump this back into
+// Stripe Identity (paid, $1.50/each, faster) — the manual path doesn't
+// scale beyond a few hundred users without burning founder hours.
+
+// GET /admin/review/pending — newest first, demos excluded
+router.get('/review/pending', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, email, school, first_name, last_initial, age, school_year,
+             major, bio, photo_url, created_at, quiz_completed, banned
+        FROM users
+       WHERE email NOT LIKE '%@haveniq-demo.edu'
+         AND is_verified = FALSE
+         AND banned = FALSE
+       ORDER BY created_at DESC
+       LIMIT 100
+    `);
+    res.json({
+      pending: rows.map(r => ({
+        id:            r.id,
+        email:         r.email,
+        school:        r.school,
+        firstName:     r.first_name,
+        lastInitial:   r.last_initial,
+        age:           r.age,
+        schoolYear:    r.school_year,
+        major:         r.major,
+        bio:           r.bio,
+        photoUrl:      r.photo_url,
+        createdAt:     r.created_at,
+        quizCompleted: r.quiz_completed,
+      })),
+      count: rows.length,
+    });
+  } catch (err) {
+    console.error('[admin/review/pending] failed:', err);
+    res.status(500).json({ error: 'Failed to fetch review queue' });
+  }
+});
+
+// POST /admin/review/:userId/approve — flip is_verified=TRUE
+router.post('/review/:userId/approve', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users
+          SET is_verified = TRUE
+        WHERE id = $1 AND email NOT LIKE '%@haveniq-demo.edu'
+        RETURNING id, email, first_name`,
+      [req.params.userId],
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    console.log(`[admin/review] APPROVED ${rows[0].email} by founder ${req.user.id}`);
+    res.json({ ok: true, userId: rows[0].id });
+  } catch (err) {
+    console.error('[admin/review/approve] failed:', err);
+    res.status(500).json({ error: 'Approve failed' });
+  }
+});
+
+// POST /admin/review/:userId/reject — ban with reason
+router.post('/review/:userId/reject', requireAuth, requireFounder, async (req, res) => {
+  const reason = (req.body?.reason ?? 'failed manual review').toString().slice(0, 200);
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users
+          SET banned = TRUE,
+              ban_reason = $2,
+              ban_at = NOW()
+        WHERE id = $1 AND email NOT LIKE '%@haveniq-demo.edu'
+        RETURNING id, email`,
+      [req.params.userId, reason],
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    console.log(`[admin/review] REJECTED ${rows[0].email} by founder ${req.user.id}: ${reason}`);
+    res.json({ ok: true, userId: rows[0].id });
+  } catch (err) {
+    console.error('[admin/review/reject] failed:', err);
+    res.status(500).json({ error: 'Reject failed' });
+  }
+});
+
 module.exports = router;

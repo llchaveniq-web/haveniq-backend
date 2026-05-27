@@ -314,4 +314,76 @@ async function sendSafetyAlertEmail({ reportId, category, severity, reason, deta
   }
 }
 
-module.exports = { generateOTP, sendOTPEmail, sendMatchEmail, sendParentMatchEmail, sendParentInviteEmail, sendWelcomeEmail, sendSafetyAlertEmail };
+// ─── Founder review alert ────────────────────────────────────────────────
+//
+// Fires once on every new user signup so the founder doesn't have to
+// poll Railway for the review queue. Includes the user's full profile
+// snapshot + ready-to-paste SQL for approve/reject, so the workflow is
+// "open email → 30 sec eyeball → paste one SQL line." Sent to
+// ADMIN_ALERT_EMAIL (defaults to llchaveniq@gmail.com — the catch-all
+// from the Cloudflare email routing per project docs).
+async function sendFounderSignupAlert({
+  newUserId, email, school, firstName, schoolDomain,
+}) {
+  const adminEmail = process.env.ADMIN_ALERT_EMAIL || 'llchaveniq@gmail.com';
+  const safeFirstName = firstName || '(no name yet)';
+  const safeSchool    = school || '(no school yet)';
+
+  try {
+    await getResend().emails.send({
+      from:    'HavenIQ Signups <noreply@haveniq.org>',
+      to:      adminEmail,
+      subject: `🎯 New HavenIQ signup: ${email}`,
+      html: `
+        <!DOCTYPE html>
+        <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#F6EEDF; margin:0; padding:32px 16px;">
+          <div style="max-width:560px; margin:0 auto; background:#fff; border-radius:16px; overflow:hidden;">
+            <div style="padding:24px 28px; border-bottom:1px solid #E8DCC6;">
+              <p style="margin:0; font-size:13px; color:#75695A; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">New signup · awaiting review</p>
+              <p style="margin:6px 0 0; font-size:22px; font-weight:700; color:#2D2620;">${safeFirstName} · ${safeSchool}</p>
+            </div>
+            <div style="padding:24px 28px;">
+              <p style="margin:0 0 16px; color:#2D2620; font-size:15px; line-height:1.6;">
+                A new user just signed up. Eyeball the details, then paste one of the SQL lines below into Railway → Postgres → Query.
+              </p>
+              <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">Email</td><td style="padding:6px 0; color:#2D2620; font-size:14px; font-weight:600;">${email}</td></tr>
+                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">School</td><td style="padding:6px 0; color:#2D2620; font-size:14px;">${safeSchool}</td></tr>
+                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">Domain</td><td style="padding:6px 0; color:#2D2620; font-size:14px;">${schoolDomain || '—'}</td></tr>
+                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">User ID</td><td style="padding:6px 0; color:#75695A; font-size:12px; font-family:monospace;">${newUserId}</td></tr>
+              </table>
+
+              <p style="margin:0 0 8px; color:#75695A; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">✅ Approve (paste into Railway)</p>
+              <div style="background:#F1E6D2; border-radius:8px; padding:12px; margin-bottom:18px;">
+                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#2D2620; word-break:break-all;">UPDATE users SET is_verified = TRUE WHERE id = '${newUserId}';</code>
+              </div>
+
+              <p style="margin:0 0 8px; color:#75695A; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">❌ Reject (paste into Railway)</p>
+              <div style="background:#FAE5E5; border-radius:8px; padding:12px;">
+                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#2D2620; word-break:break-all;">UPDATE users SET banned = TRUE, ban_reason = 'failed manual review', ban_at = NOW() WHERE id = '${newUserId}';</code>
+              </div>
+
+              <p style="margin:24px 0 0; color:#75695A; font-size:12px; line-height:1.5;">
+                Tip: come back in 24 hours and run<br>
+                <code style="font-family:monospace; font-size:11px;">SELECT id, email, school, first_name, photo_url, bio FROM users WHERE is_verified = FALSE AND banned = FALSE AND created_at &gt; NOW() - INTERVAL '7 days' ORDER BY created_at DESC;</code><br>
+                for a batch view of everyone pending.
+              </p>
+            </div>
+          </div>
+        </body></html>
+      `,
+    });
+    analytics.track(analytics.EVENTS.email_sent, null, { kind: 'founder_signup_alert' });
+  } catch (err) {
+    // Never bubble — this is a nice-to-have, not blocking signup.
+    console.error('[sendFounderSignupAlert] failed:', err.message);
+    analytics.track(analytics.EVENTS.email_failed, null, { kind: 'founder_signup_alert', error: err.message });
+  }
+}
+
+module.exports = {
+  generateOTP, sendOTPEmail, sendMatchEmail,
+  sendParentMatchEmail, sendParentInviteEmail,
+  sendWelcomeEmail, sendSafetyAlertEmail,
+  sendFounderSignupAlert,
+};
