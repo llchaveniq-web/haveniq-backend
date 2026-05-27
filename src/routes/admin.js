@@ -431,6 +431,121 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
       RETURNING user_id
     `);
 
+    // Third INSERT: quiz_answers for each demo. Required because the
+    // matches feed JOINs against compatibility_scores, and those rows
+    // only get populated when scoreNewMatches() runs — which itself
+    // needs each user to have quiz_answers. Without this step the
+    // demos exist but never appear in any feed.
+    //
+    // We generate deterministic-ish random answers via random()::INT
+    // across all 26 questions. Index 0-2 keeps every answer within
+    // the valid range for both 3-option AND 4-option questions, so
+    // the scoring engine never trips on out-of-range option indices.
+    //
+    // The 26 question IDs are pulled from data/quizQuestions.js
+    // (non-contiguous because the v5 quiz preserved IDs from the
+    // original 60-question set).
+    const QUIZ_IDS = [1,3,9,14,15,17,22,25,29,31,32,33,35,37,38,42,45,47,50,54,55,57,58,60];
+    const answersJsonExpr = QUIZ_IDS
+      .map(id => `'${id}', (random() * 2)::INT`)
+      .join(', ');
+    const insertQuizAnswers = await pool.query(`
+      INSERT INTO quiz_answers (user_id, answers, completed)
+      SELECT
+        u.id,
+        jsonb_build_object(${answersJsonExpr}),
+        TRUE
+      FROM users u
+      WHERE u.email LIKE 'demo%@haveniq-demo.edu'
+        AND NOT EXISTS (SELECT 1 FROM quiz_answers WHERE user_id = u.id)
+      RETURNING user_id
+    `);
+
+    // Fourth step: score the founder against all the newly-quiz'd demos
+    // so they show up in the founder's matches feed. We pull the founder's
+    // own quiz answers from quiz_answers; if they haven't taken the quiz
+    // yet we skip this step + return a message saying so.
+    let scoringRan = false;
+    let scoringMessage = '';
+    const { rows: myQuizRows } = await pool.query(
+      `SELECT answers FROM quiz_answers WHERE user_id = $1 AND completed = TRUE LIMIT 1`,
+      [req.user.id]
+    );
+    if (myQuizRows.length === 0) {
+      scoringMessage = 'Founder has not completed the quiz — take it in-app, then re-run this endpoint to populate compatibility scores against the demos.';
+    } else {
+      // Mirror the scoreNewMatches flow from quiz.js: pull all candidates'
+      // quiz answers + dealbreakers, compute compat, bulk-INSERT the
+      // compatibility_scores rows. Keep it simple — no MBTI blend for
+      // demos (their personality_profiles row doesn't exist).
+      const myAnswers = myQuizRows[0].answers;
+      const { rows: otherUsers } = await pool.query(
+        `SELECT qa.user_id, qa.answers, u.dealbreakers
+           FROM quiz_answers qa
+           JOIN users u ON u.id = qa.user_id
+          WHERE qa.completed = TRUE
+            AND qa.user_id != $1
+            AND u.is_paused = FALSE
+            AND u.email LIKE 'demo%@haveniq-demo.edu'`,
+        [req.user.id]
+      );
+      const { calculateCompatibility } = require('../services/scoring');
+      const { rows: meDealRow } = await pool.query(
+        `SELECT dealbreakers FROM users WHERE id = $1`,
+        [req.user.id]
+      );
+      const myDealbreakers = Array.isArray(meDealRow[0]?.dealbreakers) ? meDealRow[0].dealbreakers : [];
+
+      const scoreRows = [];
+      for (const other of otherUsers) {
+        const theirDealbreakers = Array.isArray(other.dealbreakers) ? other.dealbreakers : [];
+        const combined = [...new Set([...myDealbreakers, ...theirDealbreakers])];
+        const result = calculateCompatibility(myAnswers, other.answers, { dealbreakers: combined });
+        if (result.isHardBlocked) continue;
+        // Order user_a/user_b lexically so we don't double-insert (A→B
+        // and B→A are the same pair) — matches the same ordering quiz.js
+        // uses on its bulk insert.
+        const [a, b] = [req.user.id, other.user_id].sort();
+        scoreRows.push({
+          user_a: a, user_b: b,
+          score: result.finalPct,
+          breakdown: JSON.stringify(result.categoryBreakdown || []),
+          why_matched: JSON.stringify(result.whyMatched || []),
+          is_soft_blocked: !!result.isSoftBlocked,
+          is_hard_blocked: false,
+          shadow_penalty: result.shadowPenalty ?? 0,
+        });
+      }
+
+      // Bulk insert all the score rows. ON CONFLICT (user_a, user_b)
+      // DO UPDATE keeps the latest score per pair — re-running this
+      // endpoint refreshes existing scores cleanly.
+      if (scoreRows.length > 0) {
+        const placeholders = scoreRows.map((_, i) => {
+          const base = i * 8;
+          return `($${base+1}, $${base+2}, $${base+3}, $${base+4}::jsonb, $${base+5}::jsonb, $${base+6}, $${base+7}, $${base+8})`;
+        }).join(', ');
+        const values = scoreRows.flatMap(r => [
+          r.user_a, r.user_b, r.score, r.breakdown, r.why_matched,
+          r.is_soft_blocked, r.is_hard_blocked, r.shadow_penalty,
+        ]);
+        await pool.query(
+          `INSERT INTO compatibility_scores
+             (user_a, user_b, score, breakdown, why_matched, is_soft_blocked, is_hard_blocked, shadow_penalty)
+           VALUES ${placeholders}
+           ON CONFLICT (user_a, user_b) DO UPDATE SET
+             score = EXCLUDED.score,
+             breakdown = EXCLUDED.breakdown,
+             why_matched = EXCLUDED.why_matched,
+             is_soft_blocked = EXCLUDED.is_soft_blocked,
+             shadow_penalty = EXCLUDED.shadow_penalty`,
+          values
+        );
+      }
+      scoringRan = true;
+      scoringMessage = `Scored founder against ${scoreRows.length} demos (others were hard-blocked).`;
+    }
+
     // Summary counts — final state of demos in the DB after this seed.
     const counts = await pool.query(`
       SELECT
@@ -441,10 +556,13 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
 
     res.json({
       ok: true,
-      usersInsertedThisRun:     insertUsers.rowCount,
-      snapshotsInsertedThisRun: insertSnapshots.rowCount,
-      demoUsersTotal:           parseInt(counts.rows[0].total),
-      demoSchoolsTotal:         parseInt(counts.rows[0].schools),
+      usersInsertedThisRun:        insertUsers.rowCount,
+      snapshotsInsertedThisRun:    insertSnapshots.rowCount,
+      quizAnswersInsertedThisRun:  insertQuizAnswers.rowCount,
+      scoringRan,
+      scoringMessage,
+      demoUsersTotal:              parseInt(counts.rows[0].total),
+      demoSchoolsTotal:            parseInt(counts.rows[0].schools),
     });
   } catch (err) {
     console.error('[admin/seed-demos] failed:', err);
