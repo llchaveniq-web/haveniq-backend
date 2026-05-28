@@ -65,8 +65,28 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     // a 500). Smoke test caught this — should be a clean 400.
     const { email, school, schoolDomain, schoolDomains } = req.body || {};
 
-    if (!email || !school || !schoolDomain) {
-      return res.status(400).json({ error: 'email, school, and schoolDomain are required' });
+    if (!email) {
+      return res.status(400).json({ error: 'email is required' });
+    }
+
+    const emailLower = email.trim().toLowerCase();
+
+    // Returning-user fast path. If the email is already on file we don't
+    // need school+schoolDomain in the payload — the school was captured at
+    // signup and we trust it. Frontend signin mode sends `mode=signin`
+    // without school params; this lookup is what makes that work without
+    // forcing returning users back through the school picker every time
+    // they sign in on a new device.
+    const { rows: existingRows } = await pool.query(
+      'SELECT school, school_domain FROM users WHERE email = $1 LIMIT 1',
+      [emailLower]
+    );
+    const existingUser = existingRows[0];
+
+    if (!existingUser && (!school || !schoolDomain)) {
+      return res.status(400).json({
+        error: 'school and schoolDomain are required for new signups',
+      });
     }
 
     // Accept academic email addresses worldwide, not just US .edu. The
@@ -78,13 +98,16 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     // France .fr, Ireland .ie) get validated by exact match against the
     // school's pre-registered domain instead — see the schoolDomains
     // check below.
-    const emailLower = email.trim().toLowerCase();
     const academicTldRegex = /\.(edu|edu\.[a-z]{2,3}|ac\.[a-z]{2,3})$/;
 
     const emailDomain  = emailLower.split('@')[1];
+    // For existing users we use their on-file school_domain as the
+    // accepted list when the client didn't send one. For new signups
+    // the client always sends schoolDomain[s].
+    const fallbackDomain = existingUser?.school_domain || schoolDomain || '';
     const acceptedList = Array.isArray(schoolDomains) && schoolDomains.length > 0
       ? schoolDomains.map(d => String(d).toLowerCase())
-      : [String(schoolDomain).toLowerCase()];
+      : [String(fallbackDomain).toLowerCase()].filter(Boolean);
     const domainMatches = acceptedList.some(d => emailDomain === d || emailDomain.endsWith('.' + d));
 
     // Two acceptance paths:
@@ -96,8 +119,9 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     //      than refusing them outright on day-one launch).
     const hasAcademicTld = academicTldRegex.test(emailDomain);
     if (!domainMatches && !hasAcademicTld) {
+      const schoolLabel = school || existingUser?.school || 'your school';
       return res.status(400).json({
-        error: `Email must be a verified school address (e.g. .edu, .ac.uk, .edu.au) or match ${acceptedList.join(' / ')} for ${school}`,
+        error: `Email must be a verified school address (e.g. .edu, .ac.uk, .edu.au)${acceptedList.length ? ` or match ${acceptedList.join(' / ')} for ${schoolLabel}` : ''}`,
       });
     }
 
