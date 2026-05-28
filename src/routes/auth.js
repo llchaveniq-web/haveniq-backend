@@ -295,6 +295,24 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
         school:      user.school,
         firstName:   user.first_name,
         lastName:    user.last_name,
+        // Returning all profile-shape fields fixes the sign-in-blanks-the-
+        // profile bug: previously the frontend received only first_name +
+        // school and hardcoded "''" / 18 / { min: 500, max: 1500 } for the
+        // rest, so signing in on a fresh device wiped the user's saved
+        // bio, age, budget, move-in date, etc. They're all in the `users`
+        // table — we just weren't sending them.
+        lastInitial: user.last_name ? user.last_name.trim().charAt(0) : '',
+        bio:         user.bio        ?? '',
+        major:       user.major      ?? '',
+        schoolYear:  user.school_year ?? '',
+        age:         user.age        ?? null,
+        gender:      user.gender     ?? '',
+        lookingFor:  user.looking_for ?? [],
+        photoUrl:    user.photo_url  ?? null,
+        budgetMin:   user.budget_min ?? null,
+        budgetMax:   user.budget_max ?? null,
+        neighborhoods: user.neighborhoods ?? [],
+        moveInDate:  user.move_in_date ?? null,
         isVerified:  user.is_verified,
         trustScore:  user.trust_score,
         quizCompleted: user.quiz_completed,
