@@ -232,6 +232,10 @@ app.use('/housing',  require('./routes/housing'));
 app.use('/premium',  require('./routes/premium'));
 app.use('/admin',    require('./routes/admin'));
 app.use('/admin/safety', require('./routes/adminSafety'));
+// Bot-admin: static-token-authed narrow endpoints for automation bots
+// (signup auto-review, weekly digest). Returns 503 until ADMIN_BOT_TOKEN
+// is set in env.
+app.use('/bot-admin', require('./routes/botAdmin'));
 app.use('/assistant', require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
