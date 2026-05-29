@@ -362,4 +362,86 @@ router.get('/recent-scores', requireBotToken, async (req, res) => {
   }
 });
 
+// ── GET /bot-admin/at-risk-users ───────────────────────────────────────
+// Powers the retention re-engagement bot. Returns users who:
+//   • signed up at least 14 days ago (had time to engage)
+//   • haven't touched their profile in 7+ days (proxy for inactivity)
+//   • haven't been banned or paused
+// Capped at 50 per call. Includes enough context for Claude to draft
+// a personalized nudge.
+router.get('/at-risk-users', requireBotToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        id, email, school, first_name, photo_url IS NOT NULL AS has_photo,
+        bio IS NOT NULL AND length(trim(bio)) > 0 AS has_bio,
+        quiz_completed, is_verified, school_year, major,
+        created_at, updated_at,
+        EXTRACT(DAY FROM NOW() - updated_at)::int AS days_since_active,
+        EXTRACT(DAY FROM NOW() - created_at)::int AS days_since_signup
+      FROM users
+      WHERE updated_at < NOW() - INTERVAL '7 days'
+        AND created_at  < NOW() - INTERVAL '14 days'
+        AND COALESCE(is_banned, FALSE) = FALSE
+        AND COALESCE(is_paused, FALSE) = FALSE
+      ORDER BY updated_at ASC
+      LIMIT 50
+    `);
+    res.json({ count: rows.length, at_risk: rows });
+  } catch (err) {
+    console.error('[botAdmin] at-risk-users failed:', err);
+    res.status(500).json({ error: 'At-risk query failed' });
+  }
+});
+
+// ── GET /bot-admin/monthly-rollup ──────────────────────────────────────
+// Powers the monthly investor-update bot. Aggregate metrics over the last
+// 30 days plus the 30 days prior, so we can show month-over-month deltas.
+router.get('/monthly-rollup', requireBotToken, async (req, res) => {
+  try {
+    const cur = "BETWEEN NOW() - INTERVAL '30 days' AND NOW()";
+    const pre = "BETWEEN NOW() - INTERVAL '60 days' AND NOW() - INTERVAL '30 days'";
+    const Q = (col, where) => pool.query(`SELECT COUNT(*) AS n FROM ${col} WHERE ${where}`).catch(() => ({ rows: [{ n: 0 }] }));
+    const [
+      curSignups, curVerified, curQuiz, curConvo, curMatches,
+      preSignups, preVerified, preQuiz, preConvo, preMatches,
+      totalUsers, totalVerified, totalQuizDone,
+    ] = await Promise.all([
+      Q('users',                   `created_at ${cur}`),
+      Q('users',                   `is_verified = TRUE AND created_at ${cur}`),
+      Q('quiz_answers',            `completed = TRUE AND updated_at ${cur}`),
+      Q('conversations',           `created_at ${cur}`),
+      Q('compatibility_scores',    `calculated_at ${cur}`),
+      Q('users',                   `created_at ${pre}`),
+      Q('users',                   `is_verified = TRUE AND created_at ${pre}`),
+      Q('quiz_answers',            `completed = TRUE AND updated_at ${pre}`),
+      Q('conversations',           `created_at ${pre}`),
+      Q('compatibility_scores',    `calculated_at ${pre}`),
+      Q('users',                   `1 = 1`),
+      Q('users',                   `is_verified = TRUE`),
+      Q('quiz_answers',            `completed = TRUE`),
+    ]);
+    const n = (r) => Number(r.rows[0].n);
+    res.json({
+      current_30d: {
+        signups: n(curSignups), verified_signups: n(curVerified),
+        quiz_completions: n(curQuiz), conversations_started: n(curConvo),
+        matches_scored: n(curMatches),
+      },
+      previous_30d: {
+        signups: n(preSignups), verified_signups: n(preVerified),
+        quiz_completions: n(preQuiz), conversations_started: n(preConvo),
+        matches_scored: n(preMatches),
+      },
+      lifetime: {
+        users: n(totalUsers), verified_users: n(totalVerified),
+        quiz_completions: n(totalQuizDone),
+      },
+    });
+  } catch (err) {
+    console.error('[botAdmin] monthly-rollup failed:', err);
+    res.status(500).json({ error: 'Monthly rollup failed' });
+  }
+});
+
 module.exports = router;
