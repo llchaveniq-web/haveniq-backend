@@ -258,4 +258,108 @@ router.post('/user/:userId/blank-writing', requireBotToken, async (req, res) => 
   }
 });
 
+// ── GET /bot-admin/pending-reports ─────────────────────────────────────
+// Open user_reports with both sides' identity context. Caller (the
+// safety-triage bot) will fetch the message thread separately if needed.
+router.get('/pending-reports', requireBotToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        r.id, r.category, r.severity, r.reason, r.details, r.created_at,
+        r.reporter_id, r.reported_id,
+        reporter.email AS reporter_email, reporter.first_name AS reporter_first_name,
+        reporter.school AS reporter_school, reporter.is_verified AS reporter_is_verified,
+        reported.email AS reported_email, reported.first_name AS reported_first_name,
+        reported.school AS reported_school, reported.is_verified AS reported_is_verified,
+        reported.is_banned AS reported_is_banned, reported.trust_score AS reported_trust_score,
+        reported.created_at AS reported_created_at
+      FROM user_reports r
+      LEFT JOIN users reporter ON reporter.id = r.reporter_id
+      LEFT JOIN users reported ON reported.id = r.reported_id
+      WHERE r.status = 'open'
+      ORDER BY r.created_at ASC
+      LIMIT 50
+    `);
+    res.json({ count: rows.length, reports: rows });
+  } catch (err) {
+    console.error('[botAdmin] pending-reports failed:', err);
+    res.status(500).json({ error: 'Pending reports failed' });
+  }
+});
+
+// ── POST /bot-admin/report/:id/dismiss ─────────────────────────────────
+router.post('/report/:id/dismiss', requireBotToken, async (req, res) => {
+  const { reason } = req.body || {};
+  if (!reason || reason.length < 5) {
+    return res.status(400).json({ error: 'Reason required (min 5 chars).' });
+  }
+  try {
+    const r = await pool.query(`
+      UPDATE user_reports
+      SET status = 'dismissed', resolved_at = NOW(), resolved_note = $2
+      WHERE id = $1 AND status = 'open'
+      RETURNING id
+    `, [req.params.id, `auto-dismissed: ${reason.slice(0, 200)}`]);
+    const acted = r.rows.length > 0;
+    await audit('safety-triage', 'dismiss', req.params.id, { reason }, acted ? 'dismissed' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] dismiss failed:', err);
+    res.status(500).json({ error: 'Dismiss failed' });
+  }
+});
+
+// ── POST /bot-admin/report/:id/escalate ────────────────────────────────
+// Bot couldn't safely auto-act. Marks the report as 'reviewed' (i.e. seen
+// by automation but punted to human) and logs the bot's suggestion.
+router.post('/report/:id/escalate', requireBotToken, async (req, res) => {
+  const { suggested_action, reason } = req.body || {};
+  if (!reason || reason.length < 5) {
+    return res.status(400).json({ error: 'Reason required.' });
+  }
+  try {
+    const note = `auto-triage suggests ${suggested_action || 'human review'}: ${reason.slice(0, 400)}`;
+    const r = await pool.query(`
+      UPDATE user_reports
+      SET status = 'reviewed', resolved_note = $2
+      WHERE id = $1 AND status = 'open'
+      RETURNING id
+    `, [req.params.id, note]);
+    const acted = r.rows.length > 0;
+    await audit('safety-triage', 'escalate', req.params.id, { suggested_action, reason }, acted ? 'escalated' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] escalate failed:', err);
+    res.status(500).json({ error: 'Escalate failed' });
+  }
+});
+
+// ── GET /bot-admin/recent-scores ───────────────────────────────────────
+// Recent compatibility_scores with both users' metadata for the match
+// quality watchdog. Returns last 7 days, hard cap 200 rows.
+router.get('/recent-scores', requireBotToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        cs.id, cs.user_a, cs.user_b, cs.score, cs.is_hard_blocked,
+        cs.is_soft_blocked, cs.shadow_penalty, cs.breakdown,
+        cs.calculated_at,
+        a.school AS school_a, a.school_year AS school_year_a, a.gender AS gender_a,
+        a.looking_for AS looking_for_a, a.age AS age_a,
+        b.school AS school_b, b.school_year AS school_year_b, b.gender AS gender_b,
+        b.looking_for AS looking_for_b, b.age AS age_b
+      FROM compatibility_scores cs
+      LEFT JOIN users a ON a.id = cs.user_a
+      LEFT JOIN users b ON b.id = cs.user_b
+      WHERE cs.calculated_at > NOW() - INTERVAL '7 days'
+      ORDER BY cs.calculated_at DESC
+      LIMIT 200
+    `);
+    res.json({ count: rows.length, scores: rows });
+  } catch (err) {
+    console.error('[botAdmin] recent-scores failed:', err);
+    res.status(500).json({ error: 'Recent scores failed' });
+  }
+});
+
 module.exports = router;
