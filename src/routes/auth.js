@@ -142,14 +142,31 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     // Always log OTP so it's visible in Railway logs during testing
     console.log(`📧 OTP for ${emailLower}: ${code}`);
 
-    // Try to send email but don't fail if it errors (e.g. Resend domain not verified yet)
+    // Send the email via Resend. We still return success even if Resend
+    // throws (so the testing loop keeps moving — Railway logs print the
+    // OTP code), but we surface the actual delivery status + error
+    // message in the response so the frontend / a poking user can see
+    // WHY no email arrived: missing RESEND_API_KEY, unverified domain,
+    // free-tier quota exhausted, etc. Without this surface, "send-code"
+    // claimed success but the inbox stayed empty with no diagnostic.
+    let emailDelivery = 'sent';
+    let emailError = null;
     try {
       await sendOTPEmail(emailLower, code);
     } catch (emailErr) {
-      console.error('Email send failed (check Railway logs for code):', emailErr.message);
+      emailDelivery = 'failed';
+      emailError    = emailErr?.message || 'Unknown Resend error';
+      console.error('[/auth/send-code] Resend failure:', emailError);
     }
 
-    res.json({ success: true, message: `Code sent to ${emailLower}` });
+    res.json({
+      success: true,
+      message: emailDelivery === 'sent'
+        ? `Code sent to ${emailLower}`
+        : `Code generated but email delivery failed: ${emailError}`,
+      emailDelivery,
+      emailError,
+    });
   } catch (err) {
     console.error('send-code error:', err);
     res.status(500).json({ error: 'Failed to send verification code' });
