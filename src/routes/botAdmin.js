@@ -170,4 +170,92 @@ router.get('/digest', requireBotToken, async (req, res) => {
   }
 });
 
+// ── GET /bot-admin/recent-content ──────────────────────────────────────
+// Returns bios + free-text quiz writing samples updated since the
+// `since` query param (ISO timestamp). Used by the text-moderation bot
+// to scan new user-generated content. Cap 100 records per call.
+router.get('/recent-content', requireBotToken, async (req, res) => {
+  const since = req.query.since || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const [bios, samples] = await Promise.all([
+      pool.query(`
+        SELECT id, email, school, first_name, bio, updated_at
+        FROM users
+        WHERE bio IS NOT NULL AND length(trim(bio)) > 0
+          AND updated_at > $1
+          AND COALESCE(is_banned, FALSE) = FALSE
+        ORDER BY updated_at ASC
+        LIMIT 100
+      `, [since]),
+      pool.query(`
+        SELECT u.id AS user_id, u.email, u.first_name, u.school,
+               qa.writing_sample, qa.updated_at
+        FROM quiz_answers qa
+        JOIN users u ON u.id = qa.user_id
+        WHERE qa.writing_sample IS NOT NULL AND length(trim(qa.writing_sample)) > 0
+          AND qa.updated_at > $1
+          AND COALESCE(u.is_banned, FALSE) = FALSE
+        ORDER BY qa.updated_at ASC
+        LIMIT 100
+      `, [since]).catch(() => ({ rows: [] })),
+    ]);
+    res.json({
+      bios: bios.rows,
+      writing_samples: samples.rows,
+      latest_seen: Math.max(
+        ...bios.rows.map(r => new Date(r.updated_at).getTime()),
+        ...samples.rows.map(r => new Date(r.updated_at).getTime()),
+        new Date(since).getTime(),
+      ),
+    });
+  } catch (err) {
+    console.error('[botAdmin] recent-content failed:', err);
+    res.status(500).json({ error: 'Recent content failed' });
+  }
+});
+
+// ── POST /bot-admin/user/:userId/blank-bio ────────────────────────────
+// Used when the moderator classifies a bio as PII leak or spam — clears
+// the field rather than banning, so the user can re-write. Audited.
+router.post('/user/:userId/blank-bio', requireBotToken, async (req, res) => {
+  const { userId } = req.params;
+  const { reason } = req.body || {};
+  if (!reason || typeof reason !== 'string' || reason.length < 5) {
+    return res.status(400).json({ error: 'Reason required (min 5 chars).' });
+  }
+  try {
+    const r = await pool.query(
+      'UPDATE users SET bio = NULL, updated_at = NOW() WHERE id = $1 RETURNING id',
+      [userId],
+    );
+    const acted = r.rows.length > 0;
+    await audit('content-moderation', 'blank-bio', userId, { reason }, acted ? 'blanked' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] blank-bio failed:', err);
+    res.status(500).json({ error: 'Blank bio failed' });
+  }
+});
+
+// ── POST /bot-admin/user/:userId/blank-writing ────────────────────────
+router.post('/user/:userId/blank-writing', requireBotToken, async (req, res) => {
+  const { userId } = req.params;
+  const { reason } = req.body || {};
+  if (!reason || typeof reason !== 'string' || reason.length < 5) {
+    return res.status(400).json({ error: 'Reason required (min 5 chars).' });
+  }
+  try {
+    const r = await pool.query(
+      'UPDATE quiz_answers SET writing_sample = NULL, updated_at = NOW() WHERE user_id = $1 RETURNING user_id',
+      [userId],
+    );
+    const acted = r.rows.length > 0;
+    await audit('content-moderation', 'blank-writing-sample', userId, { reason }, acted ? 'blanked' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] blank-writing failed:', err);
+    res.status(500).json({ error: 'Blank writing failed' });
+  }
+});
+
 module.exports = router;
