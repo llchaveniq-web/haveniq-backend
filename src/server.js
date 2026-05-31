@@ -219,6 +219,14 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 
+// Sentry tunnel — MUST be mounted before the route mount block below
+// because the global JSON/urlencoded parsers ate the raw body when the
+// route lived down in the regular block. Tunnel manages its own
+// express.raw() body parsing internally. Mounted here (after helmet
+// + cors + global json + urlencoded) so it still benefits from CORS
+// pre-flight handling for cross-origin POSTs from app.haveniq.org.
+app.use('/api', require('./routes/sentryTunnel'));
+
 // Global rate limit
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -262,12 +270,8 @@ app.use('/', require('./routes/matchOutcomes'));      // /bot-admin/pending-chec
 // dispatch the auto-fix workflow without waiting for the every-15-min
 // cron. End-to-end: error → production fix in ~5-7 min for safe bugs.
 app.use('/sentry', require('./routes/sentryWebhook'));
-// Sentry tunnel — frontend Sentry SDK POSTs envelopes here instead of
-// directly to sentry.io. Backend forwards server-side. Bypasses ad
-// blockers (uBlock, AdBlock, Brave Shields) and iOS Safari's built-in
-// Cross-Site Tracking Prevention that block the direct path. Without
-// this, ~30-40% of real users' errors never reach Sentry.
-app.use('/api', require('./routes/sentryTunnel'));
+// Sentry tunnel is mounted ABOVE in the middleware block. See its
+// comment for the body-parser-bypass rationale.
 app.use('/assistant', require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
