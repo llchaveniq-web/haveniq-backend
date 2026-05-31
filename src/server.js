@@ -254,12 +254,6 @@ app.get('/health', (req, res) => res.json({
   timestamp: new Date().toISOString(),
 }));
 
-// TEMPORARY — Sentry wiring verification. Throws on purpose to prove
-// the Sentry SDK is initialized and events reach the dashboard. Remove
-// in the next commit once verified.
-app.get('/sentry-test', (req, res, next) => {
-  next(new Error('Sentry wiring test — intentional error from /sentry-test'));
-});
 
 // 404 handler
 app.use((req, res) => res.status(404).json({ error: 'Route not found' }));
