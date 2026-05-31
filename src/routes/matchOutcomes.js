@@ -167,13 +167,26 @@ router.get('/bot-admin/pending-checkins', requireBotToken, async (req, res) => {
 router.get('/bot-admin/match-outcomes-summary', requireBotToken, async (req, res) => {
   await ensureTable();
   try {
+    // Soft-fail each query: if the table doesn't exist (fresh deployment,
+    // ensureTable race, etc.) or the WITH clause hits a Postgres syntax
+    // quirk, return an empty result instead of 500ing the whole cron.
+    const safeQuery = (sql) => pool.query(sql).catch((e) => {
+      console.warn('[match-outcomes-summary] soft-fail:', e.message);
+      return { rows: [] };
+    });
     const [byType, pairs] = await Promise.all([
-      pool.query(
+      safeQuery(
         `SELECT outcome, COUNT(*)::int AS n FROM match_outcomes GROUP BY outcome ORDER BY n DESC`
       ),
-      pool.query(
-        `SELECT COUNT(DISTINCT (LEAST(reporter_id, other_user_id), GREATEST(reporter_id, other_user_id)))::int AS n
-         FROM match_outcomes WHERE outcome = 'survey_60d'`
+      // The DISTINCT-on-tuple syntax tripped Postgres on some versions.
+      // Rewrote as a subquery that ROW()'s the pair into a single distinct
+      // value, which works across PG 12+.
+      safeQuery(
+        `SELECT COUNT(*)::int AS n FROM (
+           SELECT DISTINCT LEAST(reporter_id, other_user_id) AS a,
+                  GREATEST(reporter_id, other_user_id) AS b
+           FROM match_outcomes WHERE outcome = 'survey_60d'
+         ) sub`
       ),
     ]);
     const pairs60d = pairs.rows[0]?.n || 0;

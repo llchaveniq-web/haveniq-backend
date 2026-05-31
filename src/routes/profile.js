@@ -397,7 +397,9 @@ const { requireBotToken } = (() => {
 router.get('/bot-admin/stale-profiles', requireBotToken, async (req, res) => {
   await ensureTable();
   try {
-    // Active in last 7 days AND (no profile OR profile older than 14 days OR data_signature mismatch detected on next synth)
+    // Active in last 7 days AND (no profile OR profile older than 14 days OR data_signature mismatch detected on next synth).
+    // Soft-fail to empty list if compatibility_profiles table or its columns
+    // don't exist yet — the bot still gets a clean response and exits 0.
     const { rows } = await pool.query(`
       SELECT u.id, u.first_name, u.school
       FROM users u
@@ -412,7 +414,10 @@ router.get('/bot-admin/stale-profiles', requireBotToken, async (req, res) => {
         )
       ORDER BY cp.synthesized_at NULLS FIRST
       LIMIT 25
-    `);
+    `).catch((e) => {
+      console.warn('[profile] stale-profiles soft-fail:', e.message);
+      return { rows: [] };
+    });
     res.json({ count: rows.length, users: rows });
   } catch (err) {
     console.error('[profile] stale-profiles failed:', err);
