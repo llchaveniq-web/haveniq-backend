@@ -38,17 +38,34 @@ const router  = express.Router();
 
 const ALLOWED_HOSTS = /^(o[0-9]+\.)?ingest\.(us\.|eu\.|de\.)?sentry\.io$/i;
 
+// Stream the raw body ourselves — express.raw() / express.text() were
+// both silently rejecting multi-line bodies with custom content-types
+// (returning 0-byte 400s before the handler ran). Reading from the
+// underlying request stream sidesteps both body-parser implementations
+// AND any internal sanitization they do.
+function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    const MAX = 2 * 1024 * 1024; // 2 MB cap
+    req.on('data', (c) => {
+      total += c.length;
+      if (total > MAX) {
+        req.destroy();
+        return reject(new Error('payload too large'));
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
 router.post(
   '/__report',
-  // Sentry envelopes are newline-delimited mixed text + (sometimes)
-  // binary. express.raw() is the only body parser that reliably
-  // matches arbitrary content-types (e.g. application/x-sentry-envelope)
-  // — express.text() with type:'*/*' silently doesn't fire for some
-  // custom MIME types depending on charset / parameters.
-  express.raw({ type: () => true, limit: '2mb' }),
   async (req, res) => {
     try {
-      const envelope = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+      const envelope = await readRawBody(req);
       if (!envelope) return res.status(400).json({ error: 'empty envelope' });
 
       // First line is the envelope header (JSON). Contains the DSN.
