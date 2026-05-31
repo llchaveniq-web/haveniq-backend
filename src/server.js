@@ -75,6 +75,28 @@ const app    = express();
 app.set('trust proxy', 1); // Required for Railway / reverse proxies
 const server = http.createServer(app);
 
+// ── Sentry tunnel — mounted FIRST, before any other middleware ──────────
+// Why: helmet, the global json/urlencoded parsers, and the rate limiter
+// were collectively rejecting POSTs with content-type
+// 'application/x-sentry-envelope' (returning empty 400 with no body)
+// despite each one nominally skipping non-matching content-types.
+// Mounting here, before everything, sidesteps the entire middleware
+// chain — the tunnel route handles its own express.raw() body parsing
+// and writes its own CORS headers via a tiny inline middleware so the
+// frontend can POST cross-origin from app.haveniq.org.
+app.use('/api', (req, res, next) => {
+  // Inline CORS for this route only — needed because we run BEFORE
+  // the global cors() middleware. Accepts any origin (the route only
+  // accepts envelope POSTs, no credentials, so origin doesn't matter
+  // for security here).
+  res.setHeader('Access-Control-Allow-Origin',  req.headers.origin || '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, x-sentry-auth, sentry-trace, baggage');
+  res.setHeader('Vary', 'Origin');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+}, require('./routes/sentryTunnel'));
+
 // ── Socket.io (real-time messaging) ──────────────────────────────────────
 //
 // ⚠️  CURRENTLY UNUSED IN PRODUCTION (as of 2026-05-17). The web client at
@@ -218,14 +240,6 @@ app.use(express.json({
   },
 }));
 app.use(express.urlencoded({ extended: true }));
-
-// Sentry tunnel — MUST be mounted before the route mount block below
-// because the global JSON/urlencoded parsers ate the raw body when the
-// route lived down in the regular block. Tunnel manages its own
-// express.raw() body parsing internally. Mounted here (after helmet
-// + cors + global json + urlencoded) so it still benefits from CORS
-// pre-flight handling for cross-origin POSTs from app.haveniq.org.
-app.use('/api', require('./routes/sentryTunnel'));
 
 // Global rate limit
 app.use(rateLimit({
