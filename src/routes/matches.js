@@ -648,4 +648,190 @@ Output ONLY a JSON array of 3 strings (no markdown fence, no explanation):
   }
 });
 
+// ── GET /matches/:userId/explain ───────────────────────────────────────
+// Compatibility Explainer. Turns the abstract compatibility score into
+// a specific, personal narrative the user actually reads.
+//
+// The pre-launch test: do users open a match → see "94%" → swipe away,
+// or do they open a match → see WHY it's 94% → actually message? This
+// is the bot that closes that gap. Renders on Match Detail screen as
+// the card between the photo and the compat bars.
+//
+// Data sources (only data the user gave us):
+//   • Both users' quiz answers — find agreement + divergence points
+//   • Both users' profile fields (school, year, major, bio)
+//   • Both users' synthesized Compatibility Profiles (if available)
+//
+// 24h server-side cache per (viewer, target) pair. ~$0.05 per
+// generation. At 100 users × 10 match-opens/day = ~$50/mo.
+const explainerCache = new Map();
+const EXPLAIN_TTL_MS = 24 * 60 * 60 * 1000;
+
+router.get('/:userId/explain', requireAuth, async (req, res) => {
+  const viewerId = req.user.id;
+  const targetId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(targetId) || targetId === viewerId) {
+    return res.status(400).json({ error: 'invalid target user id' });
+  }
+
+  const cacheKey = `${viewerId}:${targetId}`;
+  const cached = explainerCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json({ ...cached.payload, cached: true });
+  }
+
+  const ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY ?? '').replace(/[^!-~]/g, '');
+  if (!ANTHROPIC_KEY) {
+    return res.status(503).json({ error: 'Explainer unavailable (ANTHROPIC_API_KEY not set)' });
+  }
+
+  try {
+    // Pull both users' profile fields. Strict allowlist — never email,
+    // never phone, never address.
+    const { rows: userRows } = await pool.query(
+      `SELECT id, first_name, school, school_year, major, bio
+       FROM users
+       WHERE id IN ($1, $2)`,
+      [viewerId, targetId]
+    );
+    const me = userRows.find((r) => r.id === viewerId);
+    const them = userRows.find((r) => r.id === targetId);
+    if (!me || !them) {
+      return res.status(404).json({ error: 'one or both users not found' });
+    }
+
+    // Quiz overlap analysis — which questions agree, which diverge?
+    const { rows: quizRows } = await pool.query(
+      `SELECT user_id, question_id, answer_value
+       FROM quiz_answers
+       WHERE user_id IN ($1, $2)`,
+      [viewerId, targetId]
+    ).catch(() => ({ rows: [] }));
+    const myAns    = new Map(quizRows.filter((r) => r.user_id === viewerId).map((r) => [r.question_id, r.answer_value]));
+    const theirAns = new Map(quizRows.filter((r) => r.user_id === targetId).map((r) => [r.question_id, r.answer_value]));
+    const agreements = [];
+    const divergences = [];
+    for (const [qid, val] of myAns) {
+      if (!theirAns.has(qid)) continue;
+      const theirs = theirAns.get(qid);
+      if (theirs === val) agreements.push({ question_id: qid, both: val });
+      else divergences.push({ question_id: qid, you: val, them: theirs });
+    }
+
+    // Synthesized Compatibility Profiles (if either user has one)
+    let myProfile = null, theirProfile = null;
+    try {
+      const { rows: profRows } = await pool.query(
+        `SELECT user_id, profile, user_edits
+         FROM compatibility_profiles WHERE user_id IN ($1, $2)`,
+        [viewerId, targetId]
+      );
+      const my = profRows.find((r) => r.user_id === viewerId);
+      const th = profRows.find((r) => r.user_id === targetId);
+      if (my) myProfile = { ...my.profile, ...(my.user_edits || {}) };
+      if (th) theirProfile = { ...th.profile, ...(th.user_edits || {}) };
+    } catch { /* profile table may not exist yet */ }
+
+    const prompt = `You are HavenIQ's compatibility explainer. The user just opened a match's profile and sees a high compatibility score. Your job: turn the abstract number into specific, true, READABLE narrative that makes them feel "oh, this is actually a fit." Used in the Match Detail screen on a roommate-matching app for California college students.
+
+VIEWER ("me"):
+  Name: ${me.first_name}
+  School: ${me.school ?? '?'}
+  Year: ${me.school_year ?? '?'}
+  Major: ${me.major ?? '?'}
+  Bio: ${(me.bio ?? '').slice(0, 300) || '(none)'}
+  Compatibility profile: ${myProfile ? JSON.stringify({
+    archetype: myProfile.roommate_archetype,
+    communication: myProfile.communication_style,
+    lifestyle: myProfile.lifestyle,
+    values: myProfile.values,
+  }) : '(not synthesized yet)'}
+
+TARGET ("them"):
+  Name: ${them.first_name}
+  School: ${them.school ?? '?'}
+  Year: ${them.school_year ?? '?'}
+  Major: ${them.major ?? '?'}
+  Bio: ${(them.bio ?? '').slice(0, 300) || '(none)'}
+  Compatibility profile: ${theirProfile ? JSON.stringify({
+    archetype: theirProfile.roommate_archetype,
+    communication: theirProfile.communication_style,
+    lifestyle: theirProfile.lifestyle,
+    values: theirProfile.values,
+  }) : '(not synthesized yet)'}
+
+QUIZ OVERLAP:
+  Both agreed on ${agreements.length} question(s).
+  Diverged on ${divergences.length} question(s).
+  Sample agreements: ${agreements.slice(0, 4).map(a => `Q${a.question_id}="${a.both}"`).join(', ') || 'none'}
+  Sample divergences: ${divergences.slice(0, 3).map(d => `Q${d.question_id}: you="${d.you}" / them="${d.them}"`).join(', ') || 'none'}
+
+VOICE RULES:
+- Sound like a college friend pointing something out, not a marketing email.
+- Use first names. Use specific details. NO emojis. NO exclamation points.
+- Honesty over flattery — if there's a real difference, name it.
+- "Talk about it" framing for divergences, not "this is a red flag" framing.
+- 50-90 words total in 'story'. Brevity matters.
+
+Return ONLY JSON:
+{
+  "headline":      "<one short sentence, evocative, no marketing fluff, e.g. 'You two would share a quiet morning well.'>",
+  "story":         "<2-3 sentences in the voice above. Uses both first names. References specific shared things. Names ONE specific tension if it exists, framed as 'worth a conversation' not 'concern'.>",
+  "agreements":    [{ "topic": "<short label>", "detail": "<one short clause>" }, ...],
+  "tension_points":[{ "topic": "<short label>", "you_said": "<your stance>", "they_said": "<their stance>" }, ...],
+  "vibe":          "<2-4 word label, lowercase, evocative, e.g. 'low-friction, real talk' or 'quiet anchor energy'>"
+}
+
+agreements: up to 3 items, only ones with real signal.
+tension_points: 0-2 items, only ones genuinely worth surfacing.
+No markdown fence. No explanation outside JSON.`;
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 1200,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      console.error('[explainer] Anthropic call failed:', r.status, text.slice(0, 200));
+      return res.status(502).json({ error: 'Explainer generation failed' });
+    }
+    const j = await r.json();
+    const text = (j.content || []).find((b) => b.type === 'text')?.text ?? '{}';
+
+    let payload;
+    try {
+      payload = JSON.parse(text.replace(/^```(?:json)?\s*/, '').replace(/\s*```\s*$/, '').trim());
+    } catch {
+      return res.status(502).json({ error: 'Explainer returned unparseable output' });
+    }
+
+    // Defensive shape
+    payload.headline       = typeof payload.headline === 'string' ? payload.headline.slice(0, 200) : '';
+    payload.story          = typeof payload.story === 'string' ? payload.story.slice(0, 1000) : '';
+    payload.agreements     = Array.isArray(payload.agreements) ? payload.agreements.slice(0, 3) : [];
+    payload.tension_points = Array.isArray(payload.tension_points) ? payload.tension_points.slice(0, 2) : [];
+    payload.vibe           = typeof payload.vibe === 'string' ? payload.vibe.slice(0, 60) : '';
+
+    if (!payload.headline || !payload.story) {
+      return res.status(502).json({ error: 'Explainer produced empty output' });
+    }
+
+    explainerCache.set(cacheKey, { payload, expiresAt: Date.now() + EXPLAIN_TTL_MS });
+    res.json({ ...payload, cached: false });
+  } catch (err) {
+    console.error('[explainer] failed:', err);
+    res.status(500).json({ error: 'Explainer generation failed' });
+  }
+});
+
 module.exports = router;
