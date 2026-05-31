@@ -30,12 +30,23 @@ if (!isProd && allowedOrigins.includes('*')) {
   // eslint-disable-next-line no-console
   console.warn('[cors] CLIENT_URL not set — defaulting to "*" for dev. Set it for production.');
 }
+// Cloudflare Pages always serves the same app at THREE shapes of URL:
+//   • haveniq-app.pages.dev          (production alias)
+//   • master.haveniq-app.pages.dev   (master branch alias)
+//   • <hash>.haveniq-app.pages.dev   (per-deployment immutable URL)
+// All three are us. Always allow them so the original CORS-rejection
+// class of bug (Sentry NODE-1) can never re-fire just because a user
+// hit a different alias of our own frontend.
+const PAGES_DEV_HOST = /^https:\/\/([a-z0-9-]+\.)?haveniq-app\.pages\.dev$/i;
+
 const corsOrigin = allowedOrigins.includes('*')
   ? true  // express-cors treats `true` as "reflect request origin" — works for browsers but doesn't accept credentials with `*` literal
   : (origin, cb) => {
       // Same-origin / curl requests have no Origin header — let them through.
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
+      // Our own Cloudflare Pages aliases — always trusted, regardless of CLIENT_URL.
+      if (PAGES_DEV_HOST.test(origin)) return cb(null, true);
       cb(new Error(`CORS: ${origin} not in allowed list`));
     };
 
