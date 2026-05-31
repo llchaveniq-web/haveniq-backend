@@ -139,4 +139,92 @@ router.post('/consent', requireAuth, async (req, res) => {
   }
 });
 
+// ─── POST /telemetry/report ──────────────────────────────────────────────
+// In-app "Report a problem" button — catches the bugs Sentry can't (silent
+// UI failures, confusing UX, wrong-color complaints). Posts to Discord
+// via DISCORD_WEBHOOK_URL so the founder sees it inline with the other
+// bot alerts. Rate-limited to one report per user per 60 sec to prevent
+// accidental spam from a stuck button.
+const recentReports = new Map(); // userId -> last-report timestamp
+router.post('/report', requireAuth, async (req, res) => {
+  const userId = req.user.id;
+  const { message, screen, userAgent, appVersion } = req.body || {};
+
+  if (typeof message !== 'string' || message.trim().length < 3) {
+    return res.status(400).json({ error: 'message required (min 3 chars)' });
+  }
+  if (message.length > 2000) {
+    return res.status(400).json({ error: 'message too long (max 2000 chars)' });
+  }
+
+  // Per-user 60-sec rate limit
+  const now = Date.now();
+  const last = recentReports.get(userId) || 0;
+  if (now - last < 60_000) {
+    return res.status(429).json({ error: 'please wait a minute before reporting again' });
+  }
+  recentReports.set(userId, now);
+
+  // Best-effort: log to the DB so we have a permanent audit trail
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS user_problem_reports (
+         id          BIGSERIAL PRIMARY KEY,
+         user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         message     TEXT NOT NULL,
+         screen      TEXT,
+         user_agent  TEXT,
+         app_version TEXT,
+         created_at  TIMESTAMPTZ DEFAULT NOW()
+       )`
+    );
+    await pool.query(
+      `INSERT INTO user_problem_reports (user_id, message, screen, user_agent, app_version)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [userId, message.trim(), screen ?? null, userAgent ?? null, appVersion ?? null]
+    );
+  } catch (err) {
+    console.error('[telemetry/report] DB insert failed:', err.message);
+    // Don't block the response — still attempt Discord post below
+  }
+
+  // Forward to Discord (fire-and-forget, but log failures)
+  const hook = process.env.DISCORD_WEBHOOK_URL;
+  if (hook) {
+    try {
+      // Pull a bit of user context so the founder can recognize who it is
+      const { rows } = await pool.query(
+        'SELECT email, first_name, school FROM users WHERE id = $1',
+        [userId]
+      );
+      const u = rows[0] || {};
+      const r = await fetch(hook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          embeds: [{
+            title: '🙋 User-reported problem',
+            description: '```' + message.trim().slice(0, 1900) + '```',
+            color: 0xF59E0B,
+            fields: [
+              { name: 'User', value: `${u.first_name ?? '?'} <${u.email ?? '?'}>`, inline: true },
+              { name: 'School', value: u.school ?? '—', inline: true },
+              { name: 'Screen', value: screen || '—', inline: true },
+              { name: 'App version', value: appVersion || '—', inline: true },
+              { name: 'Device', value: (userAgent || '—').slice(0, 200), inline: false },
+            ],
+            footer: { text: 'In-app report • user tapped Report a Problem' },
+            timestamp: new Date().toISOString(),
+          }],
+        }),
+      });
+      if (!r.ok) console.error('[telemetry/report] Discord webhook returned', r.status);
+    } catch (err) {
+      console.error('[telemetry/report] Discord post failed:', err.message);
+    }
+  }
+
+  res.json({ received: true });
+});
+
 module.exports = router;
