@@ -247,6 +247,11 @@ app.use('/admin/safety', require('./routes/adminSafety'));
 // (signup auto-review, weekly digest). Returns 503 until ADMIN_BOT_TOKEN
 // is set in env.
 app.use('/bot-admin', require('./routes/botAdmin'));
+// Compatibility Profile — synthesizes user's quiz + bio + messages +
+// behavior into a structured personality profile. Routes split between
+// /users/me/profile (user-facing) and /bot-admin/synthesize (cron).
+app.use('/users', require('./routes/profile'));      // GET/POST/PATCH/DELETE /users/me/profile/*
+app.use('/', require('./routes/profile'));            // GET /bot-admin/stale-profiles + POST /bot-admin/synthesize/:userId
 app.use('/assistant', require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
