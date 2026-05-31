@@ -162,8 +162,13 @@ async function postDiscord(report, triage, fixDispatched) {
 
 async function dispatchAutoFix(triage, report) {
   if (!GH_FIX_TOKEN) return false;
-  if (!triage.fix_eligible) return false;
-  if (!FIX_ELIGIBLE_BUG_CLASSES.has(triage.bug_class)) return false;
+  // Founder explicitly wants the bot to attempt fixes even when Claude
+  // hedges on confidence. We dispatch when the bug class is in our
+  // allowlist OR when severity is HIGH/CRITICAL. Health check +
+  // auto-revert is the safety net if a fix ships wrong.
+  const inAllowlist = FIX_ELIGIBLE_BUG_CLASSES.has(triage.bug_class);
+  const highSeverity = ['high', 'critical'].includes((triage.severity || '').toLowerCase());
+  if (!inAllowlist && !highSeverity) return false;
   if (isHardBlocked(triage.likely_file)) return false;
   if (!triage.likely_file) return false;
 
