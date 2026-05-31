@@ -40,12 +40,15 @@ const ALLOWED_HOSTS = /^(o[0-9]+\.)?ingest\.(us\.|eu\.|de\.)?sentry\.io$/i;
 
 router.post(
   '/__report',
-  // Sentry envelopes are NOT JSON — they're newline-delimited mixed
-  // text. Parse as text so we get the raw body intact.
-  express.text({ type: '*/*', limit: '2mb' }),
+  // Sentry envelopes are newline-delimited mixed text + (sometimes)
+  // binary. express.raw() is the only body parser that reliably
+  // matches arbitrary content-types (e.g. application/x-sentry-envelope)
+  // — express.text() with type:'*/*' silently doesn't fire for some
+  // custom MIME types depending on charset / parameters.
+  express.raw({ type: () => true, limit: '2mb' }),
   async (req, res) => {
     try {
-      const envelope = typeof req.body === 'string' ? req.body : '';
+      const envelope = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
       if (!envelope) return res.status(400).json({ error: 'empty envelope' });
 
       // First line is the envelope header (JSON). Contains the DSN.
