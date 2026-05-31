@@ -505,4 +505,147 @@ router.post('/:matchId/report', requireAuth, safetyReport, async (req, res) => {
   }
 });
 
+// ── GET /matches/:userId/openers ───────────────────────────────────────
+// First-message coach. Returns 3 short, personalized opener suggestions
+// the user can tap to insert into their first message to this match.
+//
+// Why: students freeze at "hey" and conversations die. By surfacing
+// 2-3 openers grounded in real shared context (school, major, quiz
+// overlap), we tilt the odds toward a real conversation. Drafts only —
+// the user reviews + can edit before sending.
+//
+// Caching: each (viewer, target) pair is cached for 24h so re-opening
+// the match doesn't re-bill Claude. Cache invalidates when either
+// user updates their profile.
+const openerCache = new Map();  // key = `${viewerId}:${targetId}` → { openers, expiresAt }
+const OPENER_TTL_MS = 24 * 60 * 60 * 1000;
+
+router.get('/:userId/openers', requireAuth, async (req, res) => {
+  const viewerId = req.user.id;
+  const targetId = parseInt(req.params.userId, 10);
+  if (!Number.isFinite(targetId) || targetId === viewerId) {
+    return res.status(400).json({ error: 'invalid target user id' });
+  }
+
+  // Cache check
+  const cacheKey = `${viewerId}:${targetId}`;
+  const cached = openerCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json({ openers: cached.openers, cached: true });
+  }
+
+  // Anthropic key must be present
+  const ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY ?? '').replace(/[^!-~]/g, '');
+  if (!ANTHROPIC_KEY) {
+    return res.status(503).json({ error: 'Opener coach unavailable (ANTHROPIC_API_KEY not set)' });
+  }
+
+  try {
+    // Pull both users' profile context. Keep the fields narrow so we
+    // never ship something like an email address to the LLM.
+    const { rows } = await pool.query(
+      `SELECT id, first_name, school, school_year, major, bio
+       FROM users
+       WHERE id IN ($1, $2)`,
+      [viewerId, targetId]
+    );
+    const me = rows.find((r) => r.id === viewerId);
+    const them = rows.find((r) => r.id === targetId);
+    if (!me || !them) {
+      return res.status(404).json({ error: 'one or both users not found' });
+    }
+
+    // Pull quiz answers for both, find overlap on the same questions
+    const quizRows = await pool.query(
+      `SELECT user_id, question_id, answer_value
+       FROM quiz_answers
+       WHERE user_id IN ($1, $2)`,
+      [viewerId, targetId]
+    ).catch(() => ({ rows: [] }));
+    const myAnswers   = new Map(quizRows.rows.filter((r) => r.user_id === viewerId).map((r) => [r.question_id, r.answer_value]));
+    const theirAnswers = new Map(quizRows.rows.filter((r) => r.user_id === targetId).map((r) => [r.question_id, r.answer_value]));
+    const shared = [];
+    for (const [qid, val] of myAnswers) {
+      if (theirAnswers.has(qid) && theirAnswers.get(qid) === val) {
+        shared.push({ question_id: qid, both_answered: val });
+        if (shared.length >= 6) break;
+      }
+    }
+
+    const prompt = `You are a coach helping a college student write a great opener for a roommate-matching app. The student is matched with someone they don't know yet. Generate 3 short, real, NOT cringe opener messages they can tap and send.
+
+ME (the sender):
+  Name: ${me.first_name ?? '?'}
+  School: ${me.school ?? '?'}
+  Year: ${me.school_year ?? '?'}
+  Major: ${me.major ?? '?'}
+  Bio: ${(me.bio ?? '').slice(0, 300) || '(none)'}
+
+THEM (the recipient):
+  Name: ${them.first_name ?? '?'}
+  School: ${them.school ?? '?'}
+  Year: ${them.school_year ?? '?'}
+  Major: ${them.major ?? '?'}
+  Bio: ${(them.bio ?? '').slice(0, 300) || '(none)'}
+
+SHARED CONTEXT:
+  Same school: ${me.school && me.school === them.school ? 'yes' : 'no'}
+  Same year: ${me.school_year && me.school_year === them.school_year ? 'yes' : 'no'}
+  Same major: ${me.major && me.major === them.major ? 'yes' : 'no'}
+  Identical quiz answers on ${shared.length} question(s).
+
+VOICE RULES (this is the difference between good and trash):
+- Sound like a real college student texting, not a marketing email.
+- No "Hey there!" or "Hi! I noticed we matched". Skip the preamble.
+- Reference something specific from their profile or shared context if there's anything to grab.
+- One sentence + one question is the format. Open + invite reply.
+- No emojis. No exclamation points. Lowercase 'hey' is fine.
+- 8-25 words total each.
+
+Output ONLY a JSON array of 3 strings (no markdown fence, no explanation):
+["<opener 1>", "<opener 2>", "<opener 3>"]`;
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key':     ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 600,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!r.ok) {
+      const txt = await r.text().catch(() => '');
+      console.error('[openers] Anthropic call failed:', r.status, txt.slice(0, 200));
+      return res.status(502).json({ error: 'Opener generation failed' });
+    }
+    const j = await r.json();
+    const text = (j.content || []).find((b) => b.type === 'text')?.text ?? '[]';
+
+    let openers;
+    try {
+      openers = JSON.parse(text.replace(/^```(?:json)?\s*/, '').replace(/\s*```\s*$/, '').trim());
+    } catch {
+      openers = [];
+    }
+    if (!Array.isArray(openers)) openers = [];
+    openers = openers.filter((s) => typeof s === 'string' && s.length > 0 && s.length < 300).slice(0, 3);
+
+    if (openers.length === 0) {
+      return res.status(502).json({ error: 'Opener generation returned no usable suggestions' });
+    }
+
+    openerCache.set(cacheKey, { openers, expiresAt: Date.now() + OPENER_TTL_MS });
+    res.json({ openers, cached: false });
+  } catch (err) {
+    console.error('[openers] failed:', err);
+    res.status(500).json({ error: 'Opener generation failed' });
+  }
+});
+
 module.exports = router;

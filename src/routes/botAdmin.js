@@ -444,4 +444,56 @@ router.get('/monthly-rollup', requireBotToken, async (req, res) => {
   }
 });
 
+// ── GET /bot-admin/quiz-dropoffs ───────────────────────────────────────
+// Powers the quiz-dropoff recovery bot. Returns users who:
+//   • answered at least 1 quiz question
+//   • have NOT completed the quiz
+//   • last quiz activity was 24h+ ago (gives them time to come back naturally)
+//   • not banned, not paused, signed up at least 24h ago
+// Capped at 30 per run. Includes the question they stopped at so
+// Claude can craft a personal "checking in" note.
+router.get('/quiz-dropoffs', requireBotToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      WITH last_answer AS (
+        SELECT
+          user_id,
+          MAX(created_at) AS last_answered_at,
+          COUNT(*)        AS answered_count,
+          MAX(question_id) AS last_question_id
+        FROM quiz_answers
+        GROUP BY user_id
+      )
+      SELECT
+        u.id, u.email, u.first_name, u.school, u.school_year, u.major,
+        u.created_at,
+        la.answered_count,
+        la.last_question_id,
+        la.last_answered_at,
+        EXTRACT(EPOCH FROM (NOW() - la.last_answered_at))::int / 3600 AS hours_since_last_answer,
+        EXTRACT(EPOCH FROM (NOW() - u.created_at))::int / 86400        AS days_since_signup
+      FROM users u
+      JOIN last_answer la ON la.user_id = u.id
+      WHERE
+        u.created_at < NOW() - INTERVAL '24 hours'
+        AND COALESCE(u.quiz_completed, FALSE) = FALSE
+        AND COALESCE(u.is_banned,   FALSE) = FALSE
+        AND COALESCE(u.is_paused,   FALSE) = FALSE
+        AND la.last_answered_at < NOW() - INTERVAL '24 hours'
+        AND la.last_answered_at > NOW() - INTERVAL '30 days'
+      ORDER BY la.last_answered_at DESC
+      LIMIT 30
+    `).catch((e) => {
+      // If quiz_answers table or its columns don't exist yet, return empty
+      // instead of 500. The bot still runs and posts a healthy heartbeat.
+      console.warn('[botAdmin] quiz-dropoffs query soft-failed:', e.message);
+      return { rows: [] };
+    });
+    res.json({ count: rows.length, dropoffs: rows });
+  } catch (err) {
+    console.error('[botAdmin] quiz-dropoffs failed:', err);
+    res.status(500).json({ error: 'Quiz dropoffs query failed' });
+  }
+});
+
 module.exports = router;
