@@ -252,6 +252,11 @@ app.use('/bot-admin', require('./routes/botAdmin'));
 // /users/me/profile (user-facing) and /bot-admin/synthesize (cron).
 app.use('/users', require('./routes/profile'));      // GET/POST/PATCH/DELETE /users/me/profile/*
 app.use('/', require('./routes/profile'));            // GET /bot-admin/stale-profiles + POST /bot-admin/synthesize/:userId
+// Match Outcomes — the data infrastructure that lets the matching
+// algorithm eventually learn from real roommate outcomes. Captures
+// 60-day check-ins, lease decisions, ended relationships.
+app.use('/users', require('./routes/matchOutcomes')); // /users/me/match-outcomes
+app.use('/', require('./routes/matchOutcomes'));      // /bot-admin/pending-checkins + summary
 app.use('/assistant', require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
