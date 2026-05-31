@@ -257,6 +257,11 @@ app.use('/', require('./routes/profile'));            // GET /bot-admin/stale-pr
 // 60-day check-ins, lease decisions, ended relationships.
 app.use('/users', require('./routes/matchOutcomes')); // /users/me/match-outcomes
 app.use('/', require('./routes/matchOutcomes'));      // /bot-admin/pending-checkins + summary
+// Tier 3 Sentry webhook — when Sentry detects a new issue, it POSTs here
+// within ~5-10 seconds. We triage immediately, post to Discord, and
+// dispatch the auto-fix workflow without waiting for the every-15-min
+// cron. End-to-end: error → production fix in ~5-7 min for safe bugs.
+app.use('/sentry', require('./routes/sentryWebhook'));
 app.use('/assistant', require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
