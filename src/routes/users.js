@@ -818,12 +818,12 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
       } else if (daysSince === 0) {
         noticings.push({
           icon: '✦',
-          line: `welcome. you joined today — you're one of the earliest students on the platform.`,
+          line: `welcome. take the quiz when you have ten minutes — that's when haveniq starts working.`,
         });
       } else if (daysSince <= 3) {
         noticings.push({
           icon: '✦',
-          line: `you joined ${daysSince} day${daysSince === 1 ? '' : 's'} ago. settling in is a process — no rush.`,
+          line: `you joined ${daysSince} day${daysSince === 1 ? '' : 's'} ago. no rush.`,
         });
       }
     }
