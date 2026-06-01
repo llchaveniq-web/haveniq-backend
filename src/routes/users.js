@@ -813,7 +813,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
       if (signupHour >= 22 || signupHour < 5) {
         noticings.push({
           icon: '☾',
-          line: 'you joined haveniq at a quiet hour. that tracks with the kind of careful people who do well here.',
+          line: 'you joined haveniq at a quiet hour.',
         });
       } else if (daysSince === 0) {
         noticings.push({
