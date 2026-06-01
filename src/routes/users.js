@@ -476,6 +476,128 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
   }
 });
 
+// ── POST /users/me/photo/quality-check ───────────────────────────────────
+// AI photo-quality scorer. Frontend calls this after a successful upload
+// to get a Claude-vision grade of the photo. If quality is low we surface
+// a soft "want to try another?" prompt to the user. Doesn't block — the
+// upload already succeeded, this is purely advisory.
+//
+// Why: profile photos disproportionately drive match-message rates in
+// every matching app ever studied. A sharp, well-lit head shot gets
+// 2-3x the response rate of a dark / sunglasses / group-photo / full-body
+// shot. We don't want to be condescending about photo choice, but a
+// gentle nudge before someone misses matches is worth the API cost.
+//
+// Cost: ~$0.003 per check (one Claude vision call, small image). At 100
+// new signups/month + occasional re-uploads ≈ ~$1/month at scale.
+router.post('/me/photo/quality-check', requireAuth, async (req, res) => {
+  const { url } = req.body || {};
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'photo url required' });
+  }
+  // Basic URL sanity — only accept HTTPS URLs from our Cloudinary CDN.
+  if (!/^https:\/\/res\.cloudinary\.com\//.test(url)) {
+    return res.status(400).json({ error: 'only Cloudinary-hosted photos accepted' });
+  }
+
+  const ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY ?? '').replace(/[^!-~]/g, '');
+  if (!ANTHROPIC_KEY) {
+    // Soft-fail: photo upload already succeeded, quality check is best-effort
+    return res.json({ score: null, summary: 'Quality check unavailable', issues: [], suggestion: null, good_enough: true });
+  }
+
+  try {
+    const prompt = `You are scoring a college student's profile photo for HavenIQ, a roommate-matching app. Be HONEST but KIND — students get demoralized by harsh photo feedback. The goal is to help them get more matches, not to grade their attractiveness.
+
+WHAT TO ASSESS (in order of importance for a roommate-matching profile):
+  1. Is the person clearly visible? Face + at least shoulders, well-lit, in focus
+  2. Are their eyes visible? (sunglasses are a soft red flag, esp. indoors)
+  3. Is it a SOLO photo? (group photos are confusing — who is the user?)
+  4. Is the framing reasonable? (Not a tiny dot from across a room, not a selfie 2 inches from the lens)
+  5. Does it look recent and authentic? (Filter-heavy or AI-generated reads as inauthentic)
+
+WHAT'S FINE:
+  - Plain background, slight smile, normal clothes — most photos
+  - Slight cropping, casual lighting, hat indoors
+  - Not posed / professional — students aren't supposed to look like LinkedIn headshots
+
+WHAT'S A REAL PROBLEM:
+  - Face not visible (back of head, way too dark, hands over face)
+  - Multiple equally-prominent people with no clear "main"
+  - Major facial obstruction (full sunglasses + hat + mask)
+  - Heavily blurry / out of focus
+  - Generic stock/AI photo
+
+Respond ONLY with JSON. No markdown:
+{
+  "score": <integer 0-100, where 70+ = "good enough">,
+  "summary": "<one short, friendly, observational sentence — like a friend texting>",
+  "issues": ["<short issue 1>", "<short issue 2>"],     // 0-3 items; empty array if photo is fine
+  "suggestion": "<one actionable suggestion, or null if photo is fine>",
+  "good_enough": <boolean — true if score >= 70 OR if it's borderline but the issues are minor>
+}
+
+Examples of good summaries:
+  - "Clear face, good light — solid choice."
+  - "Hard to see your eyes with the sunglasses on."
+  - "Cool photo but it's hard to tell which person is you."
+Examples of bad summaries (do NOT write like this):
+  - "This photo is bad."
+  - "You should retake this photo."
+  - "Your face is obscured."  (clinical, not warm)`;
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 600,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'url', url } },
+            { type: 'text', text: prompt },
+          ],
+        }],
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      console.error('[photo-quality] Anthropic', r.status, text.slice(0, 200));
+      // Soft-fail — don't block the user
+      return res.json({ score: null, summary: 'Quality check unavailable', issues: [], suggestion: null, good_enough: true });
+    }
+    const j = await r.json();
+    const text = (j.content || []).find((b) => b.type === 'text')?.text ?? '{}';
+    let payload;
+    try {
+      payload = JSON.parse(text.replace(/^```(?:json)?\s*/, '').replace(/\s*```\s*$/, '').trim());
+    } catch {
+      return res.json({ score: null, summary: 'Quality check unavailable', issues: [], suggestion: null, good_enough: true });
+    }
+
+    // Defensive shape — never trust Claude to be perfect
+    const out = {
+      score:       typeof payload.score === 'number' ? Math.max(0, Math.min(100, Math.round(payload.score))) : null,
+      summary:     typeof payload.summary === 'string' ? payload.summary.slice(0, 200) : '',
+      issues:      Array.isArray(payload.issues) ? payload.issues.slice(0, 3).map(String) : [],
+      suggestion:  typeof payload.suggestion === 'string' ? payload.suggestion.slice(0, 200) : null,
+      good_enough: payload.good_enough !== false, // default to true unless explicitly false
+    };
+    res.json(out);
+  } catch (err) {
+    console.error('[photo-quality] failed:', err.message);
+    // Soft-fail in all cases
+    res.json({ score: null, summary: 'Quality check unavailable', issues: [], suggestion: null, good_enough: true });
+  }
+});
+
 // ── POST /users/me/photo ──────────────────────────────────────────────────
 // Multipart upload of profile photo. Stores to Cloudinary, saves URL to
 // users.photo_url. Returns `{ url }` — matches the frontend ProfileAPI
