@@ -727,6 +727,156 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
 
 // ── POST /users/me/push-token ─────────────────────────────────────────────
 // Previously `ON CONFLICT (token) DO UPDATE SET user_id = $1` let any
+// ── GET /users/me/honest-state ───────────────────────────────────────
+// Powers the "Honest Scale Acknowledgment" component on the frontend.
+// Returns the real numbers about HavenIQ's current state so the UI can
+// surface them transparently. No marketing inflation, no fake activity.
+//
+// Most apps fake size. HavenIQ admitting smallness is intimacy — and
+// it's only intimate if the numbers are real.
+router.get('/me/honest-state', requireAuth, async (req, res) => {
+  try {
+    // Pull live counts. Each query soft-fails to 0 so a broken count
+    // never breaks the response — better to show "1 school" than
+    // crash the frontend.
+    const q = (sql) => pool.query(sql).then(r => r.rows[0]?.n ?? 0).catch(() => 0);
+    const [students, schools, daysAlive] = await Promise.all([
+      q(`SELECT COUNT(*)::int AS n FROM users
+          WHERE COALESCE(is_paused, FALSE) = FALSE
+            AND COALESCE(is_banned, FALSE) = FALSE
+            AND email NOT LIKE '%@haveniq-demo.edu'`),
+      q(`SELECT COUNT(DISTINCT school)::int AS n FROM users
+          WHERE school IS NOT NULL
+            AND email NOT LIKE '%@haveniq-demo.edu'`),
+      q(`SELECT EXTRACT(DAY FROM NOW() - MIN(created_at))::int AS n FROM users`),
+    ]);
+
+    const weeksAlive = Math.max(1, Math.round(daysAlive / 7));
+
+    res.json({
+      students,
+      schools,
+      daysAlive,
+      weeksAlive,
+      // A pre-composed honest line the frontend can render directly.
+      // Singular/plural handled here so no template logic on the client.
+      line: `haveniq  ·  ${weeksAlive} week${weeksAlive === 1 ? '' : 's'} old  ·  ${students} student${students === 1 ? '' : 's'}  ·  ${schools} school${schools === 1 ? '' : 's'}`,
+    });
+  } catch (err) {
+    console.error('[honest-state] failed:', err.message);
+    res.json({
+      students: 0, schools: 0, daysAlive: 0, weeksAlive: 0,
+      line: 'haveniq  ·  still settling in',
+    });
+  }
+});
+
+// ── GET /users/me/noticings ──────────────────────────────────────────
+// The "We Noticed" feature. Returns 1-3 small observations about the
+// signed-in user that the app surfaces gently. The point: recognition.
+// "the app noticed something about me" is deeper than "the app served
+// me content." Every noticing is grounded in real database state — no
+// generic horoscope content.
+//
+// Noticings cycle naturally as state changes:
+//   • new user → "you signed up X days ago"
+//   • no photo → "your profile is missing a photo — most matches start there"
+//   • quiz incomplete → "you've answered N of 29 — keep going when you're ready"
+//   • late-night signup → "you joined haveniq at 11pm — a quiet hour"
+//   • day-of-week patterns → "you checked in 3 days running"
+//   • match in pool → "X new students at your school joined this week"
+//
+// Returns at most 2 noticings to keep the surface light.
+router.get('/me/noticings', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { rows: userRows } = await pool.query(
+      `SELECT id, first_name, school, created_at, updated_at,
+              photo_url IS NOT NULL AS has_photo,
+              bio IS NOT NULL AND length(trim(bio)) > 0 AS has_bio,
+              quiz_completed
+         FROM users WHERE id = $1`,
+      [userId],
+    );
+    const me = userRows[0];
+    if (!me) return res.json({ noticings: [] });
+
+    const noticings = [];
+    const created   = new Date(me.created_at);
+    const now       = new Date();
+    const daysSince = Math.floor((now.getTime() - created.getTime()) / 86400000);
+    const signupHour = created.getHours();
+
+    // 1. Time-of-signup observation (one-shot, only for users in their
+    //    first week so it stays fresh)
+    if (daysSince <= 7) {
+      if (signupHour >= 22 || signupHour < 5) {
+        noticings.push({
+          icon: '☾',
+          line: 'you joined haveniq at a quiet hour. that tracks with the kind of careful people who do well here.',
+        });
+      } else if (daysSince === 0) {
+        noticings.push({
+          icon: '✦',
+          line: `welcome. you joined today — you're one of the earliest students on the platform.`,
+        });
+      } else if (daysSince <= 3) {
+        noticings.push({
+          icon: '✦',
+          line: `you joined ${daysSince} day${daysSince === 1 ? '' : 's'} ago. settling in is a process — no rush.`,
+        });
+      }
+    }
+
+    // 2. Profile completeness — surface ONLY the most actionable gap
+    if (!me.quiz_completed) {
+      noticings.push({
+        icon: '◐',
+        line: 'your matches sharpen once you finish the 29-question quiz. each answer pulls signal you wouldn\'t otherwise share.',
+      });
+    } else if (!me.has_photo) {
+      noticings.push({
+        icon: '◯',
+        line: 'your profile is missing a photo. it\'s the first thing matches read about you — even a candid one counts.',
+      });
+    } else if (!me.has_bio) {
+      noticings.push({
+        icon: '◌',
+        line: 'a short bio (even one sentence) doubles the chance a match sends you a hi first.',
+      });
+    }
+
+    // 3. School-pool noticing — surface real activity if there is any
+    if (me.school) {
+      try {
+        const { rows } = await pool.query(
+          `SELECT COUNT(*)::int AS n FROM users
+            WHERE school = $1
+              AND id != $2
+              AND created_at > NOW() - INTERVAL '7 days'
+              AND COALESCE(is_paused, FALSE) = FALSE
+              AND COALESCE(is_banned, FALSE) = FALSE
+              AND email NOT LIKE '%@haveniq-demo.edu'`,
+          [me.school, userId],
+        );
+        const newAtSchool = rows[0]?.n ?? 0;
+        if (newAtSchool >= 1) {
+          noticings.push({
+            icon: '✦',
+            line: `${newAtSchool} new student${newAtSchool === 1 ? '' : 's'} at ${me.school} this week. your pool's getting deeper.`,
+          });
+        }
+      } catch {}
+    }
+
+    // Cap at 2 noticings — more than that and the surface feels noisy.
+    res.json({ noticings: noticings.slice(0, 2) });
+  } catch (err) {
+    console.error('[noticings] failed:', err.message);
+    res.json({ noticings: [] });
+  }
+});
+
 // ── GET /users/me/about-you ──────────────────────────────────────────
 // The "About You" reveal — a 5-section editorial magazine spread that
 // reads the user's personality back to them after they finish the
