@@ -46,9 +46,15 @@ async function ensureTable() {
   `).catch((e) => console.error('[matched_moments] ensure table:', e.message));
 }
 
+// Bump this when the Matched Moment prompt changes — folded into the
+// hash so existing cached rows invalidate on next read.
+// v2 (2026-06-01): full question text + chosen option text instead of
+// bare Q-ids. Forbids Q-numbers in output. Stops hallucination.
+const MATCHED_MOMENT_PROMPT_VERSION = 'v2';
+
 function hashAnswers(a1, a2) {
   return crypto.createHash('sha1')
-    .update(JSON.stringify(a1) + '|' + JSON.stringify(a2))
+    .update(JSON.stringify(a1) + '|' + JSON.stringify(a2) + '||prompt=' + MATCHED_MOMENT_PROMPT_VERSION)
     .digest('hex')
     .slice(0, 16);
 }
@@ -110,21 +116,40 @@ async function generatePayload(meRow, otherRow, sharedAnswers, answersMe, answer
   const otherName = otherRow.first_name || 'them';
   const school    = otherRow.school || 'your school';
 
-  // Format the shared answers as context for Claude
-  const sharedContext = sharedAnswers.map(s => `Q${s.question_id}: both chose option ${s.index_a}${s.exact ? '' : '/' + s.index_b}`).join(', ');
+  // Build rich shared-answer context with full question text + chosen
+  // option text. Bare Q-ids were causing Claude to hallucinate (see
+  // the parallel fix in /about-you).
+  const QUIZ_QUESTIONS = require('../data/quizQuestions');
+  const questionsById = Object.fromEntries(QUIZ_QUESTIONS.map(q => [q.id, q]));
+  const sharedContext = sharedAnswers
+    .map(s => {
+      const q = questionsById[s.question_id];
+      if (!q) return null;
+      const idx = typeof s.index === 'number' ? s.index : (typeof s.index_a === 'number' ? s.index_a : 0);
+      const choice = q.options?.[idx] ?? `(option ${idx})`;
+      return `  • [${q.category}] "${q.text}"\n      → both chose: "${choice}"`;
+    })
+    .filter(Boolean)
+    .join('\n');
 
   const prompt = `You are writing the "Matched Moment" reveal page for HavenIQ, a college roommate-matching app. ${meName} just matched with ${otherName} at ${school}.
 
-Both of them took a 29-question quiz built on academic frameworks (Big Five, attachment theory, Gottman, polyvagal, HEXACO, etc.). Here are the SPECIFIC questions they share answers on (same or near-same option):
-  ${sharedContext}
+Both took a 29-question quiz built on academic frameworks (Big Five, attachment theory, Gottman, polyvagal, HEXACO, executive function). Here are the SPECIFIC questions they exactly agreed on — each item is the full question text + the option they both chose. Treat these as ground truth. Never invent answers.
+
+${sharedContext}
 
 Write THREE pieces of content, all in second-person plural ("you two", "you both"), all in the HavenIQ editorial voice — warm, lowercase-friendly, literary, never marketing-speak. Never generic. Each sentence should be specific enough that ${meName} reading it goes "wait, that's actually us."
 
-1. WHY_YOU_TWO_WORK — one paragraph, 100-140 words. Reference the shared answers above by THEME (don't quote question numbers). Be honest about what the pairing predicts: low-conflict cohabitation, fast-repair patterns, shared sensory tolerance, etc. End on a single forward-looking sentence.
+CRITICAL RULES:
+- NEVER mention question numbers ("Q14", "question 9", etc.). The users have no idea what those refer to. They only know they answered 29 questions.
+- PARAPHRASE the question theme instead. Example: GOOD = "you both go quiet rather than confront" / BAD = "Q14 shows you both..."
+- Don't fabricate. If the shared list above doesn't include a topic (e.g. sleep schedule), don't write about it.
 
-2. SHARED_PATTERNS — three short observations (one sentence each, 12-20 words). Each observation grounded in one of the shared answers above. Format: "you both [verb] [behavior]." Examples: "you both go quiet before you confront." "you both repair conflicts by morning, not by talking it out that night."
+1. WHY_YOU_TWO_WORK — one paragraph, 100-140 words. Reference the shared answers thematically. Be honest about what the pairing predicts: low-conflict cohabitation, fast-repair patterns, shared sensory tolerance, etc. End on a single forward-looking sentence.
 
-3. CONVERSATION_STARTERS — three first-message drafts. NOT generic ("hey!") — first messages that reference a specific shared answer and ask a follow-up question. Each 1-2 sentences. Should sound like a thoughtful college student texting another, not like an AI generated icebreaker.
+2. SHARED_PATTERNS — three short observations (one sentence each, 12-20 words). Each grounded in one of the shared answers above. Format: "you both [verb] [behavior]." Examples: "you both go quiet before you confront." "you both repair conflicts by morning, not by talking it out that night."
+
+3. CONVERSATION_STARTERS — three first-message drafts. NOT generic ("hey!") — first messages that reference a specific shared behavior and ask a follow-up question. Each 1-2 sentences. Should sound like a thoughtful college student texting another, not like an AI-generated icebreaker.
 
 Output ONLY JSON:
 {

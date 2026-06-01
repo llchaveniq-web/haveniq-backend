@@ -908,14 +908,22 @@ async function ensureAboutYouTable() {
   `).catch((e) => console.error('[about_you_cache] ensure table:', e.message));
 }
 
+// Bump this when the About You prompt changes — the new value is folded
+// into the hash so every existing cached row invalidates on next read.
+// v2 (2026-06-01): replaced bare Q-id prompt with full question text +
+// chosen option text. Forbids Q-numbers in output. Stops Jackson's
+// "explosive anger response in Q40" hallucination.
+const ABOUT_YOU_PROMPT_VERSION = 'v2';
+
 function hashAnswers(rows) {
-  // Deterministic FNV-1a-style hash of the user's quiz answer set.
-  // Used as the cache key — re-fetching the same answers returns the
-  // cached spread instantly; an updated answer invalidates.
+  // Deterministic FNV-1a-style hash of the user's quiz answer set +
+  // the prompt version. Used as the cache key — re-fetching the same
+  // answers returns the cached spread instantly; an updated answer OR
+  // a prompt-version bump invalidates.
   const sorted = rows
     .map(r => `${r.question_id}:${JSON.stringify(r.answer_value)}`)
     .sort()
-    .join('|');
+    .join('|') + '||prompt=' + ABOUT_YOU_PROMPT_VERSION;
   let h = 0x811c9dc5;
   for (let i = 0; i < sorted.length; i++) {
     h ^= sorted.charCodeAt(i);
@@ -990,14 +998,32 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
       });
     }
 
-    // Render answers as a numbered list grounded in the actual quiz.
-    // Keep it small enough that Claude can reference specific Qs back
-    // to the user ("your Q9 answer means...") without bloating the
-    // context window.
+    // Render answers with FULL question text + the option the user
+    // actually chose. Without this Claude was hallucinating — Jackson
+    // got back a section that referenced "explosive anger response in
+    // Q40" when Q40 is actually about anxious-attachment activation.
+    // Bare Q-ids told Claude nothing; it filled in the blanks from
+    // training data.
+    //
+    // Also: the user has no idea what "Q40" is. They only see 29
+    // questions in the UI; the IDs are non-contiguous (1, 3, 9, 14,
+    // 15, 17, 22, 25, 29, 31, 32, 34, 35, 37, 40, 45, 48-63) for
+    // historical reasons. The prompt now FORBIDS Claude from
+    // referencing Q-numbers in output — it must paraphrase the theme.
+    const QUIZ_QUESTIONS = require('../data/quizQuestions');
+    const questionsById = Object.fromEntries(QUIZ_QUESTIONS.map(q => [q.id, q]));
     const answerLines = answers
       .slice()
       .sort((a, b) => a.question_id - b.question_id)
-      .map(r => `Q${r.question_id}: ${JSON.stringify(r.answer_value)}`)
+      .map(r => {
+        const q = questionsById[r.question_id];
+        if (!q) return null;
+        // answer_value is the option index (a number); map to the actual chosen-option text
+        const chosenIndex = typeof r.answer_value === 'number' ? r.answer_value : Number(r.answer_value);
+        const chosen = q.options?.[chosenIndex] ?? '(option ' + chosenIndex + ')';
+        return `  • [${q.category}] "${q.text}"\n      → user chose: "${chosen}"`;
+      })
+      .filter(Boolean)
       .join('\n');
 
     const prompt = `You are writing the "About You" editorial reveal for HavenIQ, a college roommate-matching app. The user just finished a 29-question compatibility quiz grounded in attachment theory (Bowlby), Big Five / OCEAN, Gottman communication research, polyvagal regulation, HEXACO Honesty-Humility, and executive function research.
@@ -1005,7 +1031,9 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
 This screen is the "wow, this app actually knows me" moment — the single most important brand surface in HavenIQ. The user is about to see if their matches are good; first they need to see THEMSELVES reflected back with editorial honesty + warmth.
 
 USER: ${firstName}
-THEIR ANSWERS (sorted by question id):
+
+THEIR ACTUAL ANSWERS — each item is the FULL question text + the option they chose. Treat these as ground truth. Never invent answers or claim they said something they didn't say. The category tag in [brackets] is just for your reference.
+
 ${answerLines}
 
 THEIR COMPUTED PROFILE:
@@ -1019,12 +1047,14 @@ THEIR COMPUTED PROFILE:
 WRITE 5 EDITORIAL SECTIONS. Each:
 - 70-120 words
 - Second-person voice ("you", not "the user")
-- Reference at least ONE specific quiz answer ("Your Q14 answer means...")
+- Reference at least ONE specific behavior from their answers — but PARAPHRASE the question theme. Example: GOOD = "you said you go quiet when frustrated" / BAD = "your Q9 answer means..."
+- NEVER mention question numbers, Q-ids, or "Q40 / question 14" — the user has no idea what those refer to. They only know they answered 29 questions.
 - Specific, observational, NOT horoscope-vague
 - Warm-but-honest tone — like a thoughtful friend, not a marketing voice
 - NO clichés ("you're amazing!", "what makes you you!")
 - NO advice; pure observation
 - Lowercase except proper nouns
+- Never invent answers the user didn't give. If the answer list above doesn't include a topic, don't write about it.
 
 SECTION KICKERS (exactly these, in this order):
 1. THE WAY YOU REGULATE

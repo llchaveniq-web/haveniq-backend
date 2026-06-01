@@ -158,4 +158,29 @@ module.exports = [
       "Pretty anxious until it's resolved",
       'I spiral — everything feels worse than it actually is',
     ] },
+  // ─── v6 additions (Openness + Boundary-setting + Repair-initiator) ───
+  { id: 61, category: 'personality / openness',
+    text: "In a shared apartment, you'd rather…",
+    options: [
+      'Stick to familiar routines and rhythms — comfort is in sameness',
+      'Mostly familiar with occasional new things',
+      'A regular mix of new and routine',
+      'Constant novelty — new playlists, new recipes, evolving space',
+    ] },
+  { id: 62, category: 'communication / boundaries',
+    text: "A roommate asks for a favor you'd rather not do. You usually…",
+    options: [
+      "Say yes anyway — I don't want to disappoint them",
+      'Half-yes — do it, but reluctantly',
+      'Politely decline and explain why',
+      'Straightforward no — they can ask someone else',
+    ] },
+  { id: 63, category: 'communication / repair initiation',
+    text: 'After a fight with someone you live with, who usually makes the first move to fix it?',
+    options: [
+      'Me, almost always',
+      'Me — but only after some space',
+      'Whoever cools down first',
+      'Usually them — being the first is hard for me',
+    ] },
 ];
