@@ -510,6 +510,33 @@ router.post('/me/photo/quality-check', requireAuth, async (req, res) => {
   try {
     const prompt = `You are scoring a college student's profile photo for HavenIQ, a roommate-matching app. Be HONEST but KIND — students get demoralized by harsh photo feedback. The goal is to help them get more matches, not to grade their attractiveness.
 
+You have TWO jobs in this single call:
+  A. SAFETY GATE — flag the photo as unsafe ONLY if it's clearly inappropriate for a school-affiliated roommate app.
+  B. QUALITY SCORE — friendly, observational feedback on whether it'll help them match.
+
+═══ JOB A: SAFETY GATE ═══
+
+Mark "safe": false ONLY if the photo clearly contains:
+  - Explicit nudity (genitals, bare breasts, sexual acts)
+  - Sexual or suggestive content (lingerie, swimwear posed sexually, "thirst trap" framing)
+  - Weapons brandished or pointed (guns, knives held aggressively)
+  - Drug use (visible drugs, paraphernalia, smoking marijuana on-camera)
+  - Hate symbols (swastikas, Confederate flag worn as statement, etc.)
+  - Graphic violence, blood, injury
+  - Photos of minors clearly under ~16 in adult-platform context
+
+DO NOT mark unsafe for:
+  - Beach photos in normal swimwear (not sexually posed)
+  - Casual alcohol in background (a beer at a tailgate is fine)
+  - Athletic / gym photos
+  - Costumes, edgy fashion, tattoos, piercings
+  - Anything that's just unflattering or low-quality — that's job B
+
+When unsafe, fill safety_reason with ONE short sentence the user will see (e.g. "This photo contains content that isn't appropriate for a school roommate platform — please pick a different photo.").
+When safe (default), set safety_reason to null.
+
+═══ JOB B: QUALITY ASSESS (only if safe) ═══
+
 WHAT TO ASSESS (in order of importance for a roommate-matching profile):
   1. Is the person clearly visible? Face + at least shoulders, well-lit, in focus
   2. Are their eyes visible? (sunglasses are a soft red flag, esp. indoors)
@@ -529,13 +556,17 @@ WHAT'S A REAL PROBLEM:
   - Heavily blurry / out of focus
   - Generic stock/AI photo
 
+═══ RESPONSE FORMAT ═══
+
 Respond ONLY with JSON. No markdown:
 {
-  "score": <integer 0-100, where 70+ = "good enough">,
-  "summary": "<one short, friendly, observational sentence — like a friend texting>",
-  "issues": ["<short issue 1>", "<short issue 2>"],     // 0-3 items; empty array if photo is fine
-  "suggestion": "<one actionable suggestion, or null if photo is fine>",
-  "good_enough": <boolean — true if score >= 70 OR if it's borderline but the issues are minor>
+  "safe":           <boolean — false ONLY for the explicit categories listed above; default true>,
+  "safety_reason":  "<one short user-facing sentence if unsafe, else null>",
+  "score":          <integer 0-100, where 70+ = "good enough">,
+  "summary":        "<one short, friendly, observational sentence — like a friend texting>",
+  "issues":         ["<short issue 1>", "<short issue 2>"],     // 0-3 items; empty array if photo is fine
+  "suggestion":     "<one actionable suggestion, or null if photo is fine>",
+  "good_enough":    <boolean — true if score >= 70 OR if it's borderline but the issues are minor>
 }
 
 Examples of good summaries:
@@ -583,19 +614,54 @@ Examples of bad summaries (do NOT write like this):
       return res.json({ score: null, summary: 'Quality check unavailable', issues: [], suggestion: null, good_enough: true });
     }
 
-    // Defensive shape — never trust Claude to be perfect
+    // Defensive shape — never trust Claude to be perfect.
+    // Safety default: TRUE. The model must EXPLICITLY return safe:false
+    // to trigger rejection. This is intentionally conservative — a
+    // false positive on safety blocks a legitimate user from using
+    // their photo, which is worse for the product than the rare
+    // borderline case slipping through.
+    const isUnsafe = payload.safe === false;
     const out = {
-      score:       typeof payload.score === 'number' ? Math.max(0, Math.min(100, Math.round(payload.score))) : null,
-      summary:     typeof payload.summary === 'string' ? payload.summary.slice(0, 200) : '',
-      issues:      Array.isArray(payload.issues) ? payload.issues.slice(0, 3).map(String) : [],
-      suggestion:  typeof payload.suggestion === 'string' ? payload.suggestion.slice(0, 200) : null,
-      good_enough: payload.good_enough !== false, // default to true unless explicitly false
+      safe:          !isUnsafe,
+      safety_reason: isUnsafe && typeof payload.safety_reason === 'string'
+        ? payload.safety_reason.slice(0, 300)
+        : null,
+      score:         typeof payload.score === 'number' ? Math.max(0, Math.min(100, Math.round(payload.score))) : null,
+      summary:       typeof payload.summary === 'string' ? payload.summary.slice(0, 200) : '',
+      issues:        Array.isArray(payload.issues) ? payload.issues.slice(0, 3).map(String) : [],
+      suggestion:    typeof payload.suggestion === 'string' ? payload.suggestion.slice(0, 200) : null,
+      good_enough:   payload.good_enough !== false, // default to true unless explicitly false
     };
+
+    // ── Hard rejection path ─────────────────────────────────────────
+    // Photo flagged unsafe by Claude → delete from Cloudinary and null
+    // photo_url in DB. The user's profile reverts to no-photo and the
+    // frontend will show the strong rejection dialog.
+    //
+    // Best-effort: even if delete/DB fails, return the safety verdict
+    // to the user. The next upload attempt will overwrite anyway
+    // (deterministic public_id = haveniq/users/<id>), and reconciling
+    // the orphan photo is preferable to silently letting an unsafe
+    // photo stay live.
+    if (isUnsafe) {
+      try { await deleteProfilePhoto(req.user.id); }
+      catch (e) { console.error('[photo-quality] delete after unsafe verdict failed:', e.message); }
+      try {
+        await pool.query(
+          'UPDATE users SET photo_url = NULL, updated_at = NOW() WHERE id = $1',
+          [req.user.id],
+        );
+      } catch (e) { console.error('[photo-quality] DB null after unsafe verdict failed:', e.message); }
+      audit(req, 'photo.rejected.unsafe', { reason: out.safety_reason }).catch(() => {});
+    }
+
     res.json(out);
   } catch (err) {
     console.error('[photo-quality] failed:', err.message);
-    // Soft-fail in all cases
-    res.json({ score: null, summary: 'Quality check unavailable', issues: [], suggestion: null, good_enough: true });
+    // Soft-fail in all cases — including safety. We never block a user
+    // when Claude is unreachable; better to ship a borderline photo
+    // through than to lock out a legitimate user during an outage.
+    res.json({ safe: true, safety_reason: null, score: null, summary: 'Quality check unavailable', issues: [], suggestion: null, good_enough: true });
   }
 });
 
