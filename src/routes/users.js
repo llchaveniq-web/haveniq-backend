@@ -727,6 +727,240 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
 
 // ── POST /users/me/push-token ─────────────────────────────────────────────
 // Previously `ON CONFLICT (token) DO UPDATE SET user_id = $1` let any
+// ── GET /users/me/about-you ──────────────────────────────────────────
+// The "About You" reveal — a 5-section editorial magazine spread that
+// reads the user's personality back to them after they finish the
+// 29-question quiz. The single highest-leverage "wow this app sees me"
+// moment in HavenIQ. Sits between quiz completion and matches.
+//
+// Five sections, each grounded in SPECIFIC quiz answers (not generic
+// horoscope content):
+//   1. THE WAY YOU REGULATE  — emotional / polyvagal answers
+//   2. THE WAY YOU REPAIR    — Gottman + repair-initiator pattern
+//   3. THE WAY YOU ATTACH    — Bowlby attachment pattern
+//   4. YOUR HONEST EDGE      — HEXACO honesty-humility + shadow
+//   5. WHAT YOU NEED FROM A HOME — lifestyle + sensory + executive function
+//
+// Cached in about_you_cache keyed on (user_id, answers_hash). Re-runs
+// only when the user updates their quiz. Cost: ~$0.04 per generation.
+// Soft-fails to a generic message on any error — the user always sees
+// something, never a crash.
+async function ensureAboutYouTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS about_you_cache (
+      user_id        UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      answers_hash   TEXT NOT NULL,
+      sections       JSONB NOT NULL,
+      model          TEXT,
+      created_at     TIMESTAMPTZ DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ DEFAULT NOW()
+    );
+  `).catch((e) => console.error('[about_you_cache] ensure table:', e.message));
+}
+
+function hashAnswers(rows) {
+  // Deterministic FNV-1a-style hash of the user's quiz answer set.
+  // Used as the cache key — re-fetching the same answers returns the
+  // cached spread instantly; an updated answer invalidates.
+  const sorted = rows
+    .map(r => `${r.question_id}:${JSON.stringify(r.answer_value)}`)
+    .sort()
+    .join('|');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < sorted.length; i++) {
+    h ^= sorted.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16);
+}
+
+router.get('/me/about-you', requireAuth, async (req, res) => {
+  await ensureAboutYouTable();
+  const userId = req.user.id;
+
+  try {
+    // 1. Pull quiz answers + personality profile (if computed)
+    const [answersRes, profileRes, userRes] = await Promise.all([
+      pool.query(
+        'SELECT question_id, answer_value FROM quiz_answers WHERE user_id = $1',
+        [userId],
+      ).catch(() => ({ rows: [] })),
+      pool.query(
+        `SELECT archetype, mbti, ocean, summary, strengths, growth_areas, roommate_fit
+           FROM personality_profiles WHERE user_id = $1`,
+        [userId],
+      ).catch(() => ({ rows: [{}] })),
+      pool.query(
+        'SELECT first_name FROM users WHERE id = $1',
+        [userId],
+      ).catch(() => ({ rows: [{}] })),
+    ]);
+
+    const answers = answersRes.rows;
+    if (answers.length < 10) {
+      return res.json({
+        ready: false,
+        reason: 'You need to answer at least 10 quiz questions before the reveal is meaningful.',
+        sections: [],
+      });
+    }
+
+    const profile  = profileRes.rows[0] || {};
+    const firstName = userRes.rows[0]?.first_name || 'you';
+    const answersHash = hashAnswers(answers);
+
+    // 2. Cache check
+    const cached = await pool.query(
+      'SELECT sections, answers_hash FROM about_you_cache WHERE user_id = $1',
+      [userId],
+    ).catch(() => ({ rows: [] }));
+    if (cached.rows[0] && cached.rows[0].answers_hash === answersHash) {
+      return res.json({ ready: true, sections: cached.rows[0].sections, cached: true });
+    }
+
+    // 3. Generate via Claude
+    const ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY ?? '').replace(/[^!-~]/g, '');
+    if (!ANTHROPIC_KEY) {
+      return res.json({
+        ready: false,
+        reason: 'Reveal engine offline — try again in a few minutes.',
+        sections: [],
+      });
+    }
+
+    // Render answers as a numbered list grounded in the actual quiz.
+    // Keep it small enough that Claude can reference specific Qs back
+    // to the user ("your Q9 answer means...") without bloating the
+    // context window.
+    const answerLines = answers
+      .slice()
+      .sort((a, b) => a.question_id - b.question_id)
+      .map(r => `Q${r.question_id}: ${JSON.stringify(r.answer_value)}`)
+      .join('\n');
+
+    const prompt = `You are writing the "About You" editorial reveal for HavenIQ, a college roommate-matching app. The user just finished a 29-question compatibility quiz grounded in attachment theory (Bowlby), Big Five / OCEAN, Gottman communication research, polyvagal regulation, HEXACO Honesty-Humility, and executive function research.
+
+This screen is the "wow, this app actually knows me" moment — the single most important brand surface in HavenIQ. The user is about to see if their matches are good; first they need to see THEMSELVES reflected back with editorial honesty + warmth.
+
+USER: ${firstName}
+THEIR ANSWERS (sorted by question id):
+${answerLines}
+
+THEIR COMPUTED PROFILE:
+- Archetype: ${profile.archetype ?? '(not yet computed)'}
+- MBTI shorthand: ${profile.mbti ?? '?'}
+- Big Five (0-100): ${JSON.stringify(profile.ocean ?? {})}
+- Summary: ${profile.summary ?? '(not computed)'}
+- Strengths: ${JSON.stringify(profile.strengths ?? [])}
+- Growth areas: ${JSON.stringify(profile.growth_areas ?? [])}
+
+WRITE 5 EDITORIAL SECTIONS. Each:
+- 70-120 words
+- Second-person voice ("you", not "the user")
+- Reference at least ONE specific quiz answer ("Your Q14 answer means...")
+- Specific, observational, NOT horoscope-vague
+- Warm-but-honest tone — like a thoughtful friend, not a marketing voice
+- NO clichés ("you're amazing!", "what makes you you!")
+- NO advice; pure observation
+- Lowercase except proper nouns
+
+SECTION KICKERS (exactly these, in this order):
+1. THE WAY YOU REGULATE
+   — about how their nervous system handles stress, conflict, overstimulation
+2. THE WAY YOU REPAIR
+   — about how they handle the morning-after a fight, who initiates, who receives
+3. THE WAY YOU ATTACH
+   — about whether they reach out when they need someone, or pull away
+4. YOUR HONEST EDGE
+   — about their integrity / shadow side (HEXACO + Jungian Shadow Qs)
+5. WHAT YOU NEED FROM A HOME
+   — about sensory, lifestyle, cleanliness, hosting style
+
+Each section ALSO needs a one-line "pull quote" — a short italic excerpt that could be lifted out as a Pinterest-style image quote. 8-14 words. Punchy.
+
+Output ONLY valid JSON, no markdown:
+{
+  "sections": [
+    {
+      "kicker": "THE WAY YOU REGULATE",
+      "title": "<5-9 word title in lowercase>",
+      "body": "<70-120 word editorial paragraph>",
+      "pullQuote": "<8-14 word italic excerpt>"
+    },
+    ... (5 sections total)
+  ]
+}`;
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         ANTHROPIC_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250929',
+        max_tokens: 3500,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      console.error('[about-you] Anthropic', r.status, text.slice(0, 200));
+      return res.json({
+        ready: false,
+        reason: 'Reveal engine hiccup — try again in a minute.',
+        sections: [],
+      });
+    }
+
+    const j = await r.json();
+    const text = (j.content || []).find((b) => b.type === 'text')?.text ?? '{}';
+    let payload;
+    try {
+      payload = JSON.parse(text.replace(/^```(?:json)?\s*/, '').replace(/\s*```\s*$/, '').trim());
+    } catch {
+      return res.json({
+        ready: false,
+        reason: 'Could not assemble the reveal. Try again in a minute.',
+        sections: [],
+      });
+    }
+
+    const sections = Array.isArray(payload.sections) ? payload.sections.slice(0, 5) : [];
+    if (sections.length < 5) {
+      return res.json({
+        ready: false,
+        reason: 'Reveal generation incomplete. Try again in a minute.',
+        sections: [],
+      });
+    }
+
+    // 4. Cache
+    await pool.query(
+      `INSERT INTO about_you_cache (user_id, answers_hash, sections, model, updated_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (user_id) DO UPDATE
+         SET answers_hash = EXCLUDED.answers_hash,
+             sections     = EXCLUDED.sections,
+             model        = EXCLUDED.model,
+             updated_at   = NOW()`,
+      [userId, answersHash, JSON.stringify(sections), 'claude-sonnet-4-5'],
+    ).catch((e) => console.error('[about-you] cache insert failed:', e.message));
+
+    res.json({ ready: true, sections, cached: false });
+  } catch (err) {
+    console.error('[about-you] failed:', err.message);
+    res.json({
+      ready: false,
+      reason: 'Could not load your reveal right now.',
+      sections: [],
+    });
+  }
+});
+
 // authenticated user claim another user's Expo push token and silently
 // redirect their notifications. Now: a token may be re-bound to a new
 // user ONLY when the existing row already belongs to the same user (the
