@@ -780,9 +780,14 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
 
   try {
     // 1. Pull quiz answers + personality profile (if computed)
+    // SCHEMA NOTE: quiz_answers has ONE row per user with a JSONB
+    // `answers` column { "1": 2, "2": 0, ... } mapping question_id
+    // to option_index. NOT row-per-answer (my original assumption
+    // was wrong — caught when Jackson said "I finished the quiz but
+    // the reveal still says 'finish the quiz first'").
     const [answersRes, profileRes, userRes] = await Promise.all([
       pool.query(
-        'SELECT question_id, answer_value FROM quiz_answers WHERE user_id = $1',
+        'SELECT answers FROM quiz_answers WHERE user_id = $1',
         [userId],
       ).catch(() => ({ rows: [] })),
       pool.query(
@@ -796,7 +801,14 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
       ).catch(() => ({ rows: [{}] })),
     ]);
 
-    const answers = answersRes.rows;
+    // Convert the JSONB answers map into [{ question_id, answer_value }]
+    // rows so the rest of the code can treat it like a row set.
+    const answersMap = answersRes.rows[0]?.answers || {};
+    const answers = Object.entries(answersMap).map(([qid, val]) => ({
+      question_id: parseInt(qid, 10),
+      answer_value: val,
+    }));
+
     if (answers.length < 10) {
       return res.json({
         ready: false,
