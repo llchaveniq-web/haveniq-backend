@@ -7,6 +7,7 @@ const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = requ
 const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
 const { sendParentInviteEmail } = require('../services/email');
+const { reportServerError } = require('./sentryTunnel');
 
 // 10 MB image cap — generous for a modern phone photo, still prevents
 // abuse. Held in memory (no temp files on Railway's ephemeral disk) and
@@ -629,7 +630,32 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
     if (err && err.message && err.message.includes('Cloudinary not configured')) {
       return res.status(503).json({ error: 'Photo storage not configured. Contact support.' });
     }
-    res.status(500).json({ error: 'Failed to upload photo' });
+    // Real server error. Forward to the same triage pipeline that handles
+    // frontend errors so the AI bot can diagnose + auto-fix. Without this
+    // the user sees a generic "Upload failed" dialog and the bot never
+    // hears about it (no React render error fires → no ErrorBoundary →
+    // no triage). reportServerError is fire-and-forget.
+    reportServerError({
+      message: `Photo upload failed: ${err && err.message ? err.message : 'unknown error'}`,
+      stack: err && err.stack,
+      route: 'POST /users/me/photo',
+      userId: req.user && req.user.id,
+      context: {
+        fileSize: req.file && req.file.size,
+        mimeType: req.file && req.file.mimetype,
+        originalName: req.file && req.file.originalname,
+      },
+    }).catch(() => {});
+
+    // Surface the underlying error name to the user so they (and we)
+    // can tell at a glance whether it's a Cloudinary issue, a DB issue,
+    // a moderation false-positive, etc. instead of a useless generic.
+    const errSummary = err && err.message
+      ? err.message.slice(0, 200)
+      : 'Unknown error';
+    res.status(500).json({
+      error: `Upload failed (${errSummary}). The team has been notified.`,
+    });
   }
 });
 

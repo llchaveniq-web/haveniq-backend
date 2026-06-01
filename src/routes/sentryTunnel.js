@@ -409,4 +409,79 @@ router.get('/__report/health', (req, res) => {
   });
 });
 
+// ── reportServerError(input) ──────────────────────────────────────────
+// Lets backend routes feed server-side errors into the same triage
+// pipeline that frontend errors use. Without this, server 500s that the
+// frontend handles gracefully (showing a dialog instead of crashing) slip
+// past the bot entirely — the user sees "Upload failed" but no Discord
+// triage fires because no React error was thrown.
+//
+// Call it from any catch block where you've classified the error as a
+// real server bug (not a user error like moderation rejection).
+//
+//   reportServerError({
+//     message: 'Photo upload failed: ' + err.message,
+//     stack: err.stack,
+//     route: 'POST /users/me/photo',
+//     userId: req.user?.id,
+//     context: { fileSize: req.file?.size, mimeType: req.file?.mimetype },
+//   });
+//
+// Fire-and-forget. Dedupe + async processing handled internally.
+async function reportServerError(input = {}) {
+  const report = {
+    message: String(input.message || 'Unknown server error').slice(0, 4000),
+    stack: String(input.stack || '').slice(0, 8000),
+    url: input.route ? `backend://${input.route}` : 'backend://unknown',
+    userAgent: 'haveniq-backend',
+    componentStack: '',
+    context: {
+      source: 'backend',
+      route: input.route || null,
+      userId: input.userId || null,
+      ...(input.context || {}),
+    },
+  };
+
+  // Dedupe via same map
+  const fp = fingerprint(report);
+  const now = Date.now();
+  if (recentReports.has(fp)) return { deduped: true };
+  recentReports.set(fp, now + DEDUPE_TTL_MS);
+
+  // Process in background — DO NOT await
+  setImmediate(async () => {
+    try {
+      const triage = await callClaudeTriage(report);
+      const fixDispatched = await dispatchAutoFix(triage, report);
+      await postDiscord(report, triage, fixDispatched);
+      console.log(`[server-error-report] processed: ${triage.severity} ${triage.bug_class} ${triage.likely_file}`);
+    } catch (err) {
+      console.error('[server-error-report] async processing failed:', err.message);
+      if (DISCORD_HOOK) {
+        fetch(DISCORD_HOOK, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            embeds: [{
+              title: '⚠️ Server error report — triage failed',
+              description: 'Backend reported an error but Claude triage failed. Raw report below.',
+              color: 0xD32F2F,
+              fields: [
+                { name: 'Route', value: String(report.url).slice(0, 200), inline: false },
+                { name: 'Triage error', value: '```' + String(err.message).slice(0, 500) + '```', inline: false },
+                { name: 'Original message', value: '```' + String(report.message).slice(0, 800) + '```', inline: false },
+              ],
+              timestamp: new Date().toISOString(),
+              footer: { text: 'Server error report • triage failure' },
+            }],
+          }),
+        }).catch(() => {});
+      }
+    }
+  });
+
+  return { queued: true };
+}
+
 module.exports = router;
+module.exports.reportServerError = reportServerError;
