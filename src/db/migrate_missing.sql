@@ -74,6 +74,14 @@ CREATE TABLE IF NOT EXISTS messages (
   read            BOOLEAN DEFAULT FALSE,
   created_at      TIMESTAMPTZ DEFAULT NOW()
 );
+-- Backfill columns onto stale prod tables. CREATE TABLE IF NOT EXISTS is
+-- a no-op when the table exists, so any column added to the definition
+-- above after the table first shipped never reaches an old prod row.
+-- The CREATE INDEX below references created_at, so without this ALTER
+-- the bootstrap throws "column created_at does not exist" on the index
+-- step. Idempotent ADD COLUMN IF NOT EXISTS makes this safe on every
+-- shape of database.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at DESC);
 
 -- ── Roommate reviews ──────────────────────────────────────────
@@ -99,6 +107,7 @@ CREATE TABLE IF NOT EXISTS profile_views (
   viewed_id   UUID REFERENCES users(id) ON DELETE CASCADE,
   viewed_at   TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE profile_views ADD COLUMN IF NOT EXISTS viewed_at TIMESTAMPTZ DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_views_viewed ON profile_views(viewed_id, viewed_at DESC);
 
 -- ── User profile snapshots ────────────────────────────────────
@@ -109,6 +118,7 @@ CREATE TABLE IF NOT EXISTS user_profile_snapshot (
   snapshot    JSONB NOT NULL,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE user_profile_snapshot ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_snapshots_user ON user_profile_snapshot(user_id, created_at DESC);
 
 -- ── Shared move-in checklists ─────────────────────────────────
@@ -211,6 +221,7 @@ CREATE TABLE IF NOT EXISTS match_pulses (
   created_at    TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(request_id, responder_id, day_marker)
 );
+ALTER TABLE match_pulses ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 CREATE INDEX IF NOT EXISTS idx_pulses_responder ON match_pulses(responder_id, created_at DESC);
 
 -- ── Trigger function + connect_requests trigger ───────────────
