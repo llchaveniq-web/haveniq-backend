@@ -262,3 +262,10 @@ CREATE TABLE IF NOT EXISTS partner_offers (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_partner_offers_active ON partner_offers(is_active);
+
+-- ── 2FA (TOTP) — see migrations/2026-06-01-2fa-totp.sql for the full
+--    rationale on each column. Mirrored here so the prod-deploy
+--    `psql -f migrate_missing.sql` bundle picks them up.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret          TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled         BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_recovery_codes  TEXT[]  DEFAULT '{}';

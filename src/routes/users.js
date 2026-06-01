@@ -174,6 +174,10 @@ router.get('/me', requireAuth, async (req, res) => {
       roommateStatus:  u.roommate_status,
       isVerified:      u.is_verified,
       isPaused:        u.is_paused,
+      // Surfaces the real 2FA state on the Profile row so the toggle
+      // and setup screen can show ON vs OFF correctly. The secret +
+      // recovery hashes never leave the backend — only the boolean.
+      totpEnabled:     u.totp_enabled === true,
       quizCompleted:   u.quiz_completed,
       isPremium:       u.is_premium,
       trustScore:      u.trust_score,

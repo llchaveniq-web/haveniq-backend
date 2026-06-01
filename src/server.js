@@ -251,6 +251,10 @@ app.use(rateLimit({
 
 // ── Routes ────────────────────────────────────────────────────────────────
 app.use('/auth',     require('./routes/auth'));
+// Mount /auth/2fa AFTER /auth so the dedicated twoFactor router owns
+// /setup, /verify-setup, /disable, and the /challenge endpoint that
+// finishes a 2FA-required sign-in.
+app.use('/auth/2fa', require('./routes/twoFactor'));
 app.use('/users',    require('./routes/users'));
 app.use('/quiz',     require('./routes/quiz'));
 app.use('/matches',  require('./routes/matches'));

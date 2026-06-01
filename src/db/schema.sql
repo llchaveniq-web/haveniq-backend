@@ -75,6 +75,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS dealbreakers     TEXT[] DEFAULT '{}';
 -- baseline ".edu verified" because it confirms a real human matches the
 -- ID photo (not just that they own a school email).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS identity_verified_at TIMESTAMPTZ;
+-- 2FA (TOTP). Three columns. totp_secret stays NULL until setup; it's
+-- written by /auth/2fa/setup. totp_enabled stays FALSE until the user
+-- proves they can read codes off their authenticator (verify-setup).
+-- totp_recovery_codes are bcrypt hashes of 10 one-time-use codes;
+-- each successful use removes the matching hash from the array.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret          TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled         BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_recovery_codes  TEXT[]  DEFAULT '{}';
 
 -- ── OTP codes ────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS otp_codes (

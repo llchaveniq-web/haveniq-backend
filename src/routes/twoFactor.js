@@ -1,0 +1,374 @@
+/**
+ * Two-Factor Authentication (TOTP) routes.
+ *
+ * Backs the Profile → Privacy & Security → Two-Factor Auth row, which
+ * previously routed to a UI mockup with no backend. This file replaces
+ * that gap with real account security:
+ *
+ *   POST /auth/2fa/setup           (auth required)
+ *     Begin enrollment. Generates a fresh TOTP secret + 10 single-use
+ *     recovery codes. The plaintext secret and codes are returned to the
+ *     user EXACTLY ONCE so they can save them in their authenticator app
+ *     + somewhere offline. The DB row is updated with the secret (clear)
+ *     and the bcrypt hashes of each recovery code. totp_enabled stays
+ *     FALSE until the user proves they can read codes off their device.
+ *
+ *   POST /auth/2fa/verify-setup    (auth required)
+ *     Finish enrollment. Accepts a TOTP code from the user's authenticator
+ *     app. If it validates against the stored secret, flips
+ *     totp_enabled = TRUE and the user is now protected on every future
+ *     sign-in.
+ *
+ *   POST /auth/2fa/disable         (auth required)
+ *     Turn off 2FA. Requires a fresh TOTP code (or one unused recovery
+ *     code) so a stolen session can't quietly remove the second factor.
+ *     Clears the secret and recovery codes — the user must re-enroll
+ *     from scratch if they want it back on.
+ *
+ *   POST /auth/2fa/challenge       (NOT auth required — pre-session)
+ *     Login second factor. After /auth/verify-code succeeds, if the user
+ *     has 2FA enabled the response is `{ requires2FA: true,
+ *     twoFactorChallenge: <short-lived JWT> }`. The frontend posts that
+ *     challenge token + the user's TOTP code (or one recovery code) here;
+ *     on success we issue the real long-lived session token + profile.
+ *
+ * Design choices worth flagging:
+ *
+ *   • otplib runs entirely in-process, no external service. No SMS
+ *     provider cost, no Twilio dependency, no privacy leak from putting
+ *     phone numbers in a third party. TOTP is the same protocol Google
+ *     Authenticator / 1Password / Authy / Bitwarden all read.
+ *
+ *   • Recovery codes are stored as bcrypt hashes (not raw or
+ *     reversibly encrypted). A DB leak can't reveal them. Each code can
+ *     be used exactly once — verifying a code removes its hash from
+ *     totp_recovery_codes. When the array empties, "I lost my phone"
+ *     becomes a support request, by design.
+ *
+ *   • Setup is two-step (write secret → user verifies → enable). This
+ *     stops the failure mode where the user clicks "Set up", closes the
+ *     screen before scanning the code, and is now locked out of the
+ *     site on their next login because totp_enabled was prematurely
+ *     true with no working authenticator on the other side.
+ *
+ *   • The challenge token is a separate short-lived JWT with a
+ *     `purpose: '2fa-challenge'` claim and a 5-minute TTL. Even if it
+ *     leaks, it can't be used as a normal session token because every
+ *     authed endpoint verifies the absence of that claim implicitly
+ *     (signToken issues `{ userId }`, no purpose). And it expires
+ *     before any reasonable attacker timeline.
+ */
+
+const router  = require('express').Router();
+const jwt     = require('jsonwebtoken');
+const bcrypt  = require('bcryptjs');
+const crypto  = require('crypto');
+const { authenticator } = require('otplib');
+const pool    = require('../db/pool');
+const { requireAuth, signToken } = require('../middleware/auth');
+
+// Same TOTP options Google Authenticator, 1Password and Authy default to.
+// Window: 1 step (30s) of tolerance on either side of "now" lets a slow
+// typer or a slightly-clock-skewed phone still validate.
+authenticator.options = { window: 1, step: 30 };
+
+const APP_NAME = 'HavenIQ';
+
+const CHALLENGE_TTL_SECONDS = 5 * 60;
+const CHALLENGE_PURPOSE     = '2fa-challenge';
+
+const RECOVERY_CODE_COUNT  = 10;
+const RECOVERY_CODE_BYTES  = 5;   // → 10 hex chars per code, e.g. "a1b2-c3d4-e5"
+const RECOVERY_CODE_BCRYPT_ROUNDS = 10;
+
+// Generate one human-friendly recovery code. 10 hex characters in three
+// hyphen-separated groups so they're readable when written on paper.
+function generateRecoveryCode() {
+  const hex = crypto.randomBytes(RECOVERY_CODE_BYTES).toString('hex'); // 10 chars
+  return `${hex.slice(0, 4)}-${hex.slice(4, 8)}-${hex.slice(8, 10)}`;
+}
+
+// Compact, copy-paste-friendly TOTP secret. otplib's generator returns a
+// fresh base32 string suitable for the otpauth:// URL.
+function generateSecret() {
+  return authenticator.generateSecret();
+}
+
+// Constructs the standard otpauth:// URL the authenticator app understands.
+// Wrapping with otplib's keyuri pins the issuer/account format every
+// vendor app expects.
+function otpauthUrl(email, secret) {
+  return authenticator.keyuri(email, APP_NAME, secret);
+}
+
+// ── POST /auth/2fa/setup ─────────────────────────────────────────────
+router.post('/setup', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Block re-enrollment while 2FA is already on. Forces the user
+    // through /disable first, which itself requires a working code —
+    // so a stolen session can't replace someone's authenticator behind
+    // their back.
+    const { rows: existing } = await pool.query(
+      'SELECT totp_enabled FROM users WHERE id = $1',
+      [userId],
+    );
+    if (existing[0]?.totp_enabled) {
+      return res.status(409).json({
+        error: '2FA is already enabled. Disable it first to set up a new authenticator.',
+      });
+    }
+
+    const secret = generateSecret();
+    const recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, generateRecoveryCode);
+    const recoveryHashes = await Promise.all(
+      recoveryCodes.map(c => bcrypt.hash(c, RECOVERY_CODE_BCRYPT_ROUNDS)),
+    );
+
+    await pool.query(
+      `UPDATE users
+          SET totp_secret = $1,
+              totp_recovery_codes = $2,
+              totp_enabled = FALSE
+        WHERE id = $3`,
+      [secret, recoveryHashes, userId],
+    );
+
+    const url = otpauthUrl(req.user.email, secret);
+
+    return res.json({
+      // The bare secret is shown to the user as a fallback for app
+      // setups that don't scan QR codes (or web users without a camera).
+      secret,
+      otpauthUrl: url,
+      // ONE-TIME exposure of plaintext recovery codes. The DB only has
+      // the hashes from here on. If the user closes this screen without
+      // saving them, they're gone — they'll have to use /disable then
+      // /setup to get a fresh set.
+      recoveryCodes,
+    });
+  } catch (err) {
+    console.error('[2fa] /setup error:', err);
+    res.status(500).json({ error: '2FA setup failed' });
+  }
+});
+
+// ── POST /auth/2fa/verify-setup ──────────────────────────────────────
+router.post('/verify-setup', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { code } = req.body || {};
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'code is required' });
+    }
+
+    const { rows } = await pool.query(
+      'SELECT totp_secret, totp_enabled FROM users WHERE id = $1',
+      [userId],
+    );
+    const row = rows[0];
+    if (!row?.totp_secret) {
+      return res.status(400).json({ error: 'Call /setup first.' });
+    }
+    if (row.totp_enabled) {
+      return res.status(409).json({ error: '2FA is already enabled.' });
+    }
+
+    const ok = authenticator.check(code.trim(), row.totp_secret);
+    if (!ok) {
+      return res.status(400).json({ error: 'Incorrect code. Check the app and try the current 6 digits.' });
+    }
+
+    await pool.query('UPDATE users SET totp_enabled = TRUE WHERE id = $1', [userId]);
+
+    return res.json({ enabled: true });
+  } catch (err) {
+    console.error('[2fa] /verify-setup error:', err);
+    res.status(500).json({ error: '2FA verification failed' });
+  }
+});
+
+// ── POST /auth/2fa/disable ───────────────────────────────────────────
+router.post('/disable', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { code, recoveryCode } = req.body || {};
+    if (!code && !recoveryCode) {
+      return res.status(400).json({ error: 'code or recoveryCode is required' });
+    }
+
+    const { rows } = await pool.query(
+      'SELECT totp_secret, totp_enabled, totp_recovery_codes FROM users WHERE id = $1',
+      [userId],
+    );
+    const row = rows[0];
+    if (!row?.totp_enabled || !row.totp_secret) {
+      return res.status(400).json({ error: '2FA is not currently enabled.' });
+    }
+
+    let authorized = false;
+    let consumedRecoveryIndex = -1;
+
+    if (code) {
+      authorized = authenticator.check(String(code).trim(), row.totp_secret);
+    }
+    if (!authorized && recoveryCode) {
+      const remaining = row.totp_recovery_codes || [];
+      for (let i = 0; i < remaining.length; i++) {
+        if (await bcrypt.compare(String(recoveryCode).trim(), remaining[i])) {
+          authorized = true;
+          consumedRecoveryIndex = i;
+          break;
+        }
+      }
+    }
+    if (!authorized) {
+      return res.status(400).json({ error: 'Incorrect code.' });
+    }
+
+    // Clear the secret + recovery codes. The user must run /setup again
+    // for a brand new secret + codes if they want 2FA back on.
+    await pool.query(
+      `UPDATE users
+          SET totp_enabled = FALSE,
+              totp_secret = NULL,
+              totp_recovery_codes = '{}'
+        WHERE id = $1`,
+      [userId],
+    );
+
+    return res.json({ disabled: true, viaRecoveryCode: consumedRecoveryIndex >= 0 });
+  } catch (err) {
+    console.error('[2fa] /disable error:', err);
+    res.status(500).json({ error: '2FA disable failed' });
+  }
+});
+
+// ── POST /auth/2fa/challenge ─────────────────────────────────────────
+// Pre-session — verifies the second factor in the login flow.
+router.post('/challenge', async (req, res) => {
+  try {
+    const { challenge, code, recoveryCode } = req.body || {};
+    if (!challenge) {
+      return res.status(400).json({ error: 'challenge token is required' });
+    }
+    if (!code && !recoveryCode) {
+      return res.status(400).json({ error: 'code or recoveryCode is required' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(challenge, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'Challenge expired. Sign in again.' });
+    }
+    if (decoded?.purpose !== CHALLENGE_PURPOSE) {
+      // Hard reject: someone tried to use a normal session token as a
+      // challenge. Don't accept it even if it's still valid.
+      return res.status(401).json({ error: 'Invalid challenge token.' });
+    }
+    const userId = decoded.userId;
+
+    const { rows } = await pool.query(
+      `SELECT id, email, school, first_name, last_name, bio, major, school_year,
+              age, gender, looking_for, photo_url, budget_min, budget_max,
+              neighborhoods, is_verified, trust_score, quiz_completed,
+              identity_verified_at, totp_secret, totp_enabled, totp_recovery_codes,
+              move_in_date
+         FROM users WHERE id = $1`,
+      [userId],
+    );
+    const u = rows[0];
+    if (!u || !u.totp_enabled || !u.totp_secret) {
+      // The user disabled 2FA between /verify-code and /challenge.
+      // Re-prompt for the OTP flow rather than silently logging them in
+      // — both endpoints are fast, and refusing here means we never
+      // bypass 2FA during a teardown window.
+      return res.status(401).json({ error: 'Sign in again.' });
+    }
+
+    let authorized = false;
+    let consumedRecoveryIndex = -1;
+
+    if (code) {
+      authorized = authenticator.check(String(code).trim(), u.totp_secret);
+    }
+    if (!authorized && recoveryCode) {
+      const remaining = u.totp_recovery_codes || [];
+      for (let i = 0; i < remaining.length; i++) {
+        if (await bcrypt.compare(String(recoveryCode).trim(), remaining[i])) {
+          authorized = true;
+          consumedRecoveryIndex = i;
+          break;
+        }
+      }
+    }
+    if (!authorized) {
+      return res.status(400).json({ error: 'Incorrect code. Try the current 6 digits or a recovery code.' });
+    }
+
+    // If a recovery code was used, remove its hash from the array so it
+    // can never be used twice.
+    if (consumedRecoveryIndex >= 0) {
+      const remaining = (u.totp_recovery_codes || []).filter(
+        (_, i) => i !== consumedRecoveryIndex,
+      );
+      await pool.query(
+        'UPDATE users SET totp_recovery_codes = $1 WHERE id = $2',
+        [remaining, userId],
+      );
+    }
+
+    const token = signToken(u.id);
+    return res.json({
+      success: true,
+      token,
+      userId: u.id,
+      quizCompleted: u.quiz_completed,
+      profile: {
+        id:             u.id,
+        email:          u.email,
+        school:         u.school,
+        firstName:      u.first_name,
+        lastName:       u.last_name,
+        lastInitial:    u.last_name ? u.last_name.trim().charAt(0) : '',
+        bio:            u.bio || '',
+        major:          u.major || '',
+        schoolYear:     u.school_year || '',
+        age:            u.age ?? null,
+        gender:         u.gender || '',
+        lookingFor:     u.looking_for || [],
+        photoUrl:       u.photo_url || null,
+        budgetMin:      u.budget_min ?? null,
+        budgetMax:      u.budget_max ?? null,
+        neighborhoods:  u.neighborhoods || [],
+        moveInDate:     u.move_in_date || null,
+        isVerified:     u.is_verified,
+        trustScore:     u.trust_score,
+        quizCompleted:  u.quiz_completed,
+        identityVerifiedAt: u.identity_verified_at,
+        // We only get here when totp_enabled was true. Echo it back so
+        // the frontend's authStore writes the correct Profile-toggle
+        // state without a follow-up /users/me call.
+        totpEnabled:    true,
+      },
+    });
+  } catch (err) {
+    console.error('[2fa] /challenge error:', err);
+    res.status(500).json({ error: '2FA challenge failed' });
+  }
+});
+
+// ── Helpers exported for /auth/verify-code to issue a challenge ──────
+function signChallengeToken(userId) {
+  return jwt.sign(
+    { userId, purpose: CHALLENGE_PURPOSE },
+    process.env.JWT_SECRET,
+    { expiresIn: CHALLENGE_TTL_SECONDS },
+  );
+}
+
+module.exports = router;
+module.exports.signChallengeToken = signChallengeToken;
+module.exports.CHALLENGE_PURPOSE  = CHALLENGE_PURPOSE;

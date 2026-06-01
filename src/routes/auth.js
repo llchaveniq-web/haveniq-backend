@@ -4,6 +4,7 @@ const { ipKeyGenerator } = require('express-rate-limit');
 const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail, sendWelcomeEmail, sendFounderSignupAlert } = require('../services/email');
 const { signToken } = require('../middleware/auth');
+const { signChallengeToken } = require('./twoFactor');
 const analytics = require('../services/analytics');
 
 // Rate limiters — TWO buckets per route: per-email (so a single victim
@@ -234,7 +235,7 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     let { rows: userRows } = await pool.query(
       `SELECT id, email, school, first_name, last_name,
               is_verified, trust_score, quiz_completed,
-              identity_verified_at
+              identity_verified_at, totp_enabled
        FROM users WHERE email = $1`,
       [emailLower]
     );
@@ -250,7 +251,7 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
          VALUES ($1, $2, $3, 20)
          RETURNING id, email, school, first_name, last_name,
                    is_verified, trust_score, quiz_completed,
-                   identity_verified_at`,
+                   identity_verified_at, totp_enabled`,
         [emailLower, school || '', schoolDomain || '']
       );
       user      = ins.rows[0];
@@ -298,6 +299,22 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     analytics.track(analytics.EVENTS.email_verified, user.id);
     analytics.identify(user.id, { email_verified: true });
 
+    // 2FA gate. If the user has enrolled in TOTP, we stop here and return
+    // a short-lived challenge token instead of the real session. The
+    // frontend prompts for the 6-digit code (or a recovery code) and
+    // POSTs to /auth/2fa/challenge to finish the login. Until that
+    // succeeds the user has NO session — verifying just the OTP is no
+    // longer enough.
+    if (user.totp_enabled) {
+      return res.json({
+        requires2FA: true,
+        twoFactorChallenge: signChallengeToken(user.id),
+        // Echo a tiny bit of profile context so the 2FA prompt can show
+        // "Signing in as juli@calpoly.edu" without another round trip.
+        emailHint:  user.email,
+      });
+    }
+
     const token = signToken(user.id);
 
     res.json({
@@ -337,6 +354,12 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
         // hasn't completed the selfie+ID flow; non-null = the "ID ✓"
         // trust badge shows on their match card.
         identityVerifiedAt: user.identity_verified_at,
+        // 2FA state — surfaced for the Profile toggle. The user object
+        // returned here is also written into authStore on sign-in, so
+        // every screen that reads `user.totpEnabled` (the Privacy row
+        // primarily) gets the live value without needing a follow-up
+        // /users/me call.
+        totpEnabled: user.totp_enabled === true,
       },
     });
   } catch (err) {
