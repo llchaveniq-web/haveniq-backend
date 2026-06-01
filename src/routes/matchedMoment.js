@@ -54,33 +54,31 @@ function hashAnswers(a1, a2) {
 }
 
 /**
- * Compute the 3-5 most diagnostic answers the pair share. Walks every
- * question both users answered and returns the matching pairs sorted
- * by question_id (rough proxy for "importance" — main quiz questions
- * have lower IDs).
+ * Compute the most diagnostic answers the pair share. EXACT MATCHES ONLY
+ * (was ±1 in v1 — that made the count meaningless because Likert-4
+ * questions hit ~50% by chance). The badge now reads honestly: each
+ * shared pattern is a question where both users picked the exact same
+ * option, not "close enough."
  */
 function computeSharedAnswers(answersA, answersB) {
   const shared = [];
   for (const [qid, valA] of Object.entries(answersA)) {
     const valB = answersB[qid];
     if (valB === undefined) continue;
-    // Match on identical option index OR within 1 step (close enough
-    // for a "you both lean the same way" framing).
-    if (Math.abs(Number(valA) - Number(valB)) <= 1) {
+    // EXACT MATCH ONLY — same option index. Anything else (even
+    // adjacent on a 4-option Likert) carries weak signal: two people
+    // could differ enough on one step to genuinely disagree about
+    // sleep schedule, contempt patterns, etc.
+    if (Number(valA) === Number(valB)) {
       shared.push({
         question_id: parseInt(qid, 10),
-        index_a: Number(valA),
-        index_b: Number(valB),
-        exact: Number(valA) === Number(valB),
+        index: Number(valA),
       });
     }
   }
-  // Prefer exact matches; then sort by ascending question ID (Q1-Q60 are
-  // the high-weight clinical screens).
-  shared.sort((a, b) => {
-    if (a.exact !== b.exact) return a.exact ? -1 : 1;
-    return a.question_id - b.question_id;
-  });
+  // Sort by ascending question ID — Q1-Q60 are the highest-weight
+  // clinical screens, so lower IDs surface more diagnostic overlap.
+  shared.sort((a, b) => a.question_id - b.question_id);
   return shared.slice(0, 5);
 }
 
@@ -202,10 +200,16 @@ router.get('/matched/:userId', requireAuth, async (req, res) => {
     }
 
     const sharedAnswers = computeSharedAnswers(answersMe, answersOther);
-    const answersHash = hashAnswers(answersMe, answersOther);
 
-    // 3. Cache check (canonical-ordered key)
+    // 3. Canonical-pair cache key. user_a < user_b is enforced by the
+    // table CHECK, so sort the pair before lookup AND hash the answers
+    // in the SAME canonical order — otherwise alternating-perspective
+    // calls (A→B, then B→A) produce different hashes for the same pair
+    // and the cache misses every time, burning Claude tokens.
     const [keyA, keyB] = [meId, otherId].sort();
+    const answersForKeyA = keyA === meId ? answersMe    : answersOther;
+    const answersForKeyB = keyA === meId ? answersOther : answersMe;
+    const answersHash = hashAnswers(answersForKeyA, answersForKeyB);
     const { rows: cached } = await pool.query(
       `SELECT payload FROM matched_moments
         WHERE user_a = $1 AND user_b = $2 AND answers_hash = $3
