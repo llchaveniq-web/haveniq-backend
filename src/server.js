@@ -353,12 +353,48 @@ async function sendPushToUser(userId, { title, body, data }) {
 app.set('io', io);
 app.set('sendPushToUser', sendPushToUser);
 
+// ── Boot-time schema bootstrap ───────────────────────────────────────────
+// Apply src/db/migrate_missing.sql on every start. Every statement in
+// that file uses idempotent shapes (CREATE TABLE IF NOT EXISTS, ALTER
+// TABLE ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS, etc.) so
+// re-running on each boot does nothing on a healthy database and adds
+// missing pieces on a stale one.
+//
+// Previous workflow was "psql -f migrate_missing.sql by hand after each
+// backend deploy" — easy to forget, and exactly what caused the 2FA
+// columns to ship with no /setup endpoint (the route shipped, the
+// columns didn't). Auto-applying on boot removes that footgun.
+//
+// We exit hard if the bootstrap fails. A backend that starts with a
+// stale schema would 500 every request that touches the missing column
+// and that's a worse failure mode than failing to start.
+async function bootstrapSchema() {
+  const fs   = require('fs');
+  const path = require('path');
+  const sqlPath = path.resolve(__dirname, 'db', 'migrate_missing.sql');
+  if (!fs.existsSync(sqlPath)) {
+    console.error('[bootstrap] migrate_missing.sql not found at', sqlPath);
+    process.exit(1);
+  }
+  const sql = fs.readFileSync(sqlPath, 'utf8');
+  console.log('[bootstrap] applying migrate_missing.sql…');
+  try {
+    await pool.query(sql);
+    console.log('[bootstrap] schema bootstrap OK');
+  } catch (err) {
+    console.error('[bootstrap] schema bootstrap FAILED:', err.message);
+    process.exit(1);
+  }
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`\n🚀 HavenIQ API running on port ${PORT}`);
-  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`   Health check: http://localhost:${PORT}/health\n`);
+bootstrapSchema().then(() => {
+  server.listen(PORT, () => {
+    console.log(`\n🚀 HavenIQ API running on port ${PORT}`);
+    console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`   Health check: http://localhost:${PORT}/health\n`);
+  });
 });
 
 module.exports = { app, server };
