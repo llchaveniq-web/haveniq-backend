@@ -63,9 +63,61 @@ const router  = require('express').Router();
 const jwt     = require('jsonwebtoken');
 const bcrypt  = require('bcryptjs');
 const crypto  = require('crypto');
+const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const { authenticator } = require('otplib');
 const pool    = require('../db/pool');
 const { requireAuth, signToken } = require('../middleware/auth');
+
+// ── Rate limiters ────────────────────────────────────────────────────
+// Without these the 2FA routes are a brute-force surface:
+//   • /challenge — 6-digit TOTP has 1M combinations. authenticator.check
+//     with window:1 accepts the prev/current/next step, so any given
+//     moment 3 codes work — ~333K guesses to hit. Global IP limiter
+//     (200/15min) is not nearly tight enough.
+//   • /verify-setup — similar. Adds friction to enrollment but the
+//     legitimate user only needs one or two tries.
+//   • /disable — would let an attacker with a stolen session grind
+//     past the second-factor confirmation.
+//   • /setup — relatively cheap, but each call generates 10 bcrypt
+//     hashes (~1s CPU). Limit prevents cheap CPU DoS.
+//
+// Keyed by `email-or-userId` when available so a single attacker who
+// rotates IPs still gets caught. Falls back to IP for the pre-session
+// /challenge calls. Skips successful requests so a user fumbling one
+// digit doesn't burn their whole budget.
+const setupLimit = rateLimit({
+  windowMs: 60 * 60 * 1000,  // 1 hour
+  max: 6,
+  message: { error: 'Too many setup attempts. Try again in an hour.' },
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req),
+});
+const verifySetupLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many verification attempts.' },
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req),
+  skipSuccessfulRequests: true,
+});
+const disableLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many disable attempts.' },
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req),
+  skipSuccessfulRequests: true,
+});
+// Challenge is pre-session — no req.user. Best key is the challenge JWT
+// itself (one-attacker-per-challenge), with IP as the ultimate fallback.
+const challengeLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many code attempts. Sign in again to get a fresh challenge.' },
+  keyGenerator: (req) => {
+    const t = (req.body?.challenge || '').slice(0, 96);
+    return t || ipKeyGenerator(req);
+  },
+  skipSuccessfulRequests: true,
+});
 
 // Same TOTP options Google Authenticator, 1Password and Authy default to.
 // Window: 1 step (30s) of tolerance on either side of "now" lets a slow
@@ -73,6 +125,69 @@ const { requireAuth, signToken } = require('../middleware/auth');
 authenticator.options = { window: 1, step: 30 };
 
 const APP_NAME = 'HavenIQ';
+
+// ── Recovery code helpers ────────────────────────────────────────────
+//
+// Two correctness properties matter here:
+//
+//   1. Atomicity. Two parallel requests with the same valid recovery
+//      code must not both succeed. The naive read → bcrypt-match →
+//      write sequence has a window in which both requests see the
+//      same array, both pass bcrypt, both UPDATE — and now the same
+//      code authenticated twice. Closed below with SELECT … FOR
+//      UPDATE inside a transaction that holds the row lock until
+//      the UPDATE commits.
+//
+//   2. Timing stability. A short-circuiting bcrypt loop reveals the
+//      number of remaining codes (and partially, which slot the user
+//      hit). Closed below by always iterating every slot — even
+//      after a match — so the wall-clock time for "wrong code with
+//      10 hashes present" is indistinguishable from "right code,
+//      hit on slot 0 with 10 hashes present."
+//
+// Returns { matched, indexHint } where indexHint is the consumed slot
+// (or -1 if no match). The consumption is committed by the time the
+// promise resolves with matched=true; callers don't need to do a
+// follow-up UPDATE.
+async function consumeRecoveryCodeAtomic(userId, recoveryCode) {
+  const code = String(recoveryCode).trim();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      'SELECT totp_recovery_codes FROM users WHERE id = $1 FOR UPDATE',
+      [userId],
+    );
+    const hashes = rows[0]?.totp_recovery_codes || [];
+
+    // Constant-time match: bcrypt every hash even after a hit. The
+    // attacker observing wall-clock time can't tell whether the match
+    // happened on slot 0, slot 9, or never.
+    let matchIndex = -1;
+    for (let i = 0; i < hashes.length; i++) {
+      const equal = await bcrypt.compare(code, hashes[i]);
+      if (equal && matchIndex === -1) matchIndex = i;
+    }
+
+    if (matchIndex === -1) {
+      await client.query('COMMIT');
+      return { matched: false, indexHint: -1 };
+    }
+
+    const remaining = hashes.filter((_, i) => i !== matchIndex);
+    await client.query(
+      'UPDATE users SET totp_recovery_codes = $1 WHERE id = $2',
+      [remaining, userId],
+    );
+    await client.query('COMMIT');
+    return { matched: true, indexHint: matchIndex };
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 const CHALLENGE_TTL_SECONDS = 5 * 60;
 const CHALLENGE_PURPOSE     = '2fa-challenge';
@@ -102,7 +217,7 @@ function otpauthUrl(email, secret) {
 }
 
 // ── POST /auth/2fa/setup ─────────────────────────────────────────────
-router.post('/setup', requireAuth, async (req, res) => {
+router.post('/setup', requireAuth, setupLimit, async (req, res) => {
   try {
     const userId = req.user.id;
 
@@ -155,7 +270,7 @@ router.post('/setup', requireAuth, async (req, res) => {
 });
 
 // ── POST /auth/2fa/verify-setup ──────────────────────────────────────
-router.post('/verify-setup', requireAuth, async (req, res) => {
+router.post('/verify-setup', requireAuth, verifySetupLimit, async (req, res) => {
   try {
     const userId = req.user.id;
     const { code } = req.body || {};
@@ -190,7 +305,7 @@ router.post('/verify-setup', requireAuth, async (req, res) => {
 });
 
 // ── POST /auth/2fa/disable ───────────────────────────────────────────
-router.post('/disable', requireAuth, async (req, res) => {
+router.post('/disable', requireAuth, disableLimit, async (req, res) => {
   try {
     const userId = req.user.id;
     const { code, recoveryCode } = req.body || {};
@@ -208,20 +323,20 @@ router.post('/disable', requireAuth, async (req, res) => {
     }
 
     let authorized = false;
-    let consumedRecoveryIndex = -1;
+    let viaRecovery = false;
 
     if (code) {
       authorized = authenticator.check(String(code).trim(), row.totp_secret);
     }
     if (!authorized && recoveryCode) {
-      const remaining = row.totp_recovery_codes || [];
-      for (let i = 0; i < remaining.length; i++) {
-        if (await bcrypt.compare(String(recoveryCode).trim(), remaining[i])) {
-          authorized = true;
-          consumedRecoveryIndex = i;
-          break;
-        }
-      }
+      // Atomic + constant-time (see consumeRecoveryCodeAtomic). The
+      // helper has already committed the consumption when matched
+      // is true, so we don't need to follow up with another UPDATE
+      // to remove the used hash — the /disable UPDATE below also
+      // clears the array.
+      const result = await consumeRecoveryCodeAtomic(userId, recoveryCode);
+      authorized = result.matched;
+      viaRecovery = result.matched;
     }
     if (!authorized) {
       return res.status(400).json({ error: 'Incorrect code.' });
@@ -238,7 +353,7 @@ router.post('/disable', requireAuth, async (req, res) => {
       [userId],
     );
 
-    return res.json({ disabled: true, viaRecoveryCode: consumedRecoveryIndex >= 0 });
+    return res.json({ disabled: true, viaRecoveryCode: viaRecovery });
   } catch (err) {
     console.error('[2fa] /disable error:', err);
     res.status(500).json({ error: '2FA disable failed' });
@@ -247,7 +362,7 @@ router.post('/disable', requireAuth, async (req, res) => {
 
 // ── POST /auth/2fa/challenge ─────────────────────────────────────────
 // Pre-session — verifies the second factor in the login flow.
-router.post('/challenge', async (req, res) => {
+router.post('/challenge', challengeLimit, async (req, res) => {
   try {
     const { challenge, code, recoveryCode } = req.body || {};
     if (!challenge) {
@@ -289,35 +404,20 @@ router.post('/challenge', async (req, res) => {
     }
 
     let authorized = false;
-    let consumedRecoveryIndex = -1;
 
     if (code) {
       authorized = authenticator.check(String(code).trim(), u.totp_secret);
     }
     if (!authorized && recoveryCode) {
-      const remaining = u.totp_recovery_codes || [];
-      for (let i = 0; i < remaining.length; i++) {
-        if (await bcrypt.compare(String(recoveryCode).trim(), remaining[i])) {
-          authorized = true;
-          consumedRecoveryIndex = i;
-          break;
-        }
-      }
+      // consumeRecoveryCodeAtomic does the row-level lock, constant-time
+      // bcrypt loop, and the array UPDATE in a single transaction — so
+      // the same recovery code can never be used twice even under
+      // concurrent /challenge requests.
+      const result = await consumeRecoveryCodeAtomic(userId, recoveryCode);
+      authorized = result.matched;
     }
     if (!authorized) {
       return res.status(400).json({ error: 'Incorrect code. Try the current 6 digits or a recovery code.' });
-    }
-
-    // If a recovery code was used, remove its hash from the array so it
-    // can never be used twice.
-    if (consumedRecoveryIndex >= 0) {
-      const remaining = (u.totp_recovery_codes || []).filter(
-        (_, i) => i !== consumedRecoveryIndex,
-      );
-      await pool.query(
-        'UPDATE users SET totp_recovery_codes = $1 WHERE id = $2',
-        [remaining, userId],
-      );
     }
 
     const token = signToken(u.id);

@@ -25,6 +25,19 @@ async function requireAuth(req, res, next) {
     const token = header.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    // Reject tokens with a `purpose` claim. The 2FA login flow issues a
+    // short-lived JWT with `purpose: '2fa-challenge'` that must ONLY be
+    // accepted by POST /auth/2fa/challenge. Without this guard, a leaked
+    // challenge token (visible in browser network logs, error reports,
+    // referer headers during the 5-minute window) could be sent as
+    // `Authorization: Bearer <token>` and would authenticate as the
+    // user — fully bypassing the 2FA prompt the challenge was supposed
+    // to gate. Session tokens issued by signToken() carry only
+    // `{ userId }` with no purpose, so they pass.
+    if (decoded.purpose) {
+      return res.status(401).json({ error: 'Invalid token type' });
+    }
+
     // Pull fresh user from DB on every request (catches banned/deleted accounts)
     const { rows } = await pool.query(
       'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason FROM users WHERE id = $1',
