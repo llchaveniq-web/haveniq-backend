@@ -255,6 +255,7 @@ app.use('/users',    require('./routes/users'));
 app.use('/quiz',     require('./routes/quiz'));
 app.use('/matches',  require('./routes/matches'));
 app.use('/matches',  require('./routes/matchOfTheDay'));  // /matches/today + /matches/today/action
+app.use('/matches',  require('./routes/matchedMoment'));  // /matches/matched/:userId
 app.use('/daily',    require('./routes/dailyDiscovery')); // /daily/today + /daily/today/answer
 app.use('/',         require('./routes/activityPulse'));  // /activity-pulse
 app.use('/messages', require('./routes/messages'));
