@@ -254,6 +254,7 @@ app.use('/auth',     require('./routes/auth'));
 app.use('/users',    require('./routes/users'));
 app.use('/quiz',     require('./routes/quiz'));
 app.use('/matches',  require('./routes/matches'));
+app.use('/matches',  require('./routes/matchOfTheDay'));  // /matches/today + /matches/today/action
 app.use('/messages', require('./routes/messages'));
 app.use('/telemetry', require('./routes/telemetry'));
 app.use('/reviews',  require('./routes/reviews'));
