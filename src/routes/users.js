@@ -1091,11 +1091,27 @@ Output ONLY valid JSON, no markdown:
       });
     }
 
-    const sections = Array.isArray(payload.sections) ? payload.sections.slice(0, 5) : [];
+    const sectionsRaw = Array.isArray(payload.sections) ? payload.sections.slice(0, 5) : [];
+
+    // STRICT VALIDATION (added 2026-06-01 after Jackson reported
+    // "I only see the bottom CTAs"). The previous validation only
+    // checked length === 5, but a malformed Claude response could
+    // satisfy that while each section had empty kicker/title/body —
+    // rendering as silent blank space between masthead and colophon.
+    // Now: every section must have non-empty kicker, title, AND body.
+    // Any failure → ready:false with a try-again message instead of
+    // an empty magazine spread.
+    const sections = sectionsRaw.filter(s =>
+      s && typeof s === 'object' &&
+      typeof s.kicker === 'string' && s.kicker.trim().length > 0 &&
+      typeof s.title  === 'string' && s.title.trim().length  > 0 &&
+      typeof s.body   === 'string' && s.body.trim().length   > 20  // bodies should be real prose, not single words
+    );
     if (sections.length < 5) {
+      console.error('[about-you] validation failed:', { rawCount: sectionsRaw.length, validCount: sections.length });
       return res.json({
         ready: false,
-        reason: 'Reveal generation incomplete. Try again in a minute.',
+        reason: 'Reveal generation incomplete. Pull to refresh in a minute.',
         sections: [],
       });
     }
