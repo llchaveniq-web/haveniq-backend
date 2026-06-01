@@ -394,6 +394,73 @@ router.get('/at-risk-users', requireBotToken, async (req, res) => {
   }
 });
 
+// ── GET /bot-admin/matches-needing-survey ──────────────────────────────
+// Powers the 30-day satisfaction-survey bot. Returns connect_requests
+// where:
+//   1. Status is 'accepted' (a real match — both sides opted in)
+//   2. Accepted 25-35 days ago (target window: ~30-day check-in)
+//   3. Neither party has logged a `survey_30d` match_outcome for
+//      this pair yet (dedupe: don't survey twice)
+//
+// Why this window: at 30 days, matched pairs have either:
+//   - Met in person and decided whether to actually room together
+//   - Drifted apart (signal for matching algorithm)
+//   - Still chatting and deliberating (real-time signal)
+// All three are valuable data. Pre-30d is too early; post-60d is too
+// late to capture freshness.
+//
+// Returns both sides' user info so Claude can personalize the email
+// to each party separately (founder sends one email per person, not
+// per pair — more authentic).
+router.get('/matches-needing-survey', requireBotToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        cr.id                         AS request_id,
+        cr.from_user                  AS user_a_id,
+        cr.to_user                    AS user_b_id,
+        cr.updated_at                 AS matched_at,
+        EXTRACT(DAY FROM NOW() - cr.updated_at)::int AS days_since_match,
+        a.email                       AS user_a_email,
+        a.first_name                  AS user_a_first_name,
+        a.school                      AS user_a_school,
+        a.school_year                 AS user_a_school_year,
+        b.email                       AS user_b_email,
+        b.first_name                  AS user_b_first_name,
+        b.school                      AS user_b_school,
+        b.school_year                 AS user_b_school_year,
+        -- Surface compat score if we have one so Claude can reference it
+        (SELECT score FROM compatibility_scores cs
+          WHERE (cs.user_a = LEAST(cr.from_user, cr.to_user)
+            AND cs.user_b = GREATEST(cr.from_user, cr.to_user))
+          LIMIT 1)                    AS match_score
+      FROM connect_requests cr
+      JOIN users a ON a.id = cr.from_user
+      JOIN users b ON b.id = cr.to_user
+      WHERE cr.status = 'accepted'
+        AND cr.updated_at BETWEEN NOW() - INTERVAL '35 days' AND NOW() - INTERVAL '25 days'
+        AND NOT EXISTS (
+          SELECT 1 FROM match_outcomes mo
+          WHERE mo.outcome = 'survey_30d'
+            AND (
+              (mo.reporter_id = cr.from_user AND mo.other_user_id = cr.to_user)
+              OR (mo.reporter_id = cr.to_user AND mo.other_user_id = cr.from_user)
+            )
+        )
+        AND COALESCE(a.is_banned, FALSE) = FALSE
+        AND COALESCE(b.is_banned, FALSE) = FALSE
+        AND COALESCE(a.is_paused, FALSE) = FALSE
+        AND COALESCE(b.is_paused, FALSE) = FALSE
+      ORDER BY cr.updated_at ASC
+      LIMIT 50
+    `);
+    res.json({ count: rows.length, matches: rows });
+  } catch (err) {
+    console.error('[botAdmin] matches-needing-survey failed:', err);
+    res.status(500).json({ error: 'Survey query failed' });
+  }
+});
+
 // ── GET /bot-admin/monthly-rollup ──────────────────────────────────────
 // Powers the monthly investor-update bot. Aggregate metrics over the last
 // 30 days plus the 30 days prior, so we can show month-over-month deltas.

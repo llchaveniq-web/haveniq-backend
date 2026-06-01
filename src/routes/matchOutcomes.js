@@ -30,6 +30,7 @@ const ALLOWED_OUTCOMES = new Set([
   'still_chatting',
   'lost_contact',
   'ended_roommate_relationship',
+  'survey_30d',           // 30-day satisfaction check-in (bot-driven outreach)
   'survey_60d',           // structured survey response — content lives in details
 ]);
 
