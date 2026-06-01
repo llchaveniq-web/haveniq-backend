@@ -378,7 +378,7 @@ app.set('sendPushToUser', sendPushToUser);
 //      missing columns, and the rest of the API should keep serving.
 //      A hard exit would take everything down for a bootstrap problem
 //      that the user-visible failure already pinpoints.
-function bootstrapSchemaAsync() {
+async function bootstrapSchemaAsync() {
   const fs   = require('fs');
   const path = require('path');
   const sqlPath = path.resolve(__dirname, 'db', 'migrate_missing.sql');
@@ -387,16 +387,78 @@ function bootstrapSchemaAsync() {
     return;
   }
   const sql = fs.readFileSync(sqlPath, 'utf8');
-  console.log('[bootstrap] applying migrate_missing.sql (background)…');
-  pool.query(sql)
-    .then(() => console.log('[bootstrap] schema bootstrap OK'))
-    .catch((err) => {
-      // Loud but non-fatal. Surfacing in Railway logs is enough — admin
-      // can run `psql -f migrate_missing.sql` by hand if a specific
-      // statement is wedged.
-      console.error('[bootstrap] schema bootstrap FAILED:', err.message);
-      sentry.captureError(err, { phase: 'bootstrap' });
-    });
+
+  // Split on top-level semicolons, ignoring those inside string literals
+  // and SQL line comments. We can't run the whole file as one pool.query
+  // because a single failing statement aborts every following statement
+  // in the batch — that's how the bootstrap that was supposed to add
+  // the 2FA columns (last 3 lines of the file) silently never ran:
+  // an earlier `CREATE INDEX … ON messages(…, created_at DESC)`
+  // statement choked because `messages` exists in prod without
+  // `created_at`, and the batch failed before reaching the new ALTERs.
+  //
+  // Splitter is intentionally conservative — strips `--` line comments
+  // and respects single-quoted strings (with '' escape). It's not a
+  // full SQL parser; the bootstrap file is checked into the repo so
+  // we control what shapes it contains. If a future statement uses
+  // dollar-quoted strings ($$...$$) or `/* */` block comments, this
+  // function needs an upgrade.
+  function splitStatements(src) {
+    const out = [];
+    let buf = '';
+    let inSingleQuote = false;
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      const n = src[i + 1];
+      // -- line comment
+      if (!inSingleQuote && c === '-' && n === '-') {
+        const end = src.indexOf('\n', i);
+        i = end === -1 ? src.length : end + 1;
+        continue;
+      }
+      if (c === "'") {
+        // SQL '' is an escaped single quote inside a string
+        if (inSingleQuote && n === "'") { buf += "''"; i += 2; continue; }
+        inSingleQuote = !inSingleQuote;
+        buf += c; i++; continue;
+      }
+      if (c === ';' && !inSingleQuote) {
+        const stmt = buf.trim();
+        if (stmt) out.push(stmt);
+        buf = '';
+        i++; continue;
+      }
+      buf += c; i++;
+    }
+    const tail = buf.trim();
+    if (tail) out.push(tail);
+    return out;
+  }
+
+  const statements = splitStatements(sql);
+  console.log(`[bootstrap] applying ${statements.length} statements from migrate_missing.sql (background)…`);
+
+  let ok = 0, failed = 0;
+  for (let idx = 0; idx < statements.length; idx++) {
+    const stmt = statements[idx];
+    try {
+      await pool.query(stmt);
+      ok++;
+    } catch (err) {
+      failed++;
+      // One line per failure — enough for Railway logs to point at the
+      // offending statement. We deliberately don't bail; the next
+      // statement may still be useful (e.g. the trailing 2FA ALTERs
+      // we just added) and the rest of the API stays up regardless.
+      const preview = stmt.replace(/\s+/g, ' ').slice(0, 120);
+      console.error(`[bootstrap] statement ${idx + 1} FAILED: ${err.message} (preview: ${preview}…)`);
+    }
+  }
+  console.log(`[bootstrap] done — ${ok} ok, ${failed} failed`);
+  if (failed > 0) {
+    sentry.captureMessage?.(`bootstrap had ${failed} failing statement(s)`, 'warning');
+  }
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────
