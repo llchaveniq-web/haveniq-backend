@@ -25,6 +25,140 @@ const ANTHROPIC_KEY = env('ANTHROPIC_API_KEY');
 const DISCORD_HOOK  = env('DISCORD_WEBHOOK_URL');
 const GH_FIX_TOKEN  = env('GITHUB_FIX_TOKEN');
 const GH_REPO       = env('GITHUB_REPO') || 'llchaveniq-web/haveniq-app';
+// Cloudflare credentials for auto-rollback when a deploy goes bad.
+// Both must be set or rollback is skipped (manual Discord alert only).
+const CF_API_TOKEN  = env('CLOUDFLARE_API_TOKEN');
+const CF_ACCOUNT_ID = env('CLOUDFLARE_ACCOUNT_ID');
+const CF_PROJECT    = env('CLOUDFLARE_PAGES_PROJECT') || 'haveniq-app';
+
+// ── Error burst tracking ──────────────────────────────────────────────
+// Counts errors per "bundle hash" (extracted from the user's URL referer
+// or stack trace). When a single bundle hits THRESHOLD errors within
+// WINDOW_MS, we trigger an automatic Cloudflare Pages rollback to the
+// previous production deployment.
+//
+// Rationale: most bugs only surface AFTER a bad deploy. The first 1-3
+// users who load the bad bundle hit errors; we detect the burst, roll
+// back, and users 4+ download the previous (working) bundle. The bot's
+// auto-fix still ships a forward fix, but rollback buys 5-10 min of
+// safety while that fix is in CI.
+const errorBurst = new Map(); // bundleHash → { count, firstAt, rolledBack }
+const BURST_THRESHOLD = 5;
+const BURST_WINDOW_MS = 5 * 60 * 1000;
+const BURST_CLEANUP_MS = 30 * 60 * 1000;
+
+function bundleHashFromReport(report) {
+  // Sentry-style: extract `index-<hash>.js` from stack or url.
+  const sources = [
+    String(report.url || ''),
+    String(report.stack || '').slice(0, 4000),
+  ].join(' ');
+  const m = sources.match(/index-([a-f0-9]{16,})\.js/i);
+  return m ? m[1] : 'unknown';
+}
+
+async function tryAutoRollback(bundleHash) {
+  if (!CF_API_TOKEN || !CF_ACCOUNT_ID) {
+    return { attempted: false, reason: 'CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set' };
+  }
+  try {
+    // List deployments — most recent first
+    const listRes = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PROJECT}/deployments?per_page=20`,
+      { headers: { Authorization: `Bearer ${CF_API_TOKEN}` }, signal: AbortSignal.timeout(15_000) }
+    );
+    if (!listRes.ok) {
+      const t = await listRes.text().catch(() => '');
+      return { attempted: true, success: false, reason: `list failed: ${listRes.status} ${t.slice(0, 200)}` };
+    }
+    const listJson = await listRes.json();
+    const deployments = listJson.result || [];
+    // Find the current production deployment (alias contains 'production' or it's most recent with environment=production)
+    const production = deployments.find((d) => d.environment === 'production');
+    const previousProduction = deployments.find((d) =>
+      d.environment === 'production' && d.id !== production?.id && d.id !== (production?.aliases || []).join(',')
+    );
+    if (!previousProduction) {
+      return { attempted: true, success: false, reason: 'no previous production deployment found' };
+    }
+    // Rollback — POST to rollback endpoint
+    const rollbackRes = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PROJECT}/deployments/${previousProduction.id}/rollback`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${CF_API_TOKEN}` },
+        signal: AbortSignal.timeout(20_000),
+      }
+    );
+    if (!rollbackRes.ok) {
+      const t = await rollbackRes.text().catch(() => '');
+      return { attempted: true, success: false, reason: `rollback failed: ${rollbackRes.status} ${t.slice(0, 200)}` };
+    }
+    return {
+      attempted: true,
+      success: true,
+      rolledBackTo: previousProduction.id,
+      bundleHash,
+    };
+  } catch (err) {
+    return { attempted: true, success: false, reason: `exception: ${err.message}` };
+  }
+}
+
+async function trackBurstAndMaybeRollback(report) {
+  const bundleHash = bundleHashFromReport(report);
+  const now = Date.now();
+  let entry = errorBurst.get(bundleHash);
+
+  // Reset stale entries
+  if (entry && (now - entry.firstAt) > BURST_CLEANUP_MS) {
+    entry = null;
+  }
+  if (!entry) {
+    entry = { count: 0, firstAt: now, rolledBack: false };
+  }
+  entry.count += 1;
+  errorBurst.set(bundleHash, entry);
+
+  // Trigger rollback only ONCE per bundle, when threshold crossed within window
+  const withinWindow = (now - entry.firstAt) <= BURST_WINDOW_MS;
+  const overThreshold = entry.count >= BURST_THRESHOLD;
+  if (!entry.rolledBack && withinWindow && overThreshold) {
+    entry.rolledBack = true;
+    const result = await tryAutoRollback(bundleHash);
+    // Discord alert regardless of success
+    if (DISCORD_HOOK) {
+      const color = result.success ? 0xE67E22 : 0xC0392B;
+      const title = result.success
+        ? `🔁 AUTO-ROLLBACK fired — bundle ${bundleHash.slice(0, 8)}`
+        : `🚨 ERROR BURST — bundle ${bundleHash.slice(0, 8)} (rollback ${result.attempted ? 'FAILED' : 'SKIPPED'})`;
+      fetch(DISCORD_HOOK, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          embeds: [{
+            title,
+            description: `${entry.count} errors from this bundle in <${Math.round((now - entry.firstAt) / 1000)}s. ` +
+              (result.success
+                ? `Cloudflare rolled back to previous production deployment. New users will get the OLD (working) bundle while bot ships a forward fix.`
+                : `Rollback could NOT be performed. ${result.reason ?? '(no reason)'}`),
+            color,
+            fields: [
+              { name: 'Bundle hash', value: '`' + bundleHash + '`', inline: false },
+              { name: 'Rollback target', value: result.rolledBackTo ? '`' + result.rolledBackTo + '`' : '—', inline: true },
+              { name: 'Action needed', value: result.success
+                ? 'NONE — auto-recovery in motion. Verify Cloudflare dashboard shows the previous deployment as production.'
+                : 'Manually roll back at: https://dash.cloudflare.com/?to=/:account/pages/view/' + CF_PROJECT, inline: false },
+            ],
+            timestamp: new Date().toISOString(),
+            footer: { text: 'Auto-rollback • protects user #N from user #1\'s deploy' },
+          }],
+        }),
+      }).catch(() => {});
+    }
+    return { burstDetected: true, ...result };
+  }
+  return { burstDetected: false, count: entry.count, threshold: BURST_THRESHOLD };
+}
 
 // Dedupe — same error can fire many times in a row from React's
 // reconciliation retries. Cache by fingerprint for 10 min so we don't
@@ -230,10 +364,15 @@ router.post('/__report', express.json({ limit: '512kb' }), async (req, res) => {
   // Process async
   setImmediate(async () => {
     try {
+      // STEP 1 — Burst tracking + auto-rollback. Runs FIRST and in parallel
+      // with triage because rollback latency matters: every second the bad
+      // bundle stays live is another user potentially hitting the bug.
+      const burstP = trackBurstAndMaybeRollback(report);
       const triage = await callClaudeTriage(report);
       const fixDispatched = await dispatchAutoFix(triage, report);
+      const burst = await burstP;
       await postDiscord(report, triage, fixDispatched);
-      console.log(`[direct-report] processed: ${triage.severity} ${triage.bug_class} ${triage.likely_file}`);
+      console.log(`[direct-report] processed: ${triage.severity} ${triage.bug_class} ${triage.likely_file} burst=${burst.burstDetected ? `ROLLED-BACK=${burst.success}` : `count=${burst.count}/${burst.threshold}`}`);
     } catch (err) {
       console.error('[direct-report] async processing failed:', err.message);
       // Even on triage failure, drop a raw report so we know an error happened
