@@ -51,31 +51,40 @@ class ModerationRejectedError extends Error {
   }
 }
 
+// Cloudinary AWS Rekognition AI Moderation is an OPT-IN add-on that
+// must be enabled in the Cloudinary dashboard (Settings → Add-ons).
+// Free up to 500 images/mo. The old comment here CLAIMED Cloudinary
+// silently ignores the moderation parameter if the add-on isn't
+// active — that was wrong. The actual behavior is a 400 error:
+//   "You don't have an active subscription for Rekognition AI Moderation"
+// …which kills every photo upload. So now moderation is gated on an
+// env var. Flip it ON once you've enabled the add-on in Cloudinary.
+const MODERATION_ENABLED = String(process.env.ENABLE_CLOUDINARY_MODERATION || '').toLowerCase() === 'true';
+if (!MODERATION_ENABLED) {
+  console.warn('[cloudinary] AI moderation DISABLED. Set ENABLE_CLOUDINARY_MODERATION=true on Railway after enabling the AWS Rekognition add-on in the Cloudinary dashboard.');
+}
+
 function uploadProfilePhoto(userId, buffer) {
   return new Promise((resolve, reject) => {
     if (!ensureConfigured()) {
       reject(new Error('Cloudinary not configured (missing CLOUDINARY_* env vars)'));
       return;
     }
+    const uploadOptions = {
+      public_id:    `haveniq/users/${userId}`,
+      folder:       'haveniq/users',
+      overwrite:    true,
+      resource_type: 'image',
+      transformation: [
+        { width: 512, height: 512, gravity: 'face', crop: 'fill' },
+        { quality: 'auto', fetch_format: 'auto' },
+      ],
+    };
+    if (MODERATION_ENABLED) {
+      uploadOptions.moderation = 'aws_rek';
+    }
     const stream = cloudinary.uploader.upload_stream(
-      {
-        public_id:    `haveniq/users/${userId}`,
-        folder:       'haveniq/users',
-        overwrite:    true,
-        resource_type: 'image',
-        // Auto-moderate using AWS Rekognition. Free in Cloudinary up to
-        // 500 images/mo, then ~$1/1k. Requires the "Amazon Rekognition AI
-        // Moderation" add-on to be enabled in the Cloudinary dashboard
-        // (Settings → Add-ons → free signup). If the add-on isn't enabled,
-        // Cloudinary silently ignores this parameter and the upload
-        // succeeds — so it's safe to ship before activation. Once enabled,
-        // explicit / suggestive content is blocked automatically.
-        moderation: 'aws_rek',
-        transformation: [
-          { width: 512, height: 512, gravity: 'face', crop: 'fill' },
-          { quality: 'auto', fetch_format: 'auto' },
-        ],
-      },
+      uploadOptions,
       async (err, result) => {
         if (err) return reject(err);
 
