@@ -1,4 +1,5 @@
 const { Resend } = require('resend');
+const crypto = require('crypto');
 const analytics = require('./analytics');
 
 // Lazy-initialize so the server doesn't crash if env var loads after module
@@ -6,9 +7,13 @@ function getResend() {
   return new Resend(process.env.RESEND_API_KEY);
 }
 
-// Generate a 6-digit OTP
+// Generate a 6-digit OTP. Uses crypto.randomInt (CSPRNG), not Math.random
+// — Math.random isn't suitable for security-relevant tokens because its
+// stream is predictable from a small observed run. randomInt's upper
+// bound is exclusive, so [100000, 1000000) yields a uniform 6-digit
+// string with leading zeros preserved by .toString().
 function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 1000000).toString();
 }
 
 // Send OTP verification email. `userId` is optional because OTP fires before

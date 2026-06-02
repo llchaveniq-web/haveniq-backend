@@ -1,8 +1,21 @@
 const router = require('express').Router();
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
+const crypto = require('crypto');
 const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail, sendWelcomeEmail, sendFounderSignupAlert } = require('../services/email');
+
+// Hash an OTP for at-rest storage. We never want the cleartext code on
+// disk — a DB dump or backup leak would expose every in-flight code
+// otherwise. The pepper is mixed in so a stolen DB without the JWT
+// secret can't be brute-forced offline (1M codes is trivial without
+// the pepper).
+function hashOtp(code) {
+  return crypto
+    .createHash('sha256')
+    .update(`${code}:${process.env.JWT_SECRET}`)
+    .digest('hex');
+}
 const { signToken } = require('../middleware/auth');
 const { signChallengeToken } = require('./twoFactor');
 const analytics = require('../services/analytics');
@@ -135,13 +148,20 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     const code      = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
 
+    // Store the hash, not the cleartext. /verify-code hashes the user's
+    // submission the same way and compares. We keep the column named
+    // `code` for backwards-compat with existing reads; future migration
+    // can rename to code_hash.
     await pool.query(
       'INSERT INTO otp_codes (email, code, expires_at) VALUES ($1, $2, $3)',
-      [emailLower, code, expiresAt]
+      [emailLower, hashOtp(code), expiresAt]
     );
 
-    // Always log OTP so it's visible in Railway logs during testing
-    console.log(`📧 OTP for ${emailLower}: ${code}`);
+    // Only log the cleartext OTP outside production, where Railway logs
+    // are useful during dev. In prod the code never touches a log file.
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`📧 OTP for ${emailLower}: ${code}`);
+    }
 
     // Send the email via Resend. We still return success even if Resend
     // throws (so the testing loop keeps moving — Railway logs print the
@@ -175,8 +195,14 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
 });
 
 // ── POST /auth/verify-code ────────────────────────────────────────────────
-// Verifies OTP, creates/finds user, returns JWT
-const MAX_OTP_ATTEMPTS = 5;
+// Verifies OTP, creates/finds user, returns JWT.
+//
+// Attempt cap is 3 — must stay in sync with verify.tsx's MAX_ATTEMPTS.
+// Was 5, but the frontend locks the user out at 3 wrong codes, so a
+// scripted client that bypasses the React lockout was getting 5
+// guesses per code instead of the advertised 3. Either both sides
+// agree or the limit isn't a limit.
+const MAX_OTP_ATTEMPTS = 3;
 router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) => {
   try {
     const { email, code, school, schoolDomain } = req.body || {};
@@ -216,7 +242,14 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
       return res.status(400).json({ error: 'Too many attempts. Request a new code.' });
     }
 
-    if (otpRecord.code !== code.trim()) {
+    // Constant-time hash comparison. timingSafeEqual on the hex digests
+    // prevents an attacker observing wall-clock time from learning how
+    // many leading characters they got right.
+    const submittedHash = hashOtp(code.trim());
+    const storedHash    = otpRecord.code;
+    const equal = storedHash.length === submittedHash.length &&
+      crypto.timingSafeEqual(Buffer.from(storedHash, 'hex'), Buffer.from(submittedHash, 'hex'));
+    if (!equal) {
       // Once the user hits the cap with a wrong code, burn the OTP so the
       // next try can't re-validate even though the count check above
       // passed for THIS request.

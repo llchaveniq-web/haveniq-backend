@@ -1,5 +1,18 @@
 require('dotenv').config();
 
+// Fail-fast on missing production secrets. Without this guard a deploy
+// that loses RESEND_API_KEY silently 200s every /send-code call but
+// never delivers an email — users see "code sent" and stare at an
+// empty inbox. We'd rather not boot than ship a broken signup funnel.
+if (process.env.NODE_ENV === 'production') {
+  const required = ['RESEND_API_KEY', 'JWT_SECRET', 'DATABASE_URL'];
+  const missing = required.filter(k => !process.env[k]);
+  if (missing.length) {
+    console.error(`[fatal] Missing required env var(s) in production: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+
 const express    = require('express');
 const http       = require('http');
 const { Server } = require('socket.io');

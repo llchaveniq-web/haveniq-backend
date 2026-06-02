@@ -78,9 +78,23 @@ router.get('/conversations', requireAuth, async (req, res) => {
 // conversationId looking for stored messages would trip this fast.
 router.get('/:conversationId', requireAuth, suspicious.track('messages.thread', 60), async (req, res) => {
   try {
-    // Verify user is part of this conversation
+    // Verify user is part of this conversation AND not currently blocked
+    // by the other party. The block check used to live only on the POST
+    // (so a blocked user couldn't SEND), but the GET-thread path would
+    // still return the historical message bodies — a user you blocked
+    // could re-fetch your past messages by hitting this endpoint with
+    // the conversation_id. Mirror the block filter here so blocked-by
+    // means "can't read past messages either."
     const { rows: convRows } = await pool.query(
-      'SELECT id, user_a, user_b FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
+      `SELECT c.id, c.user_a, c.user_b
+         FROM conversations c
+        WHERE c.id = $1
+          AND (c.user_a = $2 OR c.user_b = $2)
+          AND NOT EXISTS (
+            SELECT 1 FROM user_blocks ub
+             WHERE ub.blocker_id = CASE WHEN c.user_a = $2 THEN c.user_b ELSE c.user_a END
+               AND ub.blocked_id = $2
+          )`,
       [req.params.conversationId, req.user.id]
     );
     if (!convRows[0]) return res.status(403).json({ error: 'Not authorized' });
