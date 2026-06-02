@@ -110,6 +110,24 @@ app.use('/api', (req, res, next) => {
   next();
 }, require('./routes/sentryTunnel'));
 
+// ── Resend bounce webhook — mounted BEFORE express.json so we can
+//    keep the raw bytes for HMAC signature verification. Resend signs
+//    the exact body it sent; if json() runs first and reserializes,
+//    every signature check fails.
+app.use(
+  '/webhooks/resend',
+  express.raw({ type: 'application/json', limit: '64kb' }),
+  (req, res, next) => {
+    if (Buffer.isBuffer(req.body)) {
+      req.rawBody = req.body;
+      try { req.body = JSON.parse(req.body.toString('utf8')); }
+      catch { return res.status(400).json({ error: 'invalid json' }); }
+    }
+    next();
+  },
+  require('./routes/resendWebhook'),
+);
+
 // ── Socket.io (real-time messaging) ──────────────────────────────────────
 //
 // ⚠️  CURRENTLY UNUSED IN PRODUCTION (as of 2026-05-17). The web client at

@@ -364,10 +364,29 @@ async function scoreNewMatches(userId, newAnswers) {
     // Blend: the clinical quiz stays the major factor (70%); the MBTI/DISC/
     // OCEAN personality match is a real second factor (30%). When either
     // side has no derived profile, fall back to the clinical score alone.
+    //
+    // CONVERGENCE GUARANTEE: this function is called twice per submit —
+    // once before derivePersonality() finishes (clinical-only) and once
+    // after (blended when both profiles exist). The pair-row in
+    // compatibility_scores is upserted on each call via ON CONFLICT.
+    // Once both users in a pair have completed quiz AND had their
+    // personality derived, the stored score is the blended value. The
+    // only stale-state window is between submit and personality
+    // derivation, which is at most one Anthropic round trip (~3s).
     let finalPct = result.finalPct;
     const personality = computePersonalityMatch(meProfile, profileById[other.user_id]);
     if (personality !== null) {
       finalPct = Math.round(result.finalPct * 0.7 + personality * 0.3);
+    } else if (meProfile && !profileById[other.user_id]) {
+      // The other user has a completed quiz but no personality profile —
+      // this is the pathology the watchdog should catch. Log to Sentry
+      // so we know which users to re-run derivePersonality on.
+      try {
+        require('../utils/sentry').captureMessage?.(
+          `scoreNewMatches: missing personality for ${other.user_id}`,
+          'warning',
+        );
+      } catch { /* sentry not loaded */ }
     }
 
     const [userA, userB] = userId < other.user_id
@@ -454,22 +473,19 @@ router.delete('/reset', requireAuth, async (req, res) => {
 //   - topDriftCategories: 1-3 categories with the largest movement
 //   - driftPct: 0..100 — share of answered questions that changed
 //
-// The first snapshot has all drift fields null. The category mapping
-// here mirrors services/scoring.js — kept in sync manually because
-// duplicating the constant is cheaper than refactoring the import for a
-// single read-side feature.
-const SNAPSHOT_CATEGORIES = {
-  attachment:    [1,2,3,4,5],
-  emotional:     [6,7,8,9,10],
-  control:       [11,12,13,14,15],
-  communication: [16,17,18,19,20],
-  identity:      [21,22,23,24,25],
-  childhood:     [26,27,28,29,30],
-  shadow:        [31,32,33,34,35],
-  nervous:       [36,37,38,39,40],
-  selfawareness: [41,42,43,44,45,46,47],
-  lifestyle:     [48,49,50,51,52,53,54,55],
-};
+// The first snapshot has all drift fields null. The category map here
+// derives from the canonical CATEGORIES constant in services/scoring.js
+// so we can't drift out of sync. Previously this used contiguous id
+// ranges (1..5 = attachment, 6..10 = emotional, etc.) that DIDN'T
+// match the actual question ids — Q22 lives under attachment in
+// scoring.js but the snapshot map put it under identity. Result:
+// snapshot drift reports were labeled against the wrong buckets,
+// making profile-drift trends meaningless. Now we import the real
+// map.
+const { CATEGORIES: CANONICAL_CATEGORIES } = require('../services/scoring');
+const SNAPSHOT_CATEGORIES = Object.fromEntries(
+  Object.entries(CANONICAL_CATEGORIES).map(([cat, { ids }]) => [cat, ids]),
+);
 
 function flatAnswerValue(raw) {
   if (typeof raw === 'number') return raw;

@@ -312,4 +312,7 @@ module.exports = {
   calculateGroupCompatibility,
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
+  // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its
+  // map from the canonical source instead of duplicating ids by hand.
+  CATEGORIES,
 };

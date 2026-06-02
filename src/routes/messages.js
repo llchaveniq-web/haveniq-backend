@@ -197,4 +197,51 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
   }
 });
 
+// ── POST /messages/:conversationId/:messageId/report ───────────────────
+// Long-press on a Journal message → "Report message" flows through here.
+// Records the specific message id alongside the reported user so the
+// moderator can pull up the exact flagged body instead of scrolling the
+// whole thread. Membership-gated by the same conversation-membership
+// rule the send endpoint uses, so a stranger can't hand-craft a
+// conversationId + messageId to forge a report.
+router.post('/:conversationId/:messageId/report', requireAuth, async (req, res) => {
+  try {
+    const { reason, details } = req.body || {};
+    if (!reason || typeof reason !== 'string' || reason.length > 80) {
+      return res.status(400).json({ error: 'reason (≤80 chars) required' });
+    }
+    if (details != null && (typeof details !== 'string' || details.length > 2000)) {
+      return res.status(400).json({ error: 'details must be ≤2000 chars' });
+    }
+
+    // Verify the user is in the conversation and the message belongs to it.
+    const { rows: msgRows } = await pool.query(
+      `SELECT m.id, m.sender_id, c.user_a, c.user_b
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversation_id
+        WHERE m.id = $1
+          AND c.id = $2
+          AND (c.user_a = $3 OR c.user_b = $3)`,
+      [req.params.messageId, req.params.conversationId, req.user.id],
+    );
+    const row = msgRows[0];
+    if (!row) return res.status(403).json({ error: 'Not authorized' });
+    if (row.sender_id === req.user.id) {
+      return res.status(400).json({ error: "You can't report your own message" });
+    }
+
+    await pool.query(
+      `INSERT INTO user_reports
+         (reporter_id, reported_id, message_id, category, severity, reason, details)
+       VALUES ($1, $2, $3, 'message', 'medium', $4, $5)`,
+      [req.user.id, row.sender_id, row.id, reason.trim(), details?.trim() ?? null],
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[messages/report] failed:', err.message);
+    res.status(500).json({ error: 'Report failed' });
+  }
+});
+
 module.exports = router;

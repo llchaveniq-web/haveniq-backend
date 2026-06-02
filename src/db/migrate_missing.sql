@@ -280,3 +280,19 @@ CREATE INDEX IF NOT EXISTS idx_partner_offers_active ON partner_offers(is_active
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret          TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled         BOOLEAN DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_recovery_codes  TEXT[]  DEFAULT '{}';
+
+-- ── Resend bounce flag — set TRUE by the /webhooks/resend handler
+--    whenever a hard-bounce or complaint webhook fires for the user's
+--    address. /auth/send-code refuses to send new OTPs to a flagged
+--    address (and surfaces a "this email seems undeliverable" hint
+--    to the founder during recruitment debugging).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_undeliverable BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_undeliverable_reason TEXT;
+
+-- ── Message-specific reports — long-press on a Journal message →
+--    "Report message" should record which specific message tripped the
+--    report (not just which user). Lets the moderator open the report
+--    and see the exact body that was flagged instead of scrolling the
+--    whole thread looking for the offending line.
+ALTER TABLE user_reports ADD COLUMN IF NOT EXISTS message_id UUID REFERENCES messages(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_user_reports_message ON user_reports (message_id) WHERE message_id IS NOT NULL;

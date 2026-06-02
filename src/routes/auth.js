@@ -139,6 +139,20 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
       });
     }
 
+    // Refuse to send OTPs to addresses Resend has flagged as
+    // undeliverable. Without this we keep firing codes at dead
+    // mailboxes, burning the per-email rate-limit budget for nothing.
+    const { rows: badRows } = await pool.query(
+      'SELECT email_undeliverable_reason FROM users WHERE LOWER(email) = $1 AND email_undeliverable = TRUE',
+      [emailLower],
+    );
+    if (badRows[0]) {
+      return res.status(400).json({
+        error: 'This email looks undeliverable. Try a different .edu address, or email support@haveniq.org if you think this is wrong.',
+        reason: badRows[0].email_undeliverable_reason,
+      });
+    }
+
     // Invalidate any existing OTPs for this email
     await pool.query(
       'UPDATE otp_codes SET used = TRUE WHERE email = $1 AND used = FALSE',
