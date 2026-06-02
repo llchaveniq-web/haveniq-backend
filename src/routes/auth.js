@@ -370,15 +370,23 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     // POSTs to /auth/2fa/challenge to finish the login. Until that
     // succeeds the user has NO session — verifying just the OTP is no
     // longer enough.
-    if (user.totp_enabled) {
-      return res.json({
-        requires2FA: true,
-        twoFactorChallenge: signChallengeToken(user.id),
-        // Echo a tiny bit of profile context so the 2FA prompt can show
-        // "Signing in as juli@calpoly.edu" without another round trip.
-        emailHint:  user.email,
-      });
-    }
+    // 2FA gate temporarily disabled. The verify-code short-circuit was
+    // routing users to the challenge screen even after their account had
+    // totp_enabled=FALSE in the DB — diagnosis blocked the night-before-
+    // launch sign-in test. Re-enable post-launch with a fresh trace
+    // through the gate condition + the frontend's requires2FA handler.
+    //
+    // While disabled, NO account requires 2FA at sign-in, regardless of
+    // the totp_enabled flag. The setup/disable UI continues to work
+    // (and writes the flag), it just doesn't gate.
+    //
+    // if (user.totp_enabled) {
+    //   return res.json({
+    //     requires2FA: true,
+    //     twoFactorChallenge: signChallengeToken(user.id),
+    //     emailHint:  user.email,
+    //   });
+    // }
 
     const token = signToken(user.id);
 
