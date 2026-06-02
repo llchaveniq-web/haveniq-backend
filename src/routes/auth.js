@@ -125,15 +125,18 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     }
 
     // Accept academic email addresses worldwide, not just US .edu. The
-    // pattern covers the major country-academic TLD conventions:
+    // pattern enumerates REAL academic ccTLDs explicitly — the previous
+    // version used `[a-z]{2,3}` which matched arbitrary 2-3 letter
+    // suffixes, so foo.edu.com / foo.edu.net / foo.ac.io would slip
+    // through. Bypass found by code-review pass 2026-06-02; closed now.
+    //
     //   US           → *.edu
-    //   UK / NZ / JP / KR / IN / ZA → *.ac.<cc>
-    //   AU / SG / PH / MX / CN / IN / TR / etc. → *.edu.<cc>
-    // Countries without a clean academic TLD (Canada .ca, Germany .de,
-    // France .fr, Ireland .ie) get validated by exact match against the
-    // school's pre-registered domain instead — see the schoolDomains
-    // check below.
-    const academicTldRegex = /\.(edu|edu\.[a-z]{2,3}|ac\.[a-z]{2,3})$/;
+    //   UK / NZ / JP / KR / IN / ZA / IL → *.ac.<cc>
+    //   AU / SG / PH / MX / CN / TR / IN / NG / PK → *.edu.<cc>
+    //
+    // If a real academic TLD is missing here, add it — don't widen the
+    // regex back to a wildcard.
+    const academicTldRegex = /\.(edu|edu\.(au|cn|mx|ph|sg|tr|in|ng|pk|hk|tw|my|id|br|co|pe|ar)|ac\.(uk|nz|jp|kr|in|za|il|th|ir|cn|ae))$/;
 
     const emailDomain  = emailLower.split('@')[1];
     // For existing users we use their on-file school_domain as the
@@ -511,6 +514,17 @@ router.post('/refresh', refreshLimitIp, async (req, res) => {
 
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true });
+
+    // SECURITY: reject typed tokens. A 2FA challenge JWT (purpose='2fa-challenge',
+    // 5-min TTL, embedded userId) would otherwise round-trip through this endpoint
+    // and mint a full 7-day session token — completely bypassing the TOTP step.
+    // requireAuth() rejects challenge tokens on protected routes, but /refresh
+    // is the one path that's allowed to consume an expired-or-expiring token,
+    // and without this guard it would happily exchange a stolen challenge for
+    // a session. Found by code-review pass 2026-06-02.
+    if (decoded.purpose) {
+      return res.status(401).json({ error: 'This token is not a session token.' });
+    }
 
     // `exp` is seconds since epoch. If absent the token is malformed.
     const expSec = decoded.exp;
