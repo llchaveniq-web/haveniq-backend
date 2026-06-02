@@ -395,12 +395,48 @@ router.post('/challenge', challengeLimit, async (req, res) => {
       [userId],
     );
     const u = rows[0];
-    if (!u || !u.totp_enabled || !u.totp_secret) {
-      // The user disabled 2FA between /verify-code and /challenge.
-      // Re-prompt for the OTP flow rather than silently logging them in
-      // — both endpoints are fast, and refusing here means we never
-      // bypass 2FA during a teardown window.
+    if (!u) {
       return res.status(401).json({ error: 'Sign in again.' });
+    }
+    // Gate-disabled fast path. If 2FA has been turned off on this
+    // account (totp_enabled FALSE OR totp_secret NULL), just complete
+    // the sign-in instead of returning 401. Otherwise users sitting
+    // on a stale challenge URL after we cleared their flag can't
+    // get through. The challenge JWT was issued during a real
+    // verify-code (signed with our secret), so honoring it once
+    // doesn't bypass any security boundary.
+    if (!u.totp_enabled || !u.totp_secret) {
+      const token = signToken(u.id);
+      return res.json({
+        success: true,
+        token,
+        userId: u.id,
+        quizCompleted: u.quiz_completed,
+        profile: {
+          id:             u.id,
+          email:          u.email,
+          school:         u.school,
+          firstName:      u.first_name,
+          lastName:       u.last_name,
+          lastInitial:    u.last_name ? u.last_name.trim().charAt(0) : '',
+          bio:            u.bio || '',
+          major:          u.major || '',
+          schoolYear:     u.school_year || '',
+          age:            u.age ?? null,
+          gender:         u.gender || '',
+          lookingFor:     u.looking_for || [],
+          photoUrl:       u.photo_url || null,
+          budgetMin:      u.budget_min ?? null,
+          budgetMax:      u.budget_max ?? null,
+          neighborhoods:  u.neighborhoods || [],
+          moveInDate:     u.move_in_date || null,
+          isVerified:     u.is_verified,
+          trustScore:     u.trust_score,
+          quizCompleted:  u.quiz_completed,
+          identityVerifiedAt: u.identity_verified_at,
+          totpEnabled:    false,
+        },
+      });
     }
 
     let authorized = false;
