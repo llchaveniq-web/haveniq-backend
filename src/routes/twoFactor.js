@@ -511,7 +511,10 @@ router.post('/challenge', challengeLimit, async (req, res) => {
     });
   } catch (err) {
     console.error('[2fa] /challenge error:', err);
-    res.status(500).json({ error: '2FA challenge failed' });
+    // Warm voice — this string surfaces directly inside the sign-in
+    // editorial flow. Kept generic since the 500 path covers a grab-bag
+    // of internal failures we can't usefully name to the user.
+    res.status(500).json({ error: "we hit a snag verifying that code. give it a moment, then try again." });
   }
 });
 
