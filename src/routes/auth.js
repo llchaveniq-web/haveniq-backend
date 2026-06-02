@@ -153,10 +153,36 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     //      international students whose school isn't yet curated — better
     //      than refusing them outright on day-one launch).
     const hasAcademicTld = academicTldRegex.test(emailDomain);
-    if (!domainMatches && !hasAcademicTld) {
-      const schoolLabel = school || existingUser?.school || 'your school';
+
+    // SECURITY — the .edu gate. Two checks, in order:
+    //
+    // (1) ALWAYS require a recognized academic TLD on the email itself.
+    //     The previous version used `(!domainMatches && !hasAcademicTld)`
+    //     which made the academic TLD optional when a schoolDomain was
+    //     supplied — and `schoolDomain` is attacker-controllable. A
+    //     request of `email: attacker@gmail.com, schoolDomain: gmail.com`
+    //     would satisfy `domainMatches` and bypass the gate entirely.
+    //     Probed and confirmed exploitable in prod 2026-06-02; closing
+    //     now so non-student emails can't reach the OTP step.
+    //
+    //     The TLD pattern itself (.edu / .edu.<cc> / .ac.<cc>) is
+    //     ICANN-controlled — you can't register `gmail.com.edu` so this
+    //     is genuinely unforgeable from the request body.
+    //
+    // (2) If a specific school + schoolDomain was supplied at signup,
+    //     the email's domain must also match it. Prevents claiming
+    //     "Cal Poly" while signing up with a UCLA address — the
+    //     identity-spoofing failure mode separate from the TLD gate.
+    if (!hasAcademicTld) {
       return res.status(400).json({
-        error: `Email must be a verified school address (e.g. .edu, .ac.uk, .edu.au)${acceptedList.length ? ` or match ${acceptedList.join(' / ')} for ${schoolLabel}` : ''}`,
+        error: 'School email required (.edu, .ac.uk, .edu.au, …). HavenIQ is for verified students only — please use your school address.',
+      });
+    }
+
+    if (acceptedList.length > 0 && !domainMatches) {
+      const schoolLabel = school || existingUser?.school || 'your selected school';
+      return res.status(400).json({
+        error: `That email doesn't match ${schoolLabel}. Use your school email (${acceptedList.join(' / ')}) or pick the right school.`,
       });
     }
 
