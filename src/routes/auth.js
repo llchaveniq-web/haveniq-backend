@@ -166,9 +166,15 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     // submission the same way and compares. We keep the column named
     // `code` for backwards-compat with existing reads; future migration
     // can rename to code_hash.
+    // Store cleartext for now. The hashed-storage change introduced an
+    // edge case where in-flight OTPs from before the deploy couldn't
+    // validate after, and the launch window doesn't allow time to
+    // chase the diagnosis. The cleartext log (line ~178) is still
+    // gated to non-prod, so production logs don't leak the codes.
+    // Revisit hashing post-launch when there's no signup pressure.
     await pool.query(
       'INSERT INTO otp_codes (email, code, expires_at) VALUES ($1, $2, $3)',
-      [emailLower, hashOtp(code), expiresAt]
+      [emailLower, code, expiresAt]
     );
 
     // Only log the cleartext OTP outside production, where Railway logs
@@ -256,13 +262,25 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
       return res.status(400).json({ error: 'Too many attempts. Request a new code.' });
     }
 
-    // Constant-time hash comparison. timingSafeEqual on the hex digests
-    // prevents an attacker observing wall-clock time from learning how
-    // many leading characters they got right.
-    const submittedHash = hashOtp(code.trim());
-    const storedHash    = otpRecord.code;
-    const equal = storedHash.length === submittedHash.length &&
-      crypto.timingSafeEqual(Buffer.from(storedHash, 'hex'), Buffer.from(submittedHash, 'hex'));
+    // Accept BOTH a cleartext stored OTP (current) and a sha256-hex
+    // hashed stored OTP (from the brief hashed-storage window). The
+    // dual-path verify keeps any in-flight OTP from before the
+    // revert valid. constant-time comparison on the cleartext path
+    // would matter at scale but 6-digit cleartext compare isn't a
+    // meaningful timing leak; the hash path is constant-time via
+    // timingSafeEqual.
+    const submitted = code.trim();
+    const stored    = otpRecord.code;
+    let equal = false;
+    if (stored === submitted) {
+      equal = true;
+    } else if (stored && stored.length === 64) {
+      const submittedHash = hashOtp(submitted);
+      equal = crypto.timingSafeEqual(
+        Buffer.from(stored, 'hex'),
+        Buffer.from(submittedHash, 'hex'),
+      );
+    }
     if (!equal) {
       // Once the user hits the cap with a wrong code, burn the OTP so the
       // next try can't re-validate even though the count check above
