@@ -78,8 +78,14 @@ function refuseBanned(req, res, next) {
 }
 
 function signToken(userId) {
+  // 7-day TTL (was 30d). Combined with the /auth/refresh endpoint's
+  // 7-day grace window, the maximum lifetime of a stolen JWT drops
+  // from 30 days to 14 (one full TTL + one grace cycle). The frontend
+  // refreshes on each app launch so users who open the app at least
+  // weekly never see a forced sign-out; users who haven't logged in
+  // in over two weeks get sent through the normal email-OTP flow.
   return jwt.sign({ userId }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '30d',
+    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 }
 

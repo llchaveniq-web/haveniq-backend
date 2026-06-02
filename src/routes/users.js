@@ -143,6 +143,36 @@ router.get('/leaderboard', requireAuth, async (req, res) => {
 });
 
 // ── GET /users/me ─────────────────────────────────────────────────────────
+// ── GET /users/me/sign-in-events ─────────────────────────────────────────
+// Returns the authenticated user's last 20 sign-in events for the
+// "Recent activity" surface on Profile. Each row exposes occurred_at,
+// method, the /24-binned IP (label only — we don't expose precise IPs
+// in the response), and a one-line user-agent summary. If anything
+// looks wrong ("a sign-in from 192.168.x.x via Edge on Windows when I
+// only ever use Safari on iPhone"), the user knows their email's been
+// compromised even before the attacker takes any visible action.
+router.get('/me/sign-in-events', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT method, ip_prefix, user_agent, occurred_at
+         FROM sign_in_events
+        WHERE user_id = $1
+        ORDER BY occurred_at DESC
+        LIMIT 20`,
+      [req.user.id],
+    );
+    res.json(rows.map(r => ({
+      method:      r.method,
+      ipPrefix:    r.ip_prefix,
+      userAgent:   r.user_agent,
+      occurredAt:  r.occurred_at,
+    })));
+  } catch (err) {
+    console.error('[users/me/sign-in-events] failed:', err.message);
+    res.status(500).json({ error: 'Failed to fetch sign-in events' });
+  }
+});
+
 router.get('/me', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(

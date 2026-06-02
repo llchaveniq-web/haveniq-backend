@@ -5,6 +5,27 @@ const crypto = require('crypto');
 const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail, sendWelcomeEmail, sendFounderSignupAlert } = require('../services/email');
 
+// Record a successful sign-in for the user. Fire-and-forget — a DB
+// failure here is loud but shouldn't break the auth response. The IP
+// is coarse-binned to /24 (v4) or /48 (v6) so the audit log isn't a
+// precise tracking record. User-agent is truncated to 256 chars.
+function logSignIn(pool, userId, method, req) {
+  const fullIp = req.ip || req.headers['x-forwarded-for'] || '';
+  let ipPrefix = '';
+  if (fullIp && fullIp.includes(':')) {
+    // IPv6 — keep first three hextets (/48)
+    ipPrefix = fullIp.split(':').slice(0, 3).join(':') + '::/48';
+  } else if (fullIp) {
+    // IPv4 — keep first three octets (/24)
+    ipPrefix = fullIp.split('.').slice(0, 3).join('.') + '.0/24';
+  }
+  const ua = (req.headers['user-agent'] || '').toString().slice(0, 256);
+  pool.query(
+    'INSERT INTO sign_in_events (user_id, method, ip_prefix, user_agent) VALUES ($1,$2,$3,$4)',
+    [userId, method, ipPrefix || null, ua || null],
+  ).catch(err => console.error('[auth] logSignIn failed:', err.message));
+}
+
 // Hash an OTP for at-rest storage. We never want the cleartext code on
 // disk — a DB dump or backup leak would expose every in-flight code
 // otherwise. The pepper is mixed in so a stolen DB without the JWT
@@ -166,15 +187,14 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     // submission the same way and compares. We keep the column named
     // `code` for backwards-compat with existing reads; future migration
     // can rename to code_hash.
-    // Store cleartext for now. The hashed-storage change introduced an
-    // edge case where in-flight OTPs from before the deploy couldn't
-    // validate after, and the launch window doesn't allow time to
-    // chase the diagnosis. The cleartext log (line ~178) is still
-    // gated to non-prod, so production logs don't leak the codes.
-    // Revisit hashing post-launch when there's no signup pressure.
+    // Hashed storage with the cleartext-fallback verify in place. A DB
+    // dump now exposes only sha256(code + JWT_SECRET) for in-flight
+    // OTPs, not the cleartext code. The dual-path verify (further down)
+    // accepts both formats so any OTP issued during the brief
+    // cleartext window still validates.
     await pool.query(
       'INSERT INTO otp_codes (email, code, expires_at) VALUES ($1, $2, $3)',
-      [emailLower, code, expiresAt]
+      [emailLower, hashOtp(code), expiresAt]
     );
 
     // Only log the cleartext OTP outside production, where Railway logs
@@ -370,25 +390,36 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     // POSTs to /auth/2fa/challenge to finish the login. Until that
     // succeeds the user has NO session — verifying just the OTP is no
     // longer enough.
-    // 2FA gate temporarily disabled. The verify-code short-circuit was
-    // routing users to the challenge screen even after their account had
-    // totp_enabled=FALSE in the DB — diagnosis blocked the night-before-
-    // launch sign-in test. Re-enable post-launch with a fresh trace
-    // through the gate condition + the frontend's requires2FA handler.
+    // 2FA gate — re-enabled with diagnostic logging. The previous
+    // failure that motivated the temporary disable was a stale
+    // frontend route holding an old challenge token after the user's
+    // totp_enabled had been cleared. The /auth/2fa/challenge fast-path
+    // (issues session when totp_enabled is false) now catches that case
+    // server-side, so a stale page can never trap a user again.
     //
-    // While disabled, NO account requires 2FA at sign-in, regardless of
-    // the totp_enabled flag. The setup/disable UI continues to work
-    // (and writes the flag), it just doesn't gate.
-    //
-    // if (user.totp_enabled) {
-    //   return res.json({
-    //     requires2FA: true,
-    //     twoFactorChallenge: signChallengeToken(user.id),
-    //     emailHint:  user.email,
-    //   });
-    // }
+    // The structured log records every gate decision with the inputs
+    // that drove it. If a user ever reports "I shouldn't have 2FA but
+    // it asked anyway," Sentry/Railway logs show exactly what the
+    // backend saw at that moment.
+    console.log(`[auth] 2FA gate decision for ${user.id}: totp_enabled=${user.totp_enabled === true}`);
+    if (user.totp_enabled === true) {
+      try {
+        require('../utils/sentry').captureMessage?.(
+          `2FA gate: requires2FA fired for ${user.id}`,
+          'info',
+        );
+      } catch { /* sentry not loaded */ }
+      return res.json({
+        requires2FA: true,
+        twoFactorChallenge: signChallengeToken(user.id),
+        // Echo a tiny bit of profile context so the 2FA prompt can show
+        // "Signing in as juli@calpoly.edu" without another round trip.
+        emailHint:  user.email,
+      });
+    }
 
     const token = signToken(user.id);
+    logSignIn(pool, user.id, 'otp', req);
 
     res.json({
       success: true,
@@ -468,6 +499,7 @@ router.post('/refresh', refreshLimitIp, async (req, res) => {
     const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [decoded.userId]);
     if (!rows[0]) return res.status(401).json({ error: 'User not found' });
 
+    logSignIn(pool, decoded.userId, 'refresh', req);
     res.json({ token: signToken(decoded.userId) });
   } catch {
     res.status(401).json({ error: 'Invalid token' });

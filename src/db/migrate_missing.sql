@@ -318,6 +318,23 @@ CREATE INDEX IF NOT EXISTS idx_user_reports_open
 CREATE INDEX IF NOT EXISTS idx_user_reports_reported
   ON user_reports (reported_id, created_at DESC) WHERE reported_id IS NOT NULL;
 
+-- ── Sign-in audit log — one row per successful sign-in event so the
+--    user can review their own "Recent activity" on Profile. Method
+--    distinguishes email-only OTP from 2FA-verified sessions. IP is
+--    stored as a /24 prefix (or /48 for v6) for coarse geographic
+--    hinting without precise tracking. user_agent is truncated to
+--    256 chars to stay light.
+CREATE TABLE IF NOT EXISTS sign_in_events (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  method       TEXT NOT NULL,      -- 'otp' | '2fa' | 'recovery_code' | 'refresh'
+  ip_prefix    TEXT,
+  user_agent   TEXT,
+  occurred_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sign_in_events_user
+  ON sign_in_events (user_id, occurred_at DESC);
+
 -- ── Resend bounce flag — set TRUE by the /webhooks/resend handler
 --    whenever a hard-bounce or complaint webhook fires for the user's
 --    address. /auth/send-code refuses to send new OTPs to a flagged

@@ -456,6 +456,25 @@ router.post('/challenge', challengeLimit, async (req, res) => {
       return res.status(400).json({ error: 'Incorrect code. Try the current 6 digits or a recovery code.' });
     }
 
+    // Record the successful sign-in for the user's Recent activity card.
+    // Fire-and-forget — a DB hiccup shouldn't break the auth response.
+    // The method distinguishes a TOTP code from a recovery code so the
+    // user can spot suspicious recovery-code activity.
+    pool.query(
+      'INSERT INTO sign_in_events (user_id, method, ip_prefix, user_agent) VALUES ($1,$2,$3,$4)',
+      [
+        u.id,
+        recoveryCode ? 'recovery_code' : '2fa',
+        (() => {
+          const fullIp = req.ip || req.headers['x-forwarded-for'] || '';
+          if (fullIp.includes(':')) return fullIp.split(':').slice(0, 3).join(':') + '::/48';
+          if (fullIp) return fullIp.split('.').slice(0, 3).join('.') + '.0/24';
+          return null;
+        })(),
+        (req.headers['user-agent'] || '').toString().slice(0, 256) || null,
+      ],
+    ).catch(err => console.error('[2fa] sign-in audit write failed:', err.message));
+
     const token = signToken(u.id);
     return res.json({
       success: true,
