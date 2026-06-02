@@ -108,13 +108,23 @@ router.get('/activity-pulse', requireAuth, async (req, res) => {
     }
   } catch (e) { /* silent */ }
 
-  // 4. Always-true gentle message — daily recalc reminder.
-  // Only show if we have FEWER than 2 other messages, otherwise the
-  // banner gets noisy.
+  // 4. Quiet honest fallback when there's nothing else to say.
+  //
+  // Removed: 'Compatibility scores recalculate overnight. Fresh matches
+  // arrive at 9 AM.' That copy was lying. The matching engine runs
+  // LIVE: new students get scored against the existing pool the moment
+  // they finish the quiz, and their score row appears in everyone's
+  // results immediately. There is no batch job at 9 AM. The
+  // overnight-recalc framing was inherited marketing copy from an
+  // earlier batch architecture that no longer exists.
+  //
+  // New fallback states the actual mechanic, in the brand's
+  // lowercase-italic register, and only shows when we have no other
+  // real signal to surface.
   if (messages.length < 2) {
     messages.push({
-      icon: '☾',
-      text: 'Compatibility scores recalculate overnight. Fresh matches arrive at 9 AM.',
+      icon: '✦',
+      text: 'matches arrive as new students finish the quiz. yours sharpen the more honest you are.',
     });
   }
 
