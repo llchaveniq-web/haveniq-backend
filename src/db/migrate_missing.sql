@@ -281,6 +281,43 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret          TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled         BOOLEAN DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_recovery_codes  TEXT[]  DEFAULT '{}';
 
+-- ── user_blocks + user_reports
+--    Originally lived only in migrations/2026-05-24-blocks-and-reports.sql,
+--    which is applied by hand. Folded in here because the message-report
+--    ALTER below (and the GET-thread block-check filter on backend) both
+--    depend on these tables existing, and several follow-on routes (bot
+--    moderation, admin safety queue) silently fail when they don't.
+CREATE TABLE IF NOT EXISTS user_blocks (
+  id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  blocker_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason      TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT user_blocks_unique   UNIQUE (blocker_id, blocked_id),
+  CONSTRAINT user_blocks_not_self CHECK  (blocker_id <> blocked_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks (blocker_id);
+CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks (blocked_id);
+
+CREATE TABLE IF NOT EXISTS user_reports (
+  id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  reporter_id   UUID REFERENCES users(id) ON DELETE SET NULL,
+  reported_id   UUID REFERENCES users(id) ON DELETE SET NULL,
+  category      TEXT NOT NULL,
+  severity      TEXT NOT NULL DEFAULT 'medium',
+  reason        TEXT,
+  details       TEXT,
+  status        TEXT NOT NULL DEFAULT 'open',
+  resolved_at   TIMESTAMPTZ,
+  resolved_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+  resolved_note TEXT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_reports_open
+  ON user_reports (status, created_at DESC) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_user_reports_reported
+  ON user_reports (reported_id, created_at DESC) WHERE reported_id IS NOT NULL;
+
 -- ── Resend bounce flag — set TRUE by the /webhooks/resend handler
 --    whenever a hard-bounce or complaint webhook fires for the user's
 --    address. /auth/send-code refuses to send new OTPs to a flagged
