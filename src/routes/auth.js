@@ -182,11 +182,26 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
       });
     }
 
+    // School-domain mismatch is NO LONGER a hard block.
+    //
+    // The academic-TLD gate above (hasAcademicTld) is the real .edu
+    // boundary — ICANN-controlled and unforgeable from the request body —
+    // and OTP-to-inbox proves the student actually controls the address.
+    // Hard-rejecting when the email domain didn't match the picked
+    // school's CURATED domain list turned away REAL students whenever that
+    // list was incomplete: community-college district domains (e.g.
+    // student.cccd.edu for Orange Coast College), school subdomains we
+    // hadn't curated, brand-new schools, etc. Maintaining an exact domain
+    // string for every school on earth is a losing game and every gap is a
+    // locked-out student — so we stop blocking on it.
+    //
+    // We still log the mismatch so the curated domain list can be improved
+    // over time, but a verified-student email is never refused for it.
     if (acceptedList.length > 0 && !domainMatches) {
-      const schoolLabel = school || existingUser?.school || 'your selected school';
-      return res.status(400).json({
-        error: `That email doesn't match ${schoolLabel}. Use your school email (${acceptedList.join(' / ')}) or pick the right school.`,
-      });
+      console.warn(
+        `[send-code] domain/school mismatch (allowed): email-domain=${emailDomain} ` +
+        `picked-school=${school || existingUser?.school || '?'} accepted=${acceptedList.join(',')}`,
+      );
     }
 
     // Refuse to send OTPs to addresses Resend has flagged as
@@ -360,13 +375,21 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     if (userRows[0]) {
       user = userRows[0];
     } else {
+      // Store the user's ACTUAL verified email domain as school_domain
+      // (not the picked school's curated domain). The email just passed
+      // OTP verification, so this is the real, confirmed domain. It also
+      // makes returning-user sign-in match cleanly: /send-code falls back
+      // to the on-file school_domain as the accepted list, so a student on
+      // a district domain (student.cccd.edu) won't trip the mismatch path
+      // next time. The school NAME is still whatever they picked.
+      const verifiedDomain = emailLower.split('@')[1] || schoolDomain || '';
       const ins = await pool.query(
         `INSERT INTO users (email, school, school_domain, trust_score)
          VALUES ($1, $2, $3, 20)
          RETURNING id, email, school, first_name, last_name,
                    is_verified, trust_score, quiz_completed,
                    identity_verified_at, totp_enabled`,
-        [emailLower, school || '', schoolDomain || '']
+        [emailLower, school || '', verifiedDomain]
       );
       user      = ins.rows[0];
       isNewUser = true;
