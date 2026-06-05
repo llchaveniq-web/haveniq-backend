@@ -386,11 +386,18 @@ router.post('/challenge', challengeLimit, async (req, res) => {
     const userId = decoded.userId;
 
     const { rows } = await pool.query(
+      // NOTE: do NOT select move_in_date here — that column doesn't exist
+      // on the production users table (it's never written, and isn't in
+      // schema.sql or any migration), so selecting it made this query throw
+      // "column move_in_date does not exist". That 500'd the WHOLE /challenge
+      // handler before it ever checked the TOTP or recovery code — so a
+      // correct authenticator code AND a valid recovery code both came back
+      // as "we hit a snag verifying that code." The response below keeps the
+      // moveInDate field, defaulting to null (its real value anyway).
       `SELECT id, email, school, first_name, last_name, bio, major, school_year,
               age, gender, looking_for, photo_url, budget_min, budget_max,
               neighborhoods, is_verified, trust_score, quiz_completed,
-              identity_verified_at, totp_secret, totp_enabled, totp_recovery_codes,
-              move_in_date
+              identity_verified_at, totp_secret, totp_enabled, totp_recovery_codes
          FROM users WHERE id = $1`,
       [userId],
     );
