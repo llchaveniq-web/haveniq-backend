@@ -299,6 +299,7 @@ app.use('/reviews',  require('./routes/reviews'));
 app.use('/pulses',   require('./routes/pulses'));
 app.use('/checklists', require('./routes/checklists'));
 app.use('/groups',   require('./routes/groups'));
+app.use('/feature-state', require('./routes/featureState')); // generic per-feature persistence
 app.use('/search',   require('./routes/search'));
 app.use('/housing',  require('./routes/housing'));
 app.use('/premium',  require('./routes/premium'));
