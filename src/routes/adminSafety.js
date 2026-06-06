@@ -70,6 +70,45 @@ router.get('/reports', requireAuth, requireFounder, async (req, res) => {
   }
 });
 
+// ── GET /admin/safety/message-flags?action=block|flag ────────────────────
+// Auto-moderation audit: messages the content filter blocked (refused) or
+// flagged (delivered but suspicious). Lets the founder spot repeat offenders
+// and scam patterns. Tolerates the table not existing yet (returns []).
+router.get('/message-flags', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 300);
+    const params = [];
+    let where = '';
+    if (req.query.action === 'block' || req.query.action === 'flag') {
+      params.push(req.query.action);
+      where = `WHERE f.action = $${params.length}`;
+    }
+    params.push(limit);
+    const { rows } = await pool.query(
+      `SELECT
+         f.id, f.action, f.category, f.excerpt, f.message_id,
+         f.conversation_id, f.created_at, f.reviewed,
+         f.sender_id, f.recipient_id,
+         s.first_name AS sender_first_name, s.last_name AS sender_last_name,
+         s.email AS sender_email, s.is_banned AS sender_is_banned,
+         r.first_name AS recipient_first_name, r.last_name AS recipient_last_name
+       FROM message_flags f
+       LEFT JOIN users s ON s.id = f.sender_id
+       LEFT JOIN users r ON r.id = f.recipient_id
+       ${where}
+       ORDER BY f.created_at DESC
+       LIMIT $${params.length}`,
+      params,
+    );
+    res.json({ flags: rows });
+  } catch (err) {
+    // 42P01 = undefined_table — no flags recorded yet. Return empty, not 500.
+    if (err.code === '42P01') return res.json({ flags: [] });
+    console.error('[admin/safety/message-flags] failed:', err.message);
+    res.status(500).json({ error: 'Could not load message flags.' });
+  }
+});
+
 // ── PATCH /admin/safety/reports/:id ──────────────────────────────────────
 // Body: { status?: 'reviewed' | 'actioned' | 'dismissed', note?: string }
 router.patch('/reports/:id', requireAuth, requireFounder, async (req, res) => {

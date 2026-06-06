@@ -3,6 +3,51 @@ const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const analytics = require('../services/analytics');
+const { screenMessage } = require('../lib/contentFilter');
+
+// ── Message moderation flags (self-migrating audit table) ───────────────────
+// Records every message the content filter blocks or flags, so the founder can
+// review patterns and repeat offenders. Best-effort: a logging failure must
+// never break message delivery.
+let flagsTableReady = false;
+async function ensureFlagsTable() {
+  if (flagsTableReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS message_flags (
+      id              BIGSERIAL PRIMARY KEY,
+      conversation_id TEXT,
+      sender_id       TEXT,
+      recipient_id    TEXT,
+      action          TEXT NOT NULL,
+      category        TEXT,
+      excerpt         TEXT,
+      message_id      TEXT,
+      reviewed        BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_message_flags_created ON message_flags (created_at DESC)`);
+  flagsTableReady = true;
+}
+async function logMessageFlag(f) {
+  try {
+    await ensureFlagsTable();
+    await pool.query(
+      `INSERT INTO message_flags (conversation_id, sender_id, recipient_id, action, category, excerpt, message_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        String(f.conversationId ?? ''),
+        String(f.senderId ?? ''),
+        String(f.recipientId ?? ''),
+        f.action,
+        f.category ?? null,
+        (f.excerpt ?? '').slice(0, 240),
+        f.messageId != null ? String(f.messageId) : null,
+      ],
+    );
+  } catch (e) {
+    console.error('[message_flags] log failed:', e.message);
+  }
+}
 
 // ── GET /messages/conversations ───────────────────────────────────────────
 // All conversations for the current user with last message
@@ -167,11 +212,42 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
       return res.status(403).json({ error: 'Unable to send message in this conversation.' });
     }
 
+    // First-line content moderation (server-side, can't be bypassed by a
+    // custom client). Egregious content is refused; scam signals are logged
+    // for review but still delivered.
+    const screen = screenMessage(body);
+    if (screen.action === 'block') {
+      logMessageFlag({
+        conversationId: req.params.conversationId,
+        senderId: req.user.id,
+        recipientId: otherUserId,
+        action: 'block',
+        category: screen.category,
+        excerpt: body,
+      });
+      return res.status(422).json({
+        error: "This message can't be sent — it looks like it breaks our community guidelines. Keep messages respectful and safe.",
+        code: 'content_blocked',
+      });
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO messages (conversation_id, sender_id, body)
        VALUES ($1, $2, $3) RETURNING *`,
       [req.params.conversationId, req.user.id, body.trim()]
     );
+
+    if (screen.action === 'flag') {
+      logMessageFlag({
+        conversationId: req.params.conversationId,
+        senderId: req.user.id,
+        recipientId: otherUserId,
+        action: 'flag',
+        category: screen.category,
+        excerpt: body,
+        messageId: rows[0].id,
+      });
+    }
 
     // Recipient-side analytics — appears on the receiver's PostHog timeline
     // even though the frontend can only fire send-side events.
