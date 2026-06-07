@@ -249,6 +249,27 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
       });
     }
 
+    // Real-time delivery. Emit ONLY to the recipient's personal socket room
+    // (user:<id>), NOT the whole conversation room. The sender already
+    // rendered this message optimistically with a client-side id; echoing it
+    // back to them would arrive with the DB id and dedupe-by-id would miss it,
+    // showing a duplicate. The recipient's client (stores/messageSocket.ts)
+    // appends it to the open thread or bumps their unread count. The HTTP
+    // INSERT above is the ONLY write — this is broadcast-only, so no double
+    // message rows (the socket's own send_message handler is unused by the
+    // web client). Best-effort: never let a socket hiccup fail the send.
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`user:${otherUserId}`).emit('new_message', {
+          ...rows[0],
+          senderName: req.user.first_name,
+        });
+      }
+    } catch (emitErr) {
+      console.error('[messages] socket emit failed:', emitErr.message);
+    }
+
     // Recipient-side analytics — appears on the receiver's PostHog timeline
     // even though the frontend can only fire send-side events.
     analytics.track(analytics.EVENTS.message_received, otherUserId, {
