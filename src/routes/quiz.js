@@ -820,6 +820,19 @@ router.get('/scoring-debug', async (req, res) => {
     out.scoring.error  = e.message;
     out.scoring.stack  = (e.stack || '').split('\n').slice(0, 4);
   }
+  // Actual score rows + feed-eligibility fields, to see WHY the feed hides them.
+  try {
+    const { rows } = await pool.query(`
+      SELECT round(cs.score,1) AS score, cs.is_hard_blocked AS hard, cs.is_soft_blocked AS soft,
+             ua.school AS school_a, ub.school AS school_b,
+             ua.quiz_completed AS done_a, ub.quiz_completed AS done_b,
+             ua.is_paused AS paused_a, ub.is_paused AS paused_b
+      FROM compatibility_scores cs
+      JOIN users ua ON ua.id = cs.user_a
+      JOIN users ub ON ub.id = cs.user_b
+      ORDER BY cs.calculated_at DESC LIMIT 10`);
+    out.scores = rows;
+  } catch (e) { out.scores = 'ERR: ' + e.message; }
   res.json(out);
 });
 
