@@ -833,6 +833,16 @@ router.get('/scoring-debug', async (req, res) => {
       ORDER BY cs.calculated_at DESC LIMIT 10`);
     out.scores = rows;
   } catch (e) { out.scores = 'ERR: ' + e.message; }
+  // SELF-SCORE: a user scored against their OWN answers must be 100%.
+  // Anything less = scored questions that are never answered (dead weight).
+  try {
+    const { rows: r2 } = await pool.query(
+      'SELECT answers FROM quiz_answers WHERE completed = TRUE ORDER BY updated_at DESC LIMIT 1');
+    if (r2[0]) {
+      out.selfScore  = calculateCompatibility(r2[0].answers, r2[0].answers, {}).finalPct;
+      out.answerKeys = Object.keys(r2[0].answers || {}).map(Number).sort((a, b) => a - b);
+    }
+  } catch (e) { out.selfScore = 'ERR: ' + e.message; }
   res.json(out);
 });
 
