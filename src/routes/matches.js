@@ -111,7 +111,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
        )
        WHERE (cs.user_a = $1 OR cs.user_b = $1)
          AND cs.is_hard_blocked = FALSE
-         AND cs.score >= 65
+         AND cs.score >= 50
          AND u.is_paused = FALSE
          AND u.is_banned = FALSE
          AND u.quiz_completed = TRUE
@@ -178,7 +178,12 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
 
 // ── POST /matches/connect ─────────────────────────────────────────────────
 // Send a connect request
-const CONNECT_MIN_SCORE = 65;
+// Launch calibration: identical answers = 100; real compatible pairs land
+// ~50-60. 65 was too high — it produced ZERO matches for every real user
+// (verified 2026-06-08). Must stay in lockstep with the feed threshold in
+// the /feed query above. Tune upward as the user base grows and higher-
+// compatibility pairs become available.
+const CONNECT_MIN_SCORE = 50;
 router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { toUserId } = req.body || {};
