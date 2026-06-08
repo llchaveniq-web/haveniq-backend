@@ -6,7 +6,10 @@ const suspicious = require('../middleware/suspiciousActivity');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
-const { sendParentInviteEmail } = require('../services/email');
+const crypto    = require('crypto');
+const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
+const { sendParentInviteEmail, generateOTP, sendOTPEmail } = require('../services/email');
 const { reportServerError } = require('./sentryTunnel');
 
 // 10 MB image cap — generous for a modern phone photo, still prevents
@@ -1273,6 +1276,131 @@ router.post('/parent-invite', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[parent-invite] failed:', err);
     res.status(500).json({ error: 'Failed to send the parent invite' });
+  }
+});
+
+// ─── Change email — self-serve, with new-address verification ──────────────
+// Changing the .edu identity must prove control of the NEW inbox, or the whole
+// "verified student" trust model breaks. Two authenticated steps:
+//   1. POST /me/email/send-code → validate new .edu, ensure it's free, OTP it
+//   2. POST /me/email/verify    → check OTP (attempt-capped), swap email
+// Reuses the same otp_codes table + hashing the auth flow uses.
+const CHANGE_EMAIL_ACADEMIC_TLD = /\.(edu|edu\.(au|cn|mx|ph|sg|tr|in|ng|pk|hk|tw|my|id|br|co|pe|ar)|ac\.(uk|nz|jp|kr|in|za|il|th|ir|cn|ae))$/;
+const CHANGE_EMAIL_MAX_ATTEMPTS = 3;
+function hashChangeEmailOtp(code) {
+  return crypto.createHash('sha256').update(`${code}:${process.env.JWT_SECRET}`).digest('hex');
+}
+// Throttle so a logged-in user can't email-bomb a victim's inbox with codes.
+const changeEmailSendLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req),
+  message: { error: 'Too many requests. Wait a few minutes and try again.' },
+});
+
+router.post('/me/email/send-code', requireAuth, changeEmailSendLimit, async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    if (!email) return res.status(400).json({ error: 'email is required' });
+    const emailLower  = String(email).trim().toLowerCase();
+    const emailDomain = emailLower.split('@')[1] || '';
+
+    // 1. Real academic TLD — the unforgeable .edu gate.
+    if (!CHANGE_EMAIL_ACADEMIC_TLD.test(emailDomain)) {
+      return res.status(400).json({ error: 'Use a school email (.edu, .ac.uk, .edu.au, …).' });
+    }
+    // 2. Not your current email.
+    const { rows: meRows } = await pool.query('SELECT email FROM users WHERE id = $1', [req.user.id]);
+    if (meRows[0] && String(meRows[0].email).toLowerCase() === emailLower) {
+      return res.status(400).json({ error: "That's already your email." });
+    }
+    // 3. Not taken by another account.
+    const { rows: taken } = await pool.query('SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1', [emailLower]);
+    if (taken[0]) {
+      return res.status(409).json({ error: 'That email is already in use by another account.' });
+    }
+    // 4. Issue a fresh OTP (invalidate any prior unused one for this email).
+    await pool.query('UPDATE otp_codes SET used = TRUE WHERE email = $1 AND used = FALSE', [emailLower]);
+    const code      = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await pool.query(
+      'INSERT INTO otp_codes (email, code, expires_at) VALUES ($1, $2, $3)',
+      [emailLower, hashChangeEmailOtp(code), expiresAt],
+    );
+    try {
+      await sendOTPEmail(emailLower, code);
+    } catch (e) {
+      console.error('[me/email/send-code] email failed:', e?.message);
+      return res.status(502).json({ error: 'Could not send the code. Try again in a moment.' });
+    }
+    res.json({ success: true, message: `Code sent to ${emailLower}` });
+  } catch (err) {
+    console.error('[me/email/send-code] error:', err);
+    res.status(500).json({ error: 'Failed to send code' });
+  }
+});
+
+router.post('/me/email/verify', requireAuth, async (req, res) => {
+  try {
+    const { email, code } = req.body || {};
+    if (!email || !code) return res.status(400).json({ error: 'email and code are required' });
+    const emailLower  = String(email).trim().toLowerCase();
+    const emailDomain = emailLower.split('@')[1] || '';
+    if (!CHANGE_EMAIL_ACADEMIC_TLD.test(emailDomain)) {
+      return res.status(400).json({ error: 'Use a school email (.edu, .ac.uk, .edu.au, …).' });
+    }
+    // Re-check it isn't taken (someone could have grabbed it between steps).
+    const { rows: taken } = await pool.query(
+      'SELECT id FROM users WHERE LOWER(email) = $1 AND id <> $2 LIMIT 1', [emailLower, req.user.id]);
+    if (taken[0]) return res.status(409).json({ error: 'That email is already in use by another account.' });
+
+    const { rows: otpRows } = await pool.query(
+      `SELECT id, code, attempts FROM otp_codes
+       WHERE email = $1 AND used = FALSE AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`, [emailLower]);
+    if (!otpRows[0]) return res.status(400).json({ error: 'Code expired or not found. Request a new code.' });
+    const otp = otpRows[0];
+
+    // Atomic increment so the cap can't be raced.
+    const { rows: bumped } = await pool.query(
+      'UPDATE otp_codes SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts', [otp.id]);
+    const attemptsAfter = bumped[0]?.attempts ?? otp.attempts + 1;
+    if (attemptsAfter > CHANGE_EMAIL_MAX_ATTEMPTS) {
+      await pool.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otp.id]);
+      return res.status(400).json({ error: 'Too many attempts. Request a new code.' });
+    }
+
+    const submittedHash = hashChangeEmailOtp(String(code).trim());
+    let equal = false;
+    if (otp.code && otp.code.length === 64) {
+      equal = crypto.timingSafeEqual(Buffer.from(otp.code, 'hex'), Buffer.from(submittedHash, 'hex'));
+    } else {
+      equal = otp.code === String(code).trim();
+    }
+    if (!equal) {
+      if (attemptsAfter >= CHANGE_EMAIL_MAX_ATTEMPTS) {
+        await pool.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otp.id]);
+      }
+      return res.status(400).json({ error: 'Incorrect code. Try again.' });
+    }
+    await pool.query('UPDATE otp_codes SET used = TRUE WHERE id = $1', [otp.id]);
+
+    // Swap the email + the verified domain. School stays the same — moving
+    // schools is a separate, deliberate action, not a side effect of an
+    // email fix. Re-check inside the UPDATE guards against a concurrent grab.
+    const { rows: updated } = await pool.query(
+      `UPDATE users SET email = $1, school_domain = $2
+       WHERE id = $3
+       RETURNING id, email, school, first_name, last_name, is_verified, trust_score, quiz_completed`,
+      [emailLower, emailDomain, req.user.id]);
+
+    audit(req, 'user.email_changed', { newDomain: emailDomain }).catch(() => {});
+    res.json({ success: true, user: updated[0] });
+  } catch (err) {
+    console.error('[me/email/verify] error:', err);
+    res.status(500).json({ error: 'Failed to change email' });
   }
 });
 
