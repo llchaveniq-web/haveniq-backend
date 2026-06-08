@@ -785,4 +785,42 @@ router.post('/writing', requireAuth, async (req, res) => {
   }
 });
 
+// ── TEMPORARY scoring diagnostic — REMOVE after debugging ──────────────────
+// Captures the exact error scoreNewMatches throws in production (the .catch
+// in /submit swallows it, so matching silently produces zero rows). Gated by
+// a secret key. Returns only non-PII aggregates + the error message/stack.
+router.get('/scoring-debug', async (req, res) => {
+  if (req.query.key !== 'hiq-scoredebug-0608') return res.status(404).end();
+  const out = { tables: {}, columns: {}, counts: {}, scoring: {} };
+  const regclass = async (t) => {
+    try { const { rows } = await pool.query('SELECT to_regclass($1) AS x', [t]); return !!rows[0].x; }
+    catch (e) { return 'ERR: ' + e.message; }
+  };
+  out.tables.compatibility_scores = await regclass('compatibility_scores');
+  out.tables.personality_profiles = await regclass('personality_profiles');
+  out.tables.quiz_answers         = await regclass('quiz_answers');
+  try { await pool.query('SELECT dealbreakers FROM users LIMIT 1'); out.columns.users_dealbreakers = true; }
+  catch (e) { out.columns.users_dealbreakers = 'ERR: ' + e.message; }
+  const count = async (sql) => { try { return (await pool.query(sql)).rows[0].count; } catch (e) { return 'ERR: ' + e.message; } };
+  out.counts.completedQuizzes     = await count('SELECT count(*) FROM quiz_answers WHERE completed = TRUE');
+  out.counts.compatibilityScores  = await count('SELECT count(*) FROM compatibility_scores');
+  out.counts.personalityProfiles  = await count('SELECT count(*) FROM personality_profiles');
+  // Re-run the real scoring for the most-recent completed user; capture any throw.
+  try {
+    const { rows: recent } = await pool.query(
+      'SELECT user_id, answers FROM quiz_answers WHERE completed = TRUE ORDER BY updated_at DESC LIMIT 1');
+    if (!recent[0]) { out.scoring.result = 'no completed users to score'; }
+    else {
+      out.scoring.ranForUser = recent[0].user_id;
+      await scoreNewMatches(recent[0].user_id, recent[0].answers);
+      out.scoring.result = 'OK — scoreNewMatches ran without throwing';
+    }
+  } catch (e) {
+    out.scoring.result = 'THREW';
+    out.scoring.error  = e.message;
+    out.scoring.stack  = (e.stack || '').split('\n').slice(0, 4);
+  }
+  res.json(out);
+});
+
 module.exports = router;
