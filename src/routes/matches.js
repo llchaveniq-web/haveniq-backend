@@ -115,25 +115,21 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          AND u.is_paused = FALSE
          AND u.is_banned = FALSE
          AND u.quiz_completed = TRUE
-         -- Gate NEW discovery candidates on a complete, verified profile:
-         -- real name + age + photo + .edu-verified (is_verified is now
-         -- auto-set on .edu OTP in auth.js, so this needs no manual
-         -- approval for real students). This keeps half-finished / unverified
-         -- accounts out of the feed and out of the signup auto-review.
-         --
-         -- BUT a pair you've already CONNECTED with (accepted request) is
-         -- ALWAYS returned, even if their profile is incomplete — you have a
-         -- relationship, so the match-detail screen and journal must still
-         -- resolve them. Without this exemption, connecting with someone who
-         -- lacks a photo made their profile un-openable ("match not found").
+         -- A real person to show in discovery = has a NAME + AGE. We do NOT
+         -- hard-block on photo or is_verified: a single missing photo (or an
+         -- account whose .edu-verify flag hasn't been set yet) would silently
+         -- zero out a perfectly good match — which is exactly the "we answered
+         -- identically and nothing showed up" bug. Photo is still required at
+         -- signup, and is_verified auto-sets on .edu OTP, so most real users
+         -- have both — and both are still surfaced as badges on the card.
+         -- An already-CONNECTED pair (accepted request) always shows too, even
+         -- if their profile is incomplete, so the chat/journal resolve them.
          AND (
            cr.status = 'accepted'
            OR (
              u.first_name IS NOT NULL
              AND TRIM(u.first_name) <> ''
              AND u.age IS NOT NULL
-             AND u.photo_url IS NOT NULL
-             AND u.is_verified = TRUE
            )
          )
          -- Honor user_blocks in BOTH directions. If either side has
