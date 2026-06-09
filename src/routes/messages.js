@@ -3,7 +3,7 @@ const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const analytics = require('../services/analytics');
-const { screenMessage } = require('../lib/contentFilter');
+const { screenMessage, CRISIS_SUPPORT } = require('../lib/contentFilter');
 
 // ── Message moderation flags (self-migrating audit table) ───────────────────
 // Records every message the content filter blocks or flags, so the founder can
@@ -288,7 +288,11 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
       }).catch(err => console.error('[push] HTTP message send failed:', err));
     }
 
-    res.status(201).json(rows[0]);
+    // If the sender's own message signals self-harm/crisis, attach supportive
+    // resources to the response (the message is still delivered). Clients show
+    // a gentle 988 / Crisis Text Line card. This is care, not moderation —
+    // nothing is blocked or logged to the abuse queue.
+    res.status(201).json(screen.crisis ? { ...rows[0], support: CRISIS_SUPPORT } : rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Failed to send message' });
   }

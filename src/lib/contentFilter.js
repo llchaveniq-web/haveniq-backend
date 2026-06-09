@@ -36,16 +36,37 @@ const FLAG_RULES = [
   { category: 'scam', re: /\b(sight unseen|before (?:you )?(?:see|view|tour)\b|without (?:seeing|viewing|touring))\b/i },
 ];
 
+// Self-harm / crisis language. NOT abuse — never blocked, never added to the
+// moderation queue. When detected, the send route attaches supportive
+// resources (988, Crisis Text Line) to the response so the sender sees them.
+// Tight patterns so a false positive just shows a caring card (low harm) and
+// ordinary venting ("this is killing me", "I'm so stressed") doesn't trip it.
+const CRISIS_RULES = [
+  /\b(kill(?:ing)?\s+myself|end(?:ing)?\s+my\s+life|take\s+(?:my\s+)?(?:own\s+)?life|want(?:ing)?\s+to\s+die|wanna\s+die|better\s+off\s+dead|suicidal|commit(?:ting)?\s+suicide|don'?t\s+want\s+to\s+(?:live|be\s+here|exist)|kms)\b/i,
+  /\b(cut(?:ting)?\s+myself|self[-\s]?harm|hurt(?:ing)?\s+myself|harm(?:ing)?\s+myself)\b/i,
+];
+
 function screenMessage(text) {
-  if (typeof text !== 'string' || !text.trim()) return { action: 'allow', category: null };
+  if (typeof text !== 'string' || !text.trim()) return { action: 'allow', category: null, crisis: false };
   const t = text.normalize('NFKC');
+  const crisis = CRISIS_RULES.some(re => re.test(t));
   for (const rule of BLOCK_RULES) {
-    if (rule.re.test(t)) return { action: 'block', category: rule.category };
+    if (rule.re.test(t)) return { action: 'block', category: rule.category, crisis };
   }
   for (const rule of FLAG_RULES) {
-    if (rule.re.test(t)) return { action: 'flag', category: rule.category };
+    if (rule.re.test(t)) return { action: 'flag', category: rule.category, crisis };
   }
-  return { action: 'allow', category: null };
+  return { action: 'allow', category: null, crisis };
 }
 
-module.exports = { screenMessage };
+// Supportive resources surfaced to a sender whose own message signals crisis.
+// US-focused; the message is still delivered — this is care, not moderation.
+const CRISIS_SUPPORT = {
+  crisis: true,
+  title: 'You matter, and you\'re not alone.',
+  message: 'If things feel heavy right now, you don\'t have to carry it by yourself. The 988 Suicide & Crisis Lifeline is free, confidential, and available 24/7. Your campus counseling center can help too. If you\'re in immediate danger, call 911.',
+  lifeline: '988',
+  textLine: { keyword: 'HOME', number: '741741' },
+};
+
+module.exports = { screenMessage, CRISIS_SUPPORT };
