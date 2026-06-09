@@ -115,23 +115,12 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          AND u.is_paused = FALSE
          AND u.is_banned = FALSE
          AND u.quiz_completed = TRUE
-         -- A real person to show in discovery = has a NAME + AGE. We do NOT
-         -- hard-block on photo or is_verified: a single missing photo (or an
-         -- account whose .edu-verify flag hasn't been set yet) would silently
-         -- zero out a perfectly good match — which is exactly the "we answered
-         -- identically and nothing showed up" bug. Photo is still required at
-         -- signup, and is_verified auto-sets on .edu OTP, so most real users
-         -- have both — and both are still surfaced as badges on the card.
-         -- An already-CONNECTED pair (accepted request) always shows too, even
-         -- if their profile is incomplete, so the chat/journal resolve them.
-         AND (
-           cr.status = 'accepted'
-           OR (
-             u.first_name IS NOT NULL
-             AND TRIM(u.first_name) <> ''
-             AND u.age IS NOT NULL
-           )
-         )
+         -- NOTE: no profile-completeness gate here. We tried gating discovery
+         -- on name/age/photo/is_verified earlier and it silently broke real
+         -- matches (an account that finished the quiz but not its profile, or
+         -- lacked a photo, vanished from everyone's feed). Matching now shows
+         -- any quiz-completed, non-blocked candidate — the same behavior that
+         -- worked at launch. Incomplete profiles just render with fallbacks.
          -- Honor user_blocks in BOTH directions. If either side has
          -- blocked the other, the pair never appears in the feed.
          -- Algorithmic-block via cs.is_hard_blocked is separate.
