@@ -1,35 +1,23 @@
-// Tests for the pre-launch access gate. These protect the "only allowlisted
-// people can get in" guarantee — a regression here could silently open the
-// app to the public OR lock the founder out. Run with `npm test`.
-//
-// Note: launchGate reads env at module load, so this file tests the DEFAULT
-// (locked) state — which is the live, security-critical configuration.
+// Tests for the access gate. CURRENT STATE: OPEN/PUBLIC (PRELAUNCH_LOCK unset).
+// These assert the public behavior + that the allowlist is still intact so the
+// re-lock path (PRELAUNCH_LOCK=true) keeps working. Run with `npm test`.
 const test = require('node:test');
 const assert = require('node:assert');
-const { isAllowed, isLocked } = require('../lib/launchGate');
+const { isAllowed, isLocked, ALLOWLIST } = require('../lib/launchGate');
 
-test('defaults to LOCKED (fail-safe)', () => {
-  assert.equal(isLocked(), true);
+test('defaults to OPEN / public (no PRELAUNCH_LOCK env)', () => {
+  assert.equal(isLocked(), false);
 });
 
-test('founder is always allowed (exact)', () => {
-  assert.equal(isAllowed('jberney@student.cccd.edu'), true);
+test('when open, any verified email is allowed in', () => {
+  assert.equal(isAllowed('someone@school.edu'), true);
+  assert.equal(isAllowed('another.student@bigstate.edu'), true);
 });
 
-test('founder allowed regardless of casing / whitespace', () => {
-  assert.equal(isAllowed('  JBerney@Student.CCCD.edu '), true);
+test('founder is always in the allowlist (for the re-lock path)', () => {
+  assert.ok(ALLOWLIST.has('jberney@student.cccd.edu'));
 });
 
-test('invited tester is allowed', () => {
-  assert.equal(isAllowed('u1579080@umail.com.utah.edu'), true);
-});
-
-test('a random .edu is blocked while locked', () => {
-  assert.equal(isAllowed('someone@school.edu'), false);
-});
-
-test('empty / null email is blocked', () => {
-  assert.equal(isAllowed(''), false);
-  assert.equal(isAllowed(null), false);
-  assert.equal(isAllowed(undefined), false);
+test('invited tester is in the allowlist (for the re-lock path)', () => {
+  assert.ok(ALLOWLIST.has('u1579080@umail.com.utah.edu'));
 });

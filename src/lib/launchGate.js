@@ -1,8 +1,10 @@
 // ── Pre-launch access gate ────────────────────────────────────────────────
+// CURRENT STATE: OPEN / PUBLIC (2026-06-08) — any verified .edu student can
+// join. The lock below is the mechanism to make it private again.
+//
 // While LOCKED, only allowlisted emails can request an OTP, verify, or use an
-// authenticated session — even though the app URL is public (it's printed on
-// the launch poster). This keeps HavenIQ private to the founder + invited
-// helpers until the official launch.
+// authenticated session — even though the app URL is public. That mode keeps
+// HavenIQ private to the founder + invited helpers (used during pre-launch).
 //
 // Safety:
 //   • The founder email is hardcoded into the allowlist, so a missing or
@@ -38,8 +40,11 @@ const ALLOWLIST = new Set([
   ...envAllow,
 ]);
 
-// Fail-safe: locked unless explicitly opened with PRELAUNCH_LOCK=false.
-const LOCKED = process.env.PRELAUNCH_LOCK !== 'false';
+// PUBLIC as of 2026-06-08 — the app is OPEN to any verified .edu student.
+// (The .edu / academic-TLD gate in /send-code still applies; this layer is
+// just the pre-launch private lock.) To RE-LOCK it to the allowlist, set
+// PRELAUNCH_LOCK=true in Railway (or flip this back to `!== 'false'`).
+const LOCKED = process.env.PRELAUNCH_LOCK === 'true';
 
 function isAllowed(email) {
   if (!LOCKED) return true;
