@@ -125,6 +125,16 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          AND u.first_name IS NOT NULL
          AND TRIM(u.first_name) <> ''
          AND u.age IS NOT NULL
+         -- A photo is now required to appear in the feed (it's required at
+         -- signup too). Hides any legacy account that never added one until
+         -- they do.
+         AND u.photo_url IS NOT NULL
+         -- Human-approval gate. is_verified flips TRUE only via the
+         -- bot-admin "approve" review (NOT auto-set on .edu OTP), so the
+         -- match pool now shows only accounts a human has cleared. NOTE:
+         -- every real account must be approved (POST /bot-admin/signup/:id/
+         -- approve) or it won't appear here.
+         AND u.is_verified = TRUE
          -- Honor user_blocks in BOTH directions. If either side has
          -- blocked the other, the pair never appears in the feed.
          -- Algorithmic-block via cs.is_hard_blocked is separate.
