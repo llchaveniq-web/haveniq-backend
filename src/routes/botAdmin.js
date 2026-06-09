@@ -25,6 +25,19 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 
+// Demo / test accounts must NEVER receive a bot-drafted email or count as a
+// real signup to triage. Two flavors exist in production:
+//   • @haveniq-demo.edu  — the seeded demo cohort (admin.js generator); this
+//                          is the domain the rest of the codebase filters on.
+//   • @demo.haveniq.app  — the founder's manual test signups made through the
+//                          real flow. These live only in the DB (no source
+//                          reference) so the standard @haveniq-demo.edu filter
+//                          misses them — which is how they leaked into the
+//                          retention re-engagement drafts.
+// Pass the column reference (e.g. 'email' or 'u.email').
+const notDemo = (col) =>
+  `${col} NOT LIKE '%@haveniq-demo.edu' AND ${col} NOT LIKE '%@demo.haveniq.app'`;
+
 // ── Static token auth ──────────────────────────────────────────────────
 
 function requireBotToken(req, res, next) {
@@ -56,6 +69,12 @@ function requireBotToken(req, res, next) {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    // Speeds up the "has this signup already been escalated?" lookup that
+    // pending-signups now does on every run.
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS bot_admin_audit_lookup_idx
+        ON bot_admin_audit (bot_name, action, target_id, created_at);
+    `);
   } catch (err) {
     console.error('[botAdmin] audit table init failed:', err.message);
   }
@@ -74,16 +93,32 @@ async function audit(botName, action, targetId, payload, result) {
 
 // ── GET /bot-admin/pending-signups ─────────────────────────────────────
 // Returns users not yet verified and not banned, oldest first. The bot
-// will eyeball each and call approve/reject. Caps at 50 per call.
+// will eyeball each and call approve/reject/escalate. Caps at 50 per call.
+//
+// Escalation de-dup: a signup the bot punts to a human (escalate) is NOT
+// approved or banned, so it would otherwise reappear in this queue every
+// hourly run and re-escalate forever (this is exactly what happened with
+// the incomplete Orange Coast College signup). We suppress any row that has
+// already been escalated, UNLESS the user has touched their profile since
+// (updated_at moves past the escalate audit row) — a profile change is new
+// signal worth a fresh look. So: escalate once, go quiet, re-surface only
+// if something actually changes.
 router.get('/pending-signups', requireBotToken, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT id, email, school, first_name, last_name, photo_url, bio, age,
              school_domain, created_at, trust_score, quiz_completed,
              identity_verified_at, school_year, major
-      FROM users
+      FROM users u
       WHERE is_verified = FALSE
         AND COALESCE(is_banned, FALSE) = FALSE
+        AND NOT EXISTS (
+          SELECT 1 FROM bot_admin_audit a
+          WHERE a.bot_name   = 'signup-review'
+            AND a.action     = 'escalate'
+            AND a.target_id  = u.id::text
+            AND a.created_at >= u.updated_at
+        )
       ORDER BY created_at ASC
       LIMIT 50
     `);
@@ -134,6 +169,24 @@ router.post('/signup/:userId/reject', requireBotToken, async (req, res) => {
     console.error('[botAdmin] reject failed:', err);
     res.status(500).json({ error: 'Reject failed' });
   }
+});
+
+// ── POST /bot-admin/signup/:userId/escalate ────────────────────────────
+// The bot couldn't safely auto-approve or auto-reject and is handing this
+// signup to a human (via Discord). We record the handoff in the audit log
+// WITHOUT changing the user row — that audit row is what pending-signups
+// uses to stop re-surfacing this signup every hour. Idempotent and always
+// succeeds: if the audit write fails, worst case the signup reappears next
+// run (the old behavior), never worse.
+router.post('/signup/:userId/escalate', requireBotToken, async (req, res) => {
+  const { userId } = req.params;
+  const { suggested_action, reason } = req.body || {};
+  await audit(
+    'signup-review', 'escalate', userId,
+    { suggested_action: suggested_action ?? null, reason: reason ?? null },
+    'escalated',
+  );
+  res.json({ ok: true, acted: true });
 });
 
 // ── GET /bot-admin/digest ──────────────────────────────────────────────
@@ -384,6 +437,7 @@ router.get('/at-risk-users', requireBotToken, async (req, res) => {
         AND created_at  < NOW() - INTERVAL '14 days'
         AND COALESCE(is_banned, FALSE) = FALSE
         AND COALESCE(is_paused, FALSE) = FALSE
+        AND ${notDemo('email')}
       ORDER BY updated_at ASC
       LIMIT 50
     `);
@@ -451,6 +505,8 @@ router.get('/matches-needing-survey', requireBotToken, async (req, res) => {
         AND COALESCE(b.is_banned, FALSE) = FALSE
         AND COALESCE(a.is_paused, FALSE) = FALSE
         AND COALESCE(b.is_paused, FALSE) = FALSE
+        AND ${notDemo('a.email')}
+        AND ${notDemo('b.email')}
       ORDER BY cr.updated_at ASC
       LIMIT 50
     `);
@@ -546,6 +602,7 @@ router.get('/quiz-dropoffs', requireBotToken, async (req, res) => {
         AND COALESCE(u.quiz_completed, FALSE) = FALSE
         AND COALESCE(u.is_banned,   FALSE) = FALSE
         AND COALESCE(u.is_paused,   FALSE) = FALSE
+        AND ${notDemo('u.email')}
         AND la.last_answered_at < NOW() - INTERVAL '24 hours'
         AND la.last_answered_at > NOW() - INTERVAL '30 days'
       ORDER BY la.last_answered_at DESC
