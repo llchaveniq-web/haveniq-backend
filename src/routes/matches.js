@@ -115,6 +115,16 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          AND u.is_paused = FALSE
          AND u.is_banned = FALSE
          AND u.quiz_completed = TRUE
+         -- Profile-completeness gate. An account can finish the quiz (the
+         -- quiz answers submit asynchronously right after OTP) but then bail
+         -- on the profile screen, leaving first_name / age NULL. Such
+         -- accounts were appearing in the feed and tripping the signup
+         -- auto-review. Require a real name + age before a profile is shown
+         -- to anyone. Legit onboarded users always have both (profile.tsx
+         -- requires them), so this hides only the incomplete accounts.
+         AND u.first_name IS NOT NULL
+         AND TRIM(u.first_name) <> ''
+         AND u.age IS NOT NULL
          -- Honor user_blocks in BOTH directions. If either side has
          -- blocked the other, the pair never appears in the feed.
          -- Algorithmic-block via cs.is_hard_blocked is separate.
