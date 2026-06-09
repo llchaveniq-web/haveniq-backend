@@ -3,7 +3,8 @@
  *
  * The FOUNDER_USER_IDS env var (comma-separated UUIDs) controls who's
  * considered a founder. Used by:
- *   - /admin/stats             — gates the dashboard entirely
+ *   - /admin/*                 — gates the founder-only admin endpoints
+ *                                (review queue, parent digest, seed demos)
  *   - /matches/feed            — founders see demo users for investor demos
  *   - /matches/requests        — same
  *   - /users/me/viewers        — same
