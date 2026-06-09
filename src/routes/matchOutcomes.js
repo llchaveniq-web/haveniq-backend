@@ -32,14 +32,16 @@ const ALLOWED_OUTCOMES = new Set([
   'ended_roommate_relationship',
   'survey_30d',           // 30-day satisfaction check-in (bot-driven outreach)
   'survey_60d',           // structured survey response — content lives in details
+  'survey_90d',           // 90-day in-app check-in
+  'survey_180d',          // 6-month in-app check-in
 ]);
 
 async function ensureTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS match_outcomes (
       id              BIGSERIAL PRIMARY KEY,
-      reporter_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      other_user_id   BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reporter_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      other_user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       outcome         TEXT NOT NULL,
       details         JSONB,
       created_at      TIMESTAMPTZ DEFAULT NOW()
@@ -58,14 +60,16 @@ async function ensureTable() {
 router.post('/me/match-outcomes', requireAuth, async (req, res) => {
   await ensureTable();
   const { otherUserId, outcome, details } = req.body || {};
-  if (!Number.isFinite(parseInt(otherUserId, 10))) return res.status(400).json({ error: 'otherUserId required' });
+  // user ids are UUIDs — the old parseInt() check rejected every real id
+  // (NaN → 400), so this endpoint never worked. Validate as a non-empty string.
+  if (!otherUserId || typeof otherUserId !== 'string') return res.status(400).json({ error: 'otherUserId required' });
   if (!ALLOWED_OUTCOMES.has(outcome)) return res.status(400).json({ error: 'invalid outcome' });
 
   try {
     await pool.query(
       `INSERT INTO match_outcomes (reporter_id, other_user_id, outcome, details)
        VALUES ($1, $2, $3, $4)`,
-      [req.user.id, parseInt(otherUserId, 10), outcome, details || null]
+      [req.user.id, otherUserId, outcome, details || null]
     );
     res.json({ recorded: true });
   } catch (err) {
