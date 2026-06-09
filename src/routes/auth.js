@@ -106,6 +106,15 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
 
     const emailLower = email.trim().toLowerCase();
 
+    // Pre-launch gate — block non-allowlisted emails from even getting an
+    // OTP while HavenIQ is private. Founder + PRELAUNCH_ALLOWLIST only.
+    {
+      const { isAllowed, PRELAUNCH_MESSAGE } = require('../lib/launchGate');
+      if (!isAllowed(emailLower)) {
+        return res.status(403).json({ error: PRELAUNCH_MESSAGE, prelaunch: true });
+      }
+    }
+
     // Returning-user fast path. If the email is already on file we don't
     // need school+schoolDomain in the payload — the school was captured at
     // signup and we trust it. Frontend signin mode sends `mode=signin`
@@ -297,6 +306,15 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
 
     const emailLower = email.trim().toLowerCase();
 
+    // Pre-launch gate (backstop — /send-code already blocks, but guard here
+    // too so a directly-crafted verify call can't slip through).
+    {
+      const { isAllowed, PRELAUNCH_MESSAGE } = require('../lib/launchGate');
+      if (!isAllowed(emailLower)) {
+        return res.status(403).json({ error: PRELAUNCH_MESSAGE, prelaunch: true });
+      }
+    }
+
     // Find valid OTP
     const { rows: otpRows } = await pool.query(
       `SELECT id, code, attempts FROM otp_codes
@@ -374,6 +392,13 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
 
     if (userRows[0]) {
       user = userRows[0];
+      // Returning user just re-passed .edu OTP — ensure they're verified
+      // (covers accounts created before .edu auto-verify existed, so they
+      // become matchable without a manual approval).
+      if (!user.is_verified) {
+        await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [user.id]);
+        user.is_verified = true;
+      }
     } else {
       // Store the user's ACTUAL verified email domain as school_domain
       // (not the picked school's curated domain). The email just passed
@@ -384,8 +409,13 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
       // next time. The school NAME is still whatever they picked.
       const verifiedDomain = emailLower.split('@')[1] || schoolDomain || '';
       const ins = await pool.query(
-        `INSERT INTO users (email, school, school_domain, trust_score)
-         VALUES ($1, $2, $3, 20)
+        // is_verified = TRUE on creation: passing .edu OTP IS the
+        // verification (the academic-email check at /send-code gates it),
+        // so we don't need a manual human approval before the account can
+        // appear in matches. Low-trust accounts still surface in the
+        // auto-review for attention; they're just not blocked from existing.
+        `INSERT INTO users (email, school, school_domain, trust_score, is_verified)
+         VALUES ($1, $2, $3, 20, TRUE)
          RETURNING id, email, school, first_name, last_name,
                    is_verified, trust_score, quiz_completed,
                    identity_verified_at, totp_enabled`,

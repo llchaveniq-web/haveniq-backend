@@ -1,0 +1,41 @@
+// ── Pre-launch access gate ────────────────────────────────────────────────
+// While LOCKED, only allowlisted emails can request an OTP, verify, or use an
+// authenticated session — even though the app URL is public (it's printed on
+// the launch poster). This keeps HavenIQ private to the founder + invited
+// helpers until the official launch.
+//
+// Safety:
+//   • The founder email is hardcoded into the allowlist, so a missing or
+//     mistyped env var can NEVER lock the founder out of his own app.
+//   • Default state is LOCKED (fail-safe). The gate opens ONLY when
+//     PRELAUNCH_LOCK is explicitly set to the string "false".
+//
+// Operating it:
+//   • Add a helper without a code change → set PRELAUNCH_ALLOWLIST in Railway
+//     to a comma-separated list of emails (e.g. "cam@x.edu,quinn@y.edu").
+//   • OPEN TO EVERYONE at launch → set PRELAUNCH_LOCK=false in Railway
+//     (or remove this gate in code and redeploy).
+//
+// All comparisons are lowercased + trimmed to match how emails are stored.
+
+const FOUNDER_EMAIL = 'jberney@student.cccd.edu';
+
+const envAllow = (process.env.PRELAUNCH_ALLOWLIST || '')
+  .split(',')
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const ALLOWLIST = new Set([FOUNDER_EMAIL, ...envAllow]);
+
+// Fail-safe: locked unless explicitly opened with PRELAUNCH_LOCK=false.
+const LOCKED = process.env.PRELAUNCH_LOCK !== 'false';
+
+function isAllowed(email) {
+  if (!LOCKED) return true;
+  return ALLOWLIST.has(String(email || '').trim().toLowerCase());
+}
+
+const PRELAUNCH_MESSAGE =
+  "HavenIQ is in private pre-launch and isn't open yet. We'll email you the moment it opens at your school.";
+
+module.exports = { isAllowed, isLocked: () => LOCKED, ALLOWLIST, PRELAUNCH_MESSAGE };

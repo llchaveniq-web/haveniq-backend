@@ -49,6 +49,18 @@ async function requireAuth(req, res, next) {
     }
 
     req.user = rows[0];
+
+    // Pre-launch lock — refuse even a valid existing session if the account
+    // isn't on the allowlist, so the app stays private to the founder
+    // (+ invited helpers) until launch. Founder is always allowed; opens
+    // for everyone when PRELAUNCH_LOCK=false. See lib/launchGate.js.
+    {
+      const { isAllowed, PRELAUNCH_MESSAGE } = require('../lib/launchGate');
+      if (!isAllowed(req.user.email)) {
+        return res.status(403).json({ error: PRELAUNCH_MESSAGE, prelaunch: true });
+      }
+    }
+
     next();
   } catch (err) {
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
