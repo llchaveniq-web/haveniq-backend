@@ -20,12 +20,23 @@
 
 const FOUNDER_EMAIL = 'jberney@student.cccd.edu';
 
+// Invited testers / helpers — hardcoded so access can be granted without
+// touching Railway env. Add or remove emails here and redeploy. (For a
+// no-code-change addition, use the PRELAUNCH_ALLOWLIST env var instead.)
+const INVITED = [
+  'u1579080@umail.com.utah.edu',  // 2026-06-08 — matching-process tester
+];
+
 const envAllow = (process.env.PRELAUNCH_ALLOWLIST || '')
   .split(',')
   .map(s => s.trim().toLowerCase())
   .filter(Boolean);
 
-const ALLOWLIST = new Set([FOUNDER_EMAIL, ...envAllow]);
+const ALLOWLIST = new Set([
+  FOUNDER_EMAIL,
+  ...INVITED.map(e => e.trim().toLowerCase()),
+  ...envAllow,
+]);
 
 // Fail-safe: locked unless explicitly opened with PRELAUNCH_LOCK=false.
 const LOCKED = process.env.PRELAUNCH_LOCK !== 'false';

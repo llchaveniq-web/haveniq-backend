@@ -115,26 +115,27 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          AND u.is_paused = FALSE
          AND u.is_banned = FALSE
          AND u.quiz_completed = TRUE
-         -- Profile-completeness gate. An account can finish the quiz (the
-         -- quiz answers submit asynchronously right after OTP) but then bail
-         -- on the profile screen, leaving first_name / age NULL. Such
-         -- accounts were appearing in the feed and tripping the signup
-         -- auto-review. Require a real name + age before a profile is shown
-         -- to anyone. Legit onboarded users always have both (profile.tsx
-         -- requires them), so this hides only the incomplete accounts.
-         AND u.first_name IS NOT NULL
-         AND TRIM(u.first_name) <> ''
-         AND u.age IS NOT NULL
-         -- A photo is now required to appear in the feed (it's required at
-         -- signup too). Hides any legacy account that never added one until
-         -- they do.
-         AND u.photo_url IS NOT NULL
-         -- Human-approval gate. is_verified flips TRUE only via the
-         -- bot-admin "approve" review (NOT auto-set on .edu OTP), so the
-         -- match pool now shows only accounts a human has cleared. NOTE:
-         -- every real account must be approved (POST /bot-admin/signup/:id/
-         -- approve) or it won't appear here.
-         AND u.is_verified = TRUE
+         -- Gate NEW discovery candidates on a complete, verified profile:
+         -- real name + age + photo + .edu-verified (is_verified is now
+         -- auto-set on .edu OTP in auth.js, so this needs no manual
+         -- approval for real students). This keeps half-finished / unverified
+         -- accounts out of the feed and out of the signup auto-review.
+         --
+         -- BUT a pair you've already CONNECTED with (accepted request) is
+         -- ALWAYS returned, even if their profile is incomplete — you have a
+         -- relationship, so the match-detail screen and journal must still
+         -- resolve them. Without this exemption, connecting with someone who
+         -- lacks a photo made their profile un-openable ("match not found").
+         AND (
+           cr.status = 'accepted'
+           OR (
+             u.first_name IS NOT NULL
+             AND TRIM(u.first_name) <> ''
+             AND u.age IS NOT NULL
+             AND u.photo_url IS NOT NULL
+             AND u.is_verified = TRUE
+           )
+         )
          -- Honor user_blocks in BOTH directions. If either side has
          -- blocked the other, the pair never appears in the feed.
          -- Algorithmic-block via cs.is_hard_blocked is separate.
