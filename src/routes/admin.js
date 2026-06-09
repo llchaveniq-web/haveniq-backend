@@ -501,7 +501,10 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
         const theirDealbreakers = Array.isArray(other.dealbreakers) ? other.dealbreakers : [];
         const combined = [...new Set([...myDealbreakers, ...theirDealbreakers])];
         const result = calculateCompatibility(myAnswers, other.answers, { dealbreakers: combined });
-        if (result.isHardBlocked) continue;
+        // Consistent with scoreNewMatches: don't skip hard-blocked pairs —
+        // write the row (score 0, is_hard_blocked = TRUE) so it's visible
+        // and debuggable. The feed filters score >= 50 AND
+        // is_hard_blocked = FALSE, so these never surface to users.
         // Order user_a/user_b lexically so we don't double-insert (A→B
         // and B→A are the same pair) — matches the same ordering quiz.js
         // uses on its bulk insert.
@@ -512,7 +515,7 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
           breakdown: JSON.stringify(result.categoryBreakdown || []),
           why_matched: JSON.stringify(result.whyMatched || []),
           is_soft_blocked: !!result.isSoftBlocked,
-          is_hard_blocked: false,
+          is_hard_blocked: !!result.isHardBlocked,
           shadow_penalty: result.shadowPenalty ?? 0,
         });
       }

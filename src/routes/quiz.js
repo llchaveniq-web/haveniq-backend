@@ -359,7 +359,15 @@ async function scoreNewMatches(userId, newAnswers) {
     const result = calculateCompatibility(newAnswers, other.answers, {
       dealbreakers: combinedDealbreakers,
     });
-    if (result.isHardBlocked) continue;
+
+    // NOTE: hard-blocked pairs are NO LONGER skipped. We used to `continue`
+    // here, which wrote no row at all — making a genuine incompatibility
+    // (e.g. never-smoker vs smokes-at-home-daily) indistinguishable from a
+    // bug ("why didn't they match?"). We now WRITE the row with score 0 and
+    // is_hard_blocked = TRUE, so the pair is visible in the data / founder
+    // dashboard, and a later answer change flips it correctly via the
+    // ON CONFLICT upsert below. The feed filters score >= 50 (and
+    // is_hard_blocked = FALSE), so students still never see these pairs.
 
     // Blend: the clinical quiz stays the major factor (70%); the MBTI/DISC/
     // OCEAN personality match is a real second factor (30%). When either
@@ -373,20 +381,26 @@ async function scoreNewMatches(userId, newAnswers) {
     // personality derived, the stored score is the blended value. The
     // only stale-state window is between submit and personality
     // derivation, which is at most one Anthropic round trip (~3s).
-    let finalPct = result.finalPct;
-    const personality = computePersonalityMatch(meProfile, profileById[other.user_id]);
-    if (personality !== null) {
-      finalPct = Math.round(result.finalPct * 0.7 + personality * 0.3);
-    } else if (meProfile && !profileById[other.user_id]) {
-      // The other user has a completed quiz but no personality profile —
-      // this is the pathology the watchdog should catch. Log to Sentry
-      // so we know which users to re-run derivePersonality on.
-      try {
-        require('../utils/sentry').captureMessage?.(
-          `scoreNewMatches: missing personality for ${other.user_id}`,
-          'warning',
-        );
-      } catch { /* sentry not loaded */ }
+    //
+    // Hard block is ABSOLUTE: keep finalPct pinned at 0 and skip the
+    // personality blend entirely — a high MBTI/OCEAN overlap must never
+    // lift a hard-blocked pair back over the feed's score >= 50 cutoff.
+    let finalPct = result.finalPct;  // already 0 when hard-blocked
+    if (!result.isHardBlocked) {
+      const personality = computePersonalityMatch(meProfile, profileById[other.user_id]);
+      if (personality !== null) {
+        finalPct = Math.round(result.finalPct * 0.7 + personality * 0.3);
+      } else if (meProfile && !profileById[other.user_id]) {
+        // The other user has a completed quiz but no personality profile —
+        // this is the pathology the watchdog should catch. Log to Sentry
+        // so we know which users to re-run derivePersonality on.
+        try {
+          require('../utils/sentry').captureMessage?.(
+            `scoreNewMatches: missing personality for ${other.user_id}`,
+            'warning',
+          );
+        } catch { /* sentry not loaded */ }
+      }
     }
 
     const [userA, userB] = userId < other.user_id
