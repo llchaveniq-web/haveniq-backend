@@ -34,6 +34,12 @@ const QUESTION_POINTS = {
   25: 45,  // Conscientiousness
   35: 40,  // Agreeableness
   45: 32,  // Emotional Stability
+  // v6 questions — wired in 2026-06-08 (were collected but unscored). Keep in
+  // lockstep with the app's quizStore.ts QUESTION_POINTS and the CATEGORIES
+  // map below (personality ← 61, communication ← 62/63).
+  61: 20,  // Openness (Big Five · 5th OCEAN trait)
+  62: 28,  // Boundary-setting / assertiveness (resentment precursor)
+  63: 28,  // Repair initiation (Gottman)
 };
 
 // Category → question ids. The new `personality` bucket holds the
@@ -42,12 +48,12 @@ const QUESTION_POINTS = {
 const CATEGORIES = {
   attachment:    { ids: [1, 3, 22],               label: 'Attachment Style' },
   emotional:     { ids: [9],                      label: 'Emotional Style'  },
-  communication: { ids: [14, 17, 60],             label: 'Communication'    },
+  communication: { ids: [14, 17, 60, 62, 63],     label: 'Communication'    },
   childhood:     { ids: [29],                     label: 'Childhood'        },
   shadow:        { ids: [31, 32, 34, 58],         label: 'Shadow Traits'    },
   nervous:       { ids: [37, 40, 59],             label: 'Nervous System'   },
   control:       { ids: [57],                     label: 'Control Style'    },
-  personality:   { ids: [15, 25, 35, 45],         label: 'Personality'      },
+  personality:   { ids: [15, 25, 35, 45, 61],     label: 'Personality'      },
   lifestyle:     { ids: [48, 49, 50, 51, 54, 56], label: 'Lifestyle'        },
 };
 
