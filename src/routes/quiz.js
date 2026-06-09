@@ -465,6 +465,39 @@ async function scoreNewMatches(userId, newAnswers) {
   }
 }
 
+// ── Recompute every pair from scratch ─────────────────────────────────────
+// Re-runs scoreNewMatches for every completed, non-banned user, regenerating
+// all compatibility_scores rows (idempotent upserts via the ON CONFLICT in
+// scoreNewMatches). This repairs the failure mode where a user finished the
+// quiz before anyone else existed and never got re-scored — their feed stays
+// empty even though their answers are fine and they SHOULD match. Paused
+// users are still scored as the *submitter* (so they can see others) but
+// remain excluded as candidates by scoreNewMatches' own query, matching live
+// behavior. Returns a small summary for the admin tool. Best-effort per user:
+// one user's failure doesn't abort the whole sweep.
+async function recomputeAllMatches() {
+  const { rows: users } = await pool.query(
+    `SELECT qa.user_id, qa.answers
+       FROM quiz_answers qa
+       JOIN users u ON u.id = qa.user_id
+      WHERE qa.completed = TRUE
+        AND COALESCE(u.is_banned, FALSE) = FALSE
+      ORDER BY qa.updated_at ASC`,
+  );
+  let processed = 0;
+  let failed = 0;
+  for (const u of users) {
+    try {
+      await scoreNewMatches(u.user_id, u.answers);
+      processed++;
+    } catch (err) {
+      failed++;
+      console.error(`[recompute] scoring failed for ${u.user_id}:`, err.message);
+    }
+  }
+  return { completedUsers: users.length, processed, failed };
+}
+
 // ── DELETE /quiz/reset ─────────────────────────────────────────────────────
 // Clears the user's quiz_answers row + quiz_completed flag so they can
 // retake. Snapshots are intentionally preserved — they're the longitudinal
@@ -800,3 +833,8 @@ router.post('/writing', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
+// Exposed for the bot-admin recompute tool (regenerates missing/stale
+// compatibility_scores). Attaching to the router export avoids moving the
+// live scoring code into a separate module.
+module.exports.scoreNewMatches    = scoreNewMatches;
+module.exports.recomputeAllMatches = recomputeAllMatches;

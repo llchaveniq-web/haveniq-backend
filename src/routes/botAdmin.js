@@ -620,4 +620,63 @@ router.get('/quiz-dropoffs', requireBotToken, async (req, res) => {
   }
 });
 
+// ── GET /bot-admin/match-diagnostics ───────────────────────────────────
+// Per-account matching health, for diagnosing "I finished the quiz but have
+// no matches". For each real (non-demo) user it reports the two completion
+// flags that can silently disagree (users.quiz_completed vs
+// quiz_answers.completed — the matcher keys off the LATTER), whether the
+// account is paused (paused users are invisible to everyone else's scoring),
+// whether a personality profile exists, and how many compatibility_scores
+// rows the account has. An account that is answers_completed = true but has
+// score_rows = 0 is the smoking gun: it finished the quiz but was never
+// scored against anyone (e.g. it completed before any other user existed and
+// no later submit re-scored it). Read-only.
+router.get('/match-diagnostics', requireBotToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        u.id, u.email, u.school,
+        COALESCE(u.is_paused, FALSE)        AS is_paused,
+        COALESCE(u.quiz_completed, FALSE)   AS users_quiz_completed,
+        (qa.completed IS TRUE)              AS answers_completed,
+        (pp.user_id IS NOT NULL)            AS has_personality,
+        (SELECT COUNT(*) FROM compatibility_scores cs
+           WHERE cs.user_a = u.id OR cs.user_b = u.id)            AS score_rows,
+        (SELECT COUNT(*) FROM compatibility_scores cs
+           WHERE (cs.user_a = u.id OR cs.user_b = u.id)
+             AND cs.is_hard_blocked = FALSE AND cs.score >= 50)   AS feedable_rows,
+        u.created_at
+      FROM users u
+      LEFT JOIN quiz_answers qa        ON qa.user_id = u.id
+      LEFT JOIN personality_profiles pp ON pp.user_id = u.id
+      WHERE COALESCE(u.is_banned, FALSE) = FALSE
+        AND ${notDemo('u.email')}
+      ORDER BY u.created_at DESC
+      LIMIT 100
+    `);
+    res.json({ count: rows.length, accounts: rows });
+  } catch (err) {
+    console.error('[botAdmin] match-diagnostics failed:', err);
+    res.status(500).json({ error: 'Diagnostics failed' });
+  }
+});
+
+// ── POST /bot-admin/recompute-matches ──────────────────────────────────
+// Regenerates every compatibility_scores row by re-running the live scoring
+// for each completed user. Idempotent (upserts). Repairs accounts that
+// finished the quiz but never got scored. Uses the SAME scoreNewMatches the
+// quiz-submit path uses (exported from routes/quiz), so there is no chance of
+// the recompute drifting from live behavior.
+router.post('/recompute-matches', requireBotToken, async (req, res) => {
+  try {
+    const { recomputeAllMatches } = require('./quiz');
+    const summary = await recomputeAllMatches();
+    await audit('match-recompute', 'recompute', null, summary, 'recomputed');
+    res.json({ ok: true, ...summary });
+  } catch (err) {
+    console.error('[botAdmin] recompute-matches failed:', err);
+    res.status(500).json({ error: 'Recompute failed' });
+  }
+});
+
 module.exports = router;
