@@ -40,6 +40,10 @@ const QUESTION_POINTS = {
   61: 20,  // Openness (Big Five · 5th OCEAN trait)
   62: 28,  // Boundary-setting / assertiveness (resentment precursor)
   63: 28,  // Repair initiation (Gottman)
+  // ── v7 additions 2026-06-09 — keep in lockstep with app quizStore.ts ──
+  52: 5,   // Overnight partners (lifestyle, soft-block on big mismatch)
+  53: 14,  // Study / focus environment (nervous)
+  55: 5,   // Food & kitchen sharing (lifestyle)
 };
 
 // Category → question ids. The new `personality` bucket holds the
@@ -51,10 +55,10 @@ const CATEGORIES = {
   communication: { ids: [14, 17, 60, 62, 63],     label: 'Communication'    },
   childhood:     { ids: [29],                     label: 'Childhood'        },
   shadow:        { ids: [31, 32, 34, 58],         label: 'Shadow Traits'    },
-  nervous:       { ids: [37, 40, 59],             label: 'Nervous System'   },
+  nervous:       { ids: [37, 40, 53, 59],         label: 'Nervous System'   },
   control:       { ids: [57],                     label: 'Control Style'    },
   personality:   { ids: [15, 25, 35, 45, 61],     label: 'Personality'      },
-  lifestyle:     { ids: [48, 49, 50, 51, 54, 56], label: 'Lifestyle'        },
+  lifestyle:     { ids: [48, 49, 50, 51, 52, 54, 55, 56], label: 'Lifestyle' },
 };
 
 // Shadow-trait questions: index of the "worst" answer + index of the
@@ -206,6 +210,11 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
       if (qid === 50 && diff >= 3) {
         isSoftBlocked = true;
         softReduction += 0.20;
+      }
+      // ── Soft block: Q52 overnight-partner comfort mismatch ───────
+      if (qid === 52 && diff >= 3) {
+        isSoftBlocked = true;
+        softReduction += 0.15;
       }
       // ── Shadow flag: one honest-worst vs one honest-best ─────────
       if (qid in SHADOW_WORST_INDEX) {
