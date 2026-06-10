@@ -181,12 +181,15 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
       const ai = optIdx(A, qid);
       const bi = optIdx(B, qid);
 
-      // Every scored question counts toward the max, answered or not —
-      // an unanswered question can't earn points (mirrors the app).
+      if (ai === null || bi === null) continue;
+
+      // Count toward the max ONLY when BOTH users answered. This makes partial
+      // completion (progressive profiling: a 12-question core unlocks matching,
+      // the rest are optional) FAIR — a core-only user is scored on the
+      // questions they share with their match, not penalized for the optional
+      // ones they skipped. Mirrors the app's quizStore.ts.
       maxScore += pts;
       catScores[cat].max += pts;
-
-      if (ai === null || bi === null) continue;
 
       const diff   = Math.abs(ai - bi);
       const earned = diffScore(pts, diff);
