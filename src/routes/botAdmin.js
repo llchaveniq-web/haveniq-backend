@@ -679,4 +679,33 @@ router.post('/recompute-matches', requireBotToken, async (req, res) => {
   }
 });
 
+// ── POST /bot-admin/clear-blocks ───────────────────────────────────────
+// Support/admin tool: remove ALL user_blocks involving one account (both
+// directions). Built for the case where a tester swiped left on their only
+// candidate — which (before the pass/block fix) created a permanent block
+// and emptied their feed. Body: { email }. Returns how many block rows were
+// removed. Audited.
+router.post('/clear-blocks', requireBotToken, async (req, res) => {
+  const { email } = req.body || {};
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'email required' });
+  }
+  try {
+    const { rows: u } = await pool.query(
+      'SELECT id FROM users WHERE lower(email) = lower($1)', [email],
+    );
+    if (!u[0]) return res.status(404).json({ error: 'user not found' });
+    const uid = u[0].id;
+    const r = await pool.query(
+      'DELETE FROM user_blocks WHERE blocker_id = $1 OR blocked_id = $1',
+      [uid],
+    );
+    await audit('match-recompute', 'clear-blocks', uid, { email, removed: r.rowCount }, 'cleared');
+    res.json({ ok: true, email, removed: r.rowCount });
+  } catch (err) {
+    console.error('[botAdmin] clear-blocks failed:', err);
+    res.status(500).json({ error: 'Clear blocks failed' });
+  }
+});
+
 module.exports = router;
