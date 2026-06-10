@@ -77,3 +77,43 @@ test('group compatibility hard-blocks if any cross-pair hard-blocks', () => {
 test('group compatibility returns null when a group is empty', () => {
   assert.equal(calculateGroupCompatibility([], [{ 1: 0 }]), null);
 });
+
+// ── Progressive profiling: partial-completion fairness (2026-06-09) ──────────
+// Regression guard for the "score only questions BOTH answered" fix that makes
+// the 12-core unlock viable. Before the fix these deflated badly (~41%).
+
+test('partial: identical shared answers score ~100; a question only one user answered is ignored', () => {
+  // Both answered Q1 identically; A also answered Q53, B did not. The
+  // unanswered Q53 must NOT drag the pair down.
+  const r = calculateCompatibility({ 1: 0, 53: 0 }, { 1: 0 });
+  assert.ok(r.finalPct >= 95, `shared-identical partial should be ~100, got ${r.finalPct}`);
+});
+
+test('partial: identical 12-core answers score ~100 (not deflated by skipped optional)', () => {
+  const core = { 49: 1, 51: 0, 50: 1, 54: 0, 1: 0, 14: 0, 25: 1, 45: 1, 57: 0, 58: 3, 60: 0, 35: 1 };
+  const r = calculateCompatibility(core, { ...core });
+  assert.ok(r.finalPct >= 95, `identical core should be ~100, got ${r.finalPct}`);
+});
+
+test('partial: no shared answered questions → 0 (cannot score strangers)', () => {
+  const r = calculateCompatibility({ 1: 0 }, { 14: 0 });
+  assert.equal(r.finalPct, 0);
+});
+
+// ── v7 question additions (2026-06-09) ──────────────────────────────────────
+
+test('new v7 questions (52 partners / 53 study / 55 food) are wired into scoring', () => {
+  const same = calculateCompatibility({ 52: 0, 53: 0, 55: 0 }, { 52: 0, 53: 0, 55: 0 });
+  const diff = calculateCompatibility({ 52: 0, 53: 0, 55: 0 }, { 52: 3, 53: 3, 55: 3 });
+  assert.ok(same.finalPct > diff.finalPct, 'Q52/53/55 must affect the score');
+});
+
+test('soft block: overnight-partner (Q52) mismatch sets isSoftBlocked', () => {
+  const r = calculateCompatibility({ 52: 0 }, { 52: 3 });
+  assert.equal(r.isSoftBlocked, true);
+});
+
+test('soft block: alcohol comfort (Q54) mismatch sets isSoftBlocked', () => {
+  const r = calculateCompatibility({ 54: 0 }, { 54: 3 });
+  assert.equal(r.isSoftBlocked, true);
+});
