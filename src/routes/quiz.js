@@ -196,26 +196,29 @@ router.post('/submit', requireAuth, async (req, res) => {
     const err = validateAnswers(answers);
     if (err) return res.status(400).json({ error: err });
 
-    // ── Per-semester reassessment gate ────────────────────────────────────
-    // Each completed quiz triggers one Anthropic call (derivePersonality)
-    // — at scale that becomes expensive if students re-submit on a whim.
-    // Chad's advice from the 2026-05-26 product session: lock re-takes to
-    // twice a year (start of fall + start of spring). 180 days is the
-    // hard floor; this matches the "twice a semester" cadence and gives
-    // students who really need an edit a clear "you can re-take in X
-    // days" response instead of a silent re-bill.
-    //
-    // First-time submitters (no completed row yet) sail through. Honest
-    // edits within the cooldown are blocked at the API; a future support
-    // path can override via /admin if a student needs help.
+    // ── Additive merge + reassessment gate ────────────────────────────────
+    // Progressive profiling: submissions are ADDITIVE. The 12-question core
+    // unlocks matching; a user can come back later and add the optional ~20
+    // to sharpen their matches. So we MERGE the new answers into whatever's
+    // stored, and the 180-day reassessment cooldown only blocks a true
+    // RE-TAKE — a completed profile being re-answered with NO net-new
+    // questions, within the window. Adding questions (progressive completion)
+    // is always allowed. First-time submitters sail through. (Each completed
+    // submit triggers one Anthropic derivePersonality call, which is why pure
+    // churn — re-answering the same set — stays rate-limited.)
     const REASSESS_COOLDOWN_DAYS = 180;
     const { rows: priorRows } = await pool.query(
-      `SELECT updated_at FROM quiz_answers
-       WHERE user_id = $1 AND completed = TRUE
-       LIMIT 1`,
+      `SELECT answers, completed, updated_at FROM quiz_answers WHERE user_id = $1 LIMIT 1`,
       [req.user.id]
     );
-    if (priorRows[0]) {
+    const existing = (priorRows[0] && priorRows[0].answers && typeof priorRows[0].answers === 'object')
+      ? priorRows[0].answers
+      : {};
+    const existingCount = Object.keys(existing).length;
+    const merged = { ...existing, ...answers };
+    const addsNewQuestions = Object.keys(merged).length > existingCount;
+
+    if (priorRows[0] && priorRows[0].completed && !addsNewQuestions) {
       const lastMs   = new Date(priorRows[0].updated_at).getTime();
       const elapsed  = Date.now() - lastMs;
       const cooldown = REASSESS_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
@@ -230,13 +233,13 @@ router.post('/submit', requireAuth, async (req, res) => {
       }
     }
 
-    // Save final answers and mark completed
+    // Save the MERGED answers and mark completed (core answered = matchable).
     await pool.query(
       `INSERT INTO quiz_answers (user_id, answers, completed)
        VALUES ($1, $2, TRUE)
        ON CONFLICT (user_id) DO UPDATE
        SET answers = $2, completed = TRUE, updated_at = NOW()`,
-      [req.user.id, JSON.stringify(answers)]
+      [req.user.id, JSON.stringify(merged)]
     );
 
     // Mark user as quiz_completed
@@ -258,14 +261,14 @@ router.post('/submit', requireAuth, async (req, res) => {
          'answers', $2::jsonb
        )
        FROM users u WHERE u.id = $1`,
-      [req.user.id, JSON.stringify(answers)],
+      [req.user.id, JSON.stringify(merged)],
     ).catch(err => console.error('snapshot insert failed:', err));
 
     // Trigger async match scoring (non-blocking). This first pass is
     // clinical-quiz only — the submitting user's personality profile isn't
     // derived yet. A second pass below re-scores with the 60/40 MBTI/DISC/
     // OCEAN blend folded in once the profile exists.
-    scoreNewMatches(req.user.id, answers).catch(err =>
+    scoreNewMatches(req.user.id, merged).catch(err =>
       console.error('Async scoring error:', err)
     );
 
@@ -273,7 +276,7 @@ router.post('/submit', requireAuth, async (req, res) => {
     // submit. Non-blocking + best-effort: derivePersonality() never rejects
     // (it falls back to a deterministic profile), and a DB failure here is
     // logged, not fatal. The /submit response is sent without waiting.
-    derivePersonality(answers, [], '', req.user.id)
+    derivePersonality(merged, [], '', req.user.id)
       .then(profile => pool.query(
         `INSERT INTO personality_profiles
            (user_id, archetype, ocean, summary, strengths, growth_areas, roommate_fit, model, source, mbti, disc)
@@ -296,7 +299,7 @@ router.post('/submit', requireAuth, async (req, res) => {
           profile.disc,
         ],
       ).catch(err => console.error('personality store failed:', err.message)))
-      .then(() => scoreNewMatches(req.user.id, answers))
+      .then(() => scoreNewMatches(req.user.id, merged))
       .catch(err => console.error('post-submit re-score failed:', err.message));
 
     res.json({ success: true, message: 'Quiz submitted. Calculating your matches...' });
