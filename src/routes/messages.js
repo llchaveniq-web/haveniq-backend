@@ -4,6 +4,35 @@ const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const analytics = require('../services/analytics');
 const { screenMessage, CRISIS_SUPPORT } = require('../lib/contentFilter');
+const { sendNewMessageEmail } = require('../services/email');
+
+// Email the recipient on a NEW message — but only the FIRST unread one in a
+// conversation (they were caught up), so a burst of messages emails once, not
+// per-message. The whole production app is web, where push tokens are never
+// registered, so without this a messaged student who isn't on the site never
+// knows. Best-effort; never blocks send; skips seeded demo accounts.
+async function maybeEmailNewMessage(conversationId, recipientId, senderFirstName) {
+  try {
+    const { rows: unread } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM messages
+        WHERE conversation_id = $1 AND sender_id <> $2 AND read = FALSE`,
+      [conversationId, recipientId],
+    );
+    // 1 == only the message we just inserted is unread → recipient was caught
+    // up → this is a fresh notification moment. >1 → already had unread → skip.
+    if (!unread[0] || unread[0].n !== 1) return;
+    const { rows } = await pool.query(
+      'SELECT email, first_name FROM users WHERE id = $1',
+      [recipientId],
+    );
+    const r = rows[0];
+    if (!r || !r.email) return;
+    if (/@haveniq-demo\.edu$/i.test(r.email)) return;
+    await sendNewMessageEmail(r.email, r.first_name || 'there', senderFirstName || 'Your match', recipientId);
+  } catch (err) {
+    console.error('[message email] send failed:', err);
+  }
+}
 
 // ── Message moderation flags (self-migrating audit table) ───────────────────
 // Records every message the content filter blocks or flags, so the founder can
@@ -287,6 +316,10 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
         data: { screen: 'thread', conversationId: req.params.conversationId },
       }).catch(err => console.error('[push] HTTP message send failed:', err));
     }
+
+    // Email the recipient too (push never reaches web users). Throttled to the
+    // first unread message in the conversation.
+    maybeEmailNewMessage(req.params.conversationId, otherUserId, req.user.first_name).catch(() => {});
 
     // If the sender's own message signals self-harm/crisis, attach supportive
     // resources to the response (the message is still delivered). Clients show

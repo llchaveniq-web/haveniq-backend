@@ -2,7 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
-const { sendParentMatchEmail, sendSafetyAlertEmail } = require('../services/email');
+const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectRequestEmail } = require('../services/email');
 const { isFounder } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
@@ -44,6 +44,68 @@ async function maybeNotifyParent(studentId, matchUserId) {
     );
   } catch (err) {
     console.error('[parent notify] send failed:', err);
+  }
+}
+
+// Email the STUDENT themselves when a match forms. This is the ONLY
+// re-engagement path that reaches web users: the app runs as a web SPA and
+// push-token registration no-ops on web (HavenIQ-App utils/registerPushToken),
+// so the "request accepted" push above never arrives for them. Without this
+// email a matched student who isn't actively on the site is never told and
+// doesn't come back. Best-effort + its own try/catch so it never blocks the
+// accept response. Skips seeded demo accounts (no real inbox).
+async function maybeEmailMatch(studentId, matchUserId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.email AS to_email, u.first_name AS to_name,
+              m.first_name AS match_first, m.last_name AS match_last,
+              cs.score AS compatibility
+       FROM users u
+       JOIN users m ON m.id = $2
+       LEFT JOIN compatibility_scores cs
+              ON (cs.user_a = LEAST(u.id, m.id) AND cs.user_b = GREATEST(u.id, m.id))
+       WHERE u.id = $1`,
+      [studentId, matchUserId],
+    );
+    const row = rows[0];
+    if (!row || !row.to_email) return;
+    if (/@haveniq-demo\.edu$/i.test(row.to_email)) return; // seeded fakes, no inbox
+    await sendMatchEmail(
+      row.to_email,
+      row.to_name || 'there',
+      `${row.match_first || ''} ${(row.match_last || '').charAt(0)}.`.trim(),
+      Math.round(Number(row.compatibility) || 0),
+      studentId,
+    );
+  } catch (err) {
+    console.error('[match email] send failed:', err);
+  }
+}
+
+// Email the recipient when a connect request is RECEIVED — the top-of-funnel
+// re-engagement moment. Same web-push-is-dead rationale as maybeEmailMatch.
+// Best-effort; skips seeded demo accounts.
+async function maybeEmailConnectRequest(toUserId, fromUserId, score) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT u.email AS to_email, u.first_name AS to_name,
+              f.first_name AS from_first, f.last_name AS from_last
+         FROM users u JOIN users f ON f.id = $2
+        WHERE u.id = $1`,
+      [toUserId, fromUserId],
+    );
+    const row = rows[0];
+    if (!row || !row.to_email) return;
+    if (/@haveniq-demo\.edu$/i.test(row.to_email)) return;
+    await sendConnectRequestEmail(
+      row.to_email,
+      row.to_name || 'there',
+      `${row.from_first || ''} ${(row.from_last || '').charAt(0)}.`.trim(),
+      Math.round(Number(score) || 0),
+      toUserId,
+    );
+  } catch (err) {
+    console.error('[connect-request email] send failed:', err);
   }
 }
 
@@ -268,6 +330,9 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
       }).catch(err => console.error('[push] connect request send failed:', err));
     }
 
+    // Email the recipient too — push never reaches web users.
+    maybeEmailConnectRequest(toUserId, req.user.id, compat[0].score).catch(() => {});
+
     res.json({ success: true, status: 'pending' });
   } catch (err) {
     console.error(err);
@@ -325,6 +390,12 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
       // email. Awaited in the background so the API response stays fast.
       maybeNotifyParent(req.user.id, fromUserId).catch(() => {});
       maybeNotifyParent(fromUserId, req.user.id).catch(() => {});
+
+      // Email the matched student themselves (the original requester). The
+      // accepter is active in the app right now; the requester is the one who
+      // may be offline and — on web, with no push token — otherwise never
+      // learns they matched.
+      maybeEmailMatch(fromUserId, req.user.id).catch(() => {});
     }
 
     res.json({ success: true, status: newStatus });

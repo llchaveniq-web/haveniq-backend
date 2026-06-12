@@ -474,10 +474,59 @@ async function sendParentDigestEmail({
   }
 }
 
+// Re-engagement email #2 — "someone wants to connect". Sent when a connect
+// request is RECEIVED. On web (the whole production app) push tokens are never
+// registered, so without this the recipient never learns someone reached out.
+async function sendConnectRequestEmail(toEmail, toName, fromName, score, userId = null) {
+  try {
+    await getResend().emails.send({
+      from: 'HavenIQ <noreply@haveniq.org>',
+      to:      toEmail,
+      subject: `${fromName} wants to connect on HavenIQ ✦`,
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+          <h2 style="color:#a33625;">Hi ${toName} — someone wants to connect ✦</h2>
+          <p style="color:#57423d;"><strong>${fromName}</strong>${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ.</p>
+          <p style="color:#57423d;">Open HavenIQ to see their profile and accept or pass.</p>
+        </div>
+      `,
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'connect_request' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'connect_request', error: err.message });
+    throw err;
+  }
+}
+
+// Re-engagement email #3 — "you have a new message". Throttled by the caller
+// to the FIRST unread message in a conversation (not per-message). Never
+// includes the message body — a notification, not the content.
+async function sendNewMessageEmail(toEmail, toName, fromName, userId = null) {
+  try {
+    await getResend().emails.send({
+      from: 'HavenIQ <noreply@haveniq.org>',
+      to:      toEmail,
+      subject: `${fromName} sent you a message on HavenIQ`,
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+          <h2 style="color:#a33625;">Hi ${toName} — you have a new message</h2>
+          <p style="color:#57423d;"><strong>${fromName}</strong> just messaged you on HavenIQ.</p>
+          <p style="color:#57423d;">Open HavenIQ to read it and reply.</p>
+        </div>
+      `,
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'new_message' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'new_message', error: err.message });
+    throw err;
+  }
+}
+
 module.exports = {
   generateOTP, sendOTPEmail, sendMatchEmail,
   sendParentMatchEmail, sendParentInviteEmail,
   sendWelcomeEmail, sendSafetyAlertEmail,
   sendFounderSignupAlert,
   sendParentDigestEmail,
+  sendConnectRequestEmail, sendNewMessageEmail,
 };
