@@ -27,6 +27,10 @@ async function sendOTPEmail(email, code, firstName = '', userId = null) {
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      email,
       subject: `${code} is your HavenIQ verification code`,
+      // Plain-text alternative — multipart emails land in the inbox far more
+      // reliably than HTML-only, which .edu spam filters penalize. This is the
+      // signup gate, so deliverability here gates the entire funnel.
+      text: `${greeting}\n\nYour HavenIQ verification code is: ${code}\n\nUse it to verify your .edu email and access your matches. This code expires in 10 minutes.\n\nHavenIQ will never call, text, or email you asking for this code. If this wasn't you, just ignore this email.\n\n— HavenIQ`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -71,6 +75,7 @@ async function sendMatchEmail(toEmail, toName, matchName, score, userId = null) 
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `You have a new ${score}% match on HavenIQ ✦`,
+      text: `Hi ${toName}! You have a new match on HavenIQ.\n\n${matchName} is ${score}% compatible with you. Open HavenIQ to see their full profile and connect.\n\n— HavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
           <h2 style="color:#2CBFBE;">Hi ${toName}! You have a new match ✦</h2>
@@ -483,6 +488,7 @@ async function sendConnectRequestEmail(toEmail, toName, fromName, score, userId 
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `${fromName} wants to connect on HavenIQ ✦`,
+      text: `Hi ${toName} — ${fromName}${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ. Open HavenIQ to see their profile and accept or pass.\n\n— HavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
           <h2 style="color:#a33625;">Hi ${toName} — someone wants to connect ✦</h2>
@@ -507,6 +513,7 @@ async function sendNewMessageEmail(toEmail, toName, fromName, userId = null) {
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `${fromName} sent you a message on HavenIQ`,
+      text: `Hi ${toName} — ${fromName} just messaged you on HavenIQ. Open HavenIQ to read it and reply.\n\n— HavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
           <h2 style="color:#a33625;">Hi ${toName} — you have a new message</h2>
