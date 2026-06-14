@@ -391,11 +391,22 @@ router.get('/me/export', requireAuth, async (req, res) => {
                   WHERE request_id IN (SELECT id FROM connect_requests WHERE from_user = $1 OR to_user = $1)`, [userId]),
     ]);
 
+    // Strip security-sensitive secrets from the user's own row before export.
+    // A downloadable JSON shouldn't carry the bcrypt password hash or the TOTP
+    // 2FA secret — a synced/shared/leaked export would otherwise expose them,
+    // and they aren't personal data the user needs. Everything else is kept.
+    const profileRow = profile.rows[0] ? { ...profile.rows[0] } : null;
+    if (profileRow) {
+      delete profileRow.password_hash;
+      delete profileRow.totp_secret;
+      delete profileRow.totp_recovery_codes;
+    }
+
     const out = {
       exported_at:           new Date().toISOString(),
       schema_version:        '1.0',
       user_id:               userId,
-      profile:               profile.rows[0] ?? null,
+      profile:               profileRow,
       quiz_answers:          quiz.rows,
       profile_snapshots:     snapshots.rows,
       consent_log:           consent.rows,
