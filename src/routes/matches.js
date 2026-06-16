@@ -385,6 +385,19 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
         }).catch(err => console.error('[push] accept send failed:', err));
       }
 
+      // Real-time in-app moment for the REQUESTER. Push is dead on web (no
+      // tokens), so if they're online right now the socket is the only channel
+      // that reaches them live — without this they'd just silently see the
+      // conversation appear later. Emit to their personal room; the client
+      // shows a "you're connected!" celebration + refreshes the journal.
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`user:${fromUserId}`).emit('match_accepted', {
+          withUserId: req.user.id,
+          withName:   req.user.first_name || 'Someone',
+        });
+      }
+
       // First-match parent notification. Fire for BOTH users — each one's
       // parent (if registered) gets a one-time "your student just matched"
       // email. Awaited in the background so the API response stays fast.
