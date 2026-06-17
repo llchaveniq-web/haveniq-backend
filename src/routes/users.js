@@ -7,6 +7,7 @@ const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = requ
 const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
+const { screenMessage } = require('../lib/contentFilter');
 const crypto    = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
@@ -344,6 +345,23 @@ router.patch('/me', requireAuth, async (req, res) => {
 
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
+    }
+
+    // Content moderation on the public bio. A bio is user-generated content
+    // shown on the student's profile card + match detail to everyone they
+    // match with, so it gets the SAME screen as a message: block egregious
+    // content (slurs, threats, explicit solicitation) before it can save and
+    // display. Scam/contact-info "flag" signals matter for chat, not a bio, so
+    // only a hard 'block' rejects here. (writingSample is private to the AI
+    // engine, not shown to others, so it isn't gated.)
+    if (typeof req.body.bio === 'string' && req.body.bio.trim()) {
+      const screen = screenMessage(req.body.bio);
+      if (screen.action === 'block') {
+        return res.status(422).json({
+          code:  'content_blocked',
+          error: 'That bio can\'t be saved. Keep your profile respectful and safe for the community.',
+        });
+      }
     }
 
     values.push(req.user.id);
