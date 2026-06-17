@@ -240,7 +240,7 @@ async function sendWelcomeEmail(email, userId = null) {
                 <p style="font-size:15px; color:#2D2620; margin:0 0 12px; font-weight:600;">3 things to do this week:</p>
                 <p style="font-size:14px; color:#75695A; line-height:1.8; margin:0;">
                   <strong>1.</strong> Take the quiz. ~10 minutes, 32 questions, clinical-framework backed.<br/>
-                  <strong>2.</strong> Add a photo + a 3-sentence bio (the AI writer screen helps).<br/>
+                  <strong>2.</strong> Add a photo + a few real sentences on how you actually live. Specific beats generic.<br/>
                   <strong>3.</strong> Browse your matches and send your first connect request.
                 </p>
               </div>
