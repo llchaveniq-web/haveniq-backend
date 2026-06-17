@@ -179,14 +179,23 @@ router.post('/signup/:userId/reject', requireBotToken, async (req, res) => {
 // succeeds: if the audit write fails, worst case the signup reappears next
 // run (the old behavior), never worse.
 router.post('/signup/:userId/escalate', requireBotToken, async (req, res) => {
-  const { userId } = req.params;
-  const { suggested_action, reason } = req.body || {};
-  await audit(
-    'signup-review', 'escalate', userId,
-    { suggested_action: suggested_action ?? null, reason: reason ?? null },
-    'escalated',
-  );
-  res.json({ ok: true, acted: true });
+  // Wrapped in try/catch like the sibling approve/reject handlers — without it,
+  // a DB hiccup in audit() would leave this request hanging with no response
+  // (unhandled async rejection). Low blast radius (bot-only), but every handler
+  // should always answer.
+  try {
+    const { userId } = req.params;
+    const { suggested_action, reason } = req.body || {};
+    await audit(
+      'signup-review', 'escalate', userId,
+      { suggested_action: suggested_action ?? null, reason: reason ?? null },
+      'escalated',
+    );
+    res.json({ ok: true, acted: true });
+  } catch (e) {
+    console.error('[bot-admin/escalate]', e.message);
+    res.status(500).json({ error: 'failed' });
+  }
 });
 
 // ── GET /bot-admin/digest ──────────────────────────────────────────────
