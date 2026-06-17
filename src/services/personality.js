@@ -93,7 +93,7 @@ function buildWritingSection(writing) {
   return w ? w.slice(0, 6000) : '';
 }
 
-const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer a 22-question quiz grounded in clinical frameworks (Bowlby attachment, Gottman, Polyvagal, ACEs, Jungian Shadow, HEXACO, Klontz money scripts, executive function, sensory processing).
+const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer a 32-question quiz grounded in clinical frameworks (Bowlby attachment, Gottman, Polyvagal, ACEs, Jungian Shadow, HEXACO, Klontz money scripts, executive function, sensory processing).
 
 Given one student's answers, derive a Big Five (OCEAN) personality profile and a roommate archetype.
 

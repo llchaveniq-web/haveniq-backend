@@ -4,7 +4,7 @@
  * Two kinds of content surface to users one-per-day:
  *
  *   BONUS_QUESTIONS — single-answer quiz extensions. Roommate-relevant
- *   situations that didn't fit the main 29-question quiz but generate
+ *   situations that didn't fit the main 32-question quiz but generate
  *   high-information signal. The user's answer is stored as a regular
  *   quiz_answer and feeds the matching engine (deferred wiring; for
  *   now data accumulates).

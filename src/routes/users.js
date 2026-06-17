@@ -880,7 +880,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
     if (!me.quiz_completed) {
       noticings.push({
         icon: '◐',
-        line: 'your matches sharpen once you finish the 29-question quiz. each answer pulls signal you wouldn\'t otherwise share.',
+        line: 'your matches sharpen once you finish the 32-question quiz. each answer pulls signal you wouldn\'t otherwise share.',
       });
     } else if (!me.has_photo) {
       noticings.push({
@@ -928,7 +928,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
 // ── GET /users/me/about-you ──────────────────────────────────────────
 // The "About You" reveal — a 5-section editorial magazine spread that
 // reads the user's personality back to them after they finish the
-// 29-question quiz. The single highest-leverage "wow this app sees me"
+// 32-question quiz. The single highest-leverage "wow this app sees me"
 // moment in HavenIQ. Sits between quiz completion and matches.
 //
 // Five sections, each grounded in SPECIFIC quiz answers (not generic
@@ -1074,7 +1074,7 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
       .filter(Boolean)
       .join('\n');
 
-    const prompt = `You are writing the "About You" editorial reveal for HavenIQ, a college roommate-matching app. The user just finished a 29-question compatibility quiz grounded in attachment theory (Bowlby), Big Five / OCEAN, Gottman communication research, polyvagal regulation, HEXACO Honesty-Humility, and executive function research.
+    const prompt = `You are writing the "About You" editorial reveal for HavenIQ, a college roommate-matching app. The user just finished a 32-question compatibility quiz grounded in attachment theory (Bowlby), Big Five / OCEAN, Gottman communication research, polyvagal regulation, HEXACO Honesty-Humility, and executive function research.
 
 This screen is the "wow, this app actually knows me" moment — the single most important brand surface in HavenIQ. The user is about to see if their matches are good; first they need to see THEMSELVES reflected back with editorial honesty + warmth.
 
@@ -1096,7 +1096,7 @@ WRITE 5 EDITORIAL SECTIONS. Each:
 - 70-120 words
 - Second-person voice ("you", not "the user")
 - Reference at least ONE specific behavior from their answers — but PARAPHRASE the question theme. Example: GOOD = "you said you go quiet when frustrated" / BAD = "your Q9 answer means..."
-- NEVER mention question numbers, Q-ids, or "Q40 / question 14" — the user has no idea what those refer to. They only know they answered 29 questions.
+- NEVER mention question numbers, Q-ids, or "Q40 / question 14" — the user has no idea what those refer to. They only know they answered 32 questions.
 - Specific, observational, NOT horoscope-vague
 - Warm-but-honest tone — like a thoughtful friend, not a marketing voice
 - NO clichés ("you're amazing!", "what makes you you!")

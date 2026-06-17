@@ -134,14 +134,14 @@ async function generatePayload(meRow, otherRow, sharedAnswers, answersMe, answer
 
   const prompt = `You are writing the "Matched Moment" reveal page for HavenIQ, a college roommate-matching app. ${meName} just matched with ${otherName} at ${school}.
 
-Both took a 29-question quiz built on academic frameworks (Big Five, attachment theory, Gottman, polyvagal, HEXACO, executive function). Here are the SPECIFIC questions they exactly agreed on — each item is the full question text + the option they both chose. Treat these as ground truth. Never invent answers.
+Both took a 32-question quiz built on academic frameworks (Big Five, attachment theory, Gottman, polyvagal, HEXACO, executive function). Here are the SPECIFIC questions they exactly agreed on — each item is the full question text + the option they both chose. Treat these as ground truth. Never invent answers.
 
 ${sharedContext}
 
 Write THREE pieces of content, all in second-person plural ("you two", "you both"), all in the HavenIQ editorial voice — warm, lowercase-friendly, literary, never marketing-speak. Never generic. Each sentence should be specific enough that ${meName} reading it goes "wait, that's actually us."
 
 CRITICAL RULES:
-- NEVER mention question numbers ("Q14", "question 9", etc.). The users have no idea what those refer to. They only know they answered 29 questions.
+- NEVER mention question numbers ("Q14", "question 9", etc.). The users have no idea what those refer to. They only know they answered 32 questions.
 - PARAPHRASE the question theme instead. Example: GOOD = "you both go quiet rather than confront" / BAD = "Q14 shows you both..."
 - Don't fabricate. If the shared list above doesn't include a topic (e.g. sleep schedule), don't write about it.
 
