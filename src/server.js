@@ -294,6 +294,7 @@ app.use('/matches',  require('./routes/matchedMoment'));  // /matches/matched/:u
 app.use('/daily',    require('./routes/dailyDiscovery')); // /daily/today + /daily/today/answer
 app.use('/',         require('./routes/activityPulse'));  // /activity-pulse
 app.use('/messages', require('./routes/messages'));
+app.use('/agreements', require('./routes/agreements')); // shared roommate agreement per conversation
 app.use('/telemetry', require('./routes/telemetry'));
 app.use('/reviews',  require('./routes/reviews'));
 app.use('/pulses',   require('./routes/pulses'));
