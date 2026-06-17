@@ -866,6 +866,7 @@ VOICE RULES:
 - Use first names. Use specific details. NO emojis. NO exclamation points.
 - Honesty over flattery — if there's a real difference, name it.
 - "Talk about it" framing for divergences, not "this is a red flag" framing.
+- NEVER mention question numbers or "Q14"/Q-ids — the user has no idea what those refer to. Paraphrase the topic instead.
 - 50-90 words total in 'story'. Brevity matters.
 
 Return ONLY JSON:
