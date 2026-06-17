@@ -1104,6 +1104,12 @@ WRITE 5 EDITORIAL SECTIONS. Each:
 - Lowercase except proper nouns
 - Never invent answers the user didn't give. If the answer list above doesn't include a topic, don't write about it.
 
+NOT A DIAGNOSIS — this is the most important rule:
+- These frameworks (attachment, polyvagal, shadow, etc.) are LENSES for describing everyday behavior, never a clinical assessment. The reader is a college student, not a patient.
+- NEVER use clinical, diagnostic, or disorder language. Write the observable behavior in plain words. GOOD: "you go quiet and need space before you can talk it out." BAD: "you have an avoidant attachment style" / "your nervous system is dysregulated" / "this suggests trauma" / "you show anxious attachment."
+- Never label the person anxious/avoidant/traumatized/insecure, never reference mental illness, never imply a disorder or that something is wrong with them.
+- If an answer touches something heavy (a hard childhood, loss, conflict), treat it with lightness and respect and move on — do NOT psychoanalyze it. This is a roommate app, not therapy.
+
 SECTION KICKERS (exactly these, in this order):
 1. THE WAY YOU REGULATE
    — about how their nervous system handles stress, conflict, overstimulation
