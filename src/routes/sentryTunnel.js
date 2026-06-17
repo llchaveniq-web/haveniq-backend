@@ -106,6 +106,15 @@ async function tryAutoRollback(bundleHash) {
 }
 
 async function trackBurstAndMaybeRollback(report) {
+  // Self-healing stale-bundle crashes must NOT count toward auto-rollback.
+  // They originate from old tabs running PRE-deploy JS that immediately
+  // auto-reloads onto the fresh bundle; the CURRENT deploy is fine. Counting
+  // them risks a FALSE rollback of a good deploy (worst case: reverting the
+  // very fix those stale tabs are missing, re-breaking everyone). Only an
+  // error that persisted on a freshly loaded bundle is a real burst signal.
+  if (report && report.selfHealing === true && report.persistedAfterReload !== true) {
+    return { burstDetected: false, skipped: 'self_healing_stale_bundle' };
+  }
   const bundleHash = bundleHashFromReport(report);
   const now = Date.now();
   let entry = errorBurst.get(bundleHash);
@@ -201,6 +210,15 @@ URL WHEN ERROR FIRED: ${report.url || '(unknown)'}
 USER AGENT: ${(report.userAgent || '').slice(0, 200)}
 ADDITIONAL CONTEXT: ${JSON.stringify(report.context || {}).slice(0, 1000)}
 
+SELF-HEAL SIGNALS (set by the client ErrorBoundary — trust these):
+  likelyStaleBundle:    ${report.likelyStaleBundle === true}
+  selfHealing:          ${report.selfHealing === true}    (a tab running OLD cached JS hit this; the client auto-reloaded to a fresh bundle, which resolves it)
+  persistedAfterReload: ${report.persistedAfterReload === true}    (the error happened AGAIN on a fresh bundle — this is a REAL live bug)
+
+CRITICAL TRIAGE RULE: a stale-bundle self-heal is NOT a live bug. The shipped code is fine; an old open tab simply ran pre-deploy JS and auto-reloaded. So:
+  - If selfHealing is true → severity "low", bug_class "stale_bundle_self_heal", fix_eligible false. Do NOT propose a code fix; there is nothing to fix in the current bundle. Note it is a self-healing stale-bundle event.
+  - ONLY if persistedAfterReload is true should a hooks/#310/#300/chunk error be treated as real and actionable (severity high). That means it crashed on the freshly-loaded bundle too.
+
 The HavenIQ codebase is a React Native / Expo Web app. Files are in:
   app/(auth)/*       — sign-in, OTP, email screens
   app/(setup)/*      — profile setup, quiz intro, quiz screens
@@ -223,7 +241,7 @@ Respond ONLY with JSON:
   "likely_file":   "<best guess at file path relative to repo root, e.g. 'app/(auth)/verify.tsx'>",
   "likely_line":   <integer or null>,
   "root_cause":    "<2-3 sentences>",
-  "bug_class":     "null_guard" | "missing_import" | "typo" | "web_platform_short_circuit" | "hooks_violation" | "logic" | "config" | "other",
+  "bug_class":     "null_guard" | "missing_import" | "typo" | "web_platform_short_circuit" | "hooks_violation" | "stale_bundle_self_heal" | "logic" | "config" | "other",
   "fix_eligible":  <boolean — true if this is a clear, low-risk one-liner fix>,
   "user_impact":   "<one short sentence: what does the user see?>",
   "proposed_fix":  "<plain-English description of what to change to fix it>"
