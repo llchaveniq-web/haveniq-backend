@@ -27,6 +27,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const crypto = require('crypto');
+const { NO_DASH_RULE, stripDashes } = require('../lib/textStyle');
 
 const env = (k) => (process.env[k] ?? '').replace(/[^!-~]/g, '');
 const ANTHROPIC_KEY = env('ANTHROPIC_API_KEY');
@@ -144,6 +145,7 @@ CRITICAL RULES:
 - NEVER mention question numbers ("Q14", "question 9", etc.). The users have no idea what those refer to. They only know they answered 32 questions.
 - PARAPHRASE the question theme instead. Example: GOOD = "you both go quiet rather than confront" / BAD = "Q14 shows you both..."
 - Don't fabricate. If the shared list above doesn't include a topic (e.g. sleep schedule), don't write about it.
+- ${NO_DASH_RULE}
 
 1. WHY_YOU_TWO_WORK — one paragraph, 100-140 words. Reference the shared answers thematically. Be honest about what the pairing predicts: low-conflict cohabitation, fast-repair patterns, shared sensory tolerance, etc. End on a single forward-looking sentence.
 
@@ -166,9 +168,9 @@ Output ONLY JSON:
     return null;
   }
   return {
-    why_you_two_work: String(parsed.why_you_two_work || '').slice(0, 1200),
-    shared_patterns:  Array.isArray(parsed.shared_patterns) ? parsed.shared_patterns.slice(0, 3).map(s => String(s).slice(0, 220)) : [],
-    conversation_starters: Array.isArray(parsed.conversation_starters) ? parsed.conversation_starters.slice(0, 3).map(s => String(s).slice(0, 300)) : [],
+    why_you_two_work: stripDashes(String(parsed.why_you_two_work || '').slice(0, 1200)),
+    shared_patterns:  Array.isArray(parsed.shared_patterns) ? parsed.shared_patterns.slice(0, 3).map(s => stripDashes(String(s).slice(0, 220))) : [],
+    conversation_starters: Array.isArray(parsed.conversation_starters) ? parsed.conversation_starters.slice(0, 3).map(s => stripDashes(String(s).slice(0, 300))) : [],
   };
 }
 

@@ -19,6 +19,7 @@
 
 const QUESTIONS = require('../data/quizQuestions');
 const analytics = require('./analytics');
+const { NO_DASH_RULE, stripDashes } = require('../lib/textStyle');
 
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -104,6 +105,7 @@ Rules:
 - Some students also record a short spoken voice interview — open-ended answers about home, past conflict, and roommate preferences, in their own words. When a voice interview is included, treat it as high-value signal: it reveals nuance, tone, and specifics the multiple-choice quiz cannot. Some answers carry a "[measured vocal tone: ...]" tag — an objective read of the emotion in HOW they spoke; weigh that alongside what they said. Let the voice interview meaningfully shape the scores and narrative.
 - Some students also volunteer a personal writing sample (an essay, paper, or personal statement). When present, read it for how they actually think and express themselves — their natural written voice is strong signal. Let it shape the profile too.
 - "summary" is 2-3 sentences. "strengths" and "growth_areas" are short concrete phrases. "roommate_fit" is 1-2 sentences on the kind of roommate this person lives well with.
+- ${NO_DASH_RULE}
 
 Pick exactly one archetype:
 - harmonizer: empathetic, peace-keeping, emotionally perceptive, collaborative.
@@ -239,10 +241,10 @@ function normalizeProfile(raw) {
     archetype,
     mbti,
     disc,
-    summary:      typeof raw?.summary === 'string' ? raw.summary.trim() : '',
-    strengths:    asArray(raw?.strengths),
-    growth_areas: asArray(raw?.growth_areas),
-    roommate_fit: typeof raw?.roommate_fit === 'string' ? raw.roommate_fit.trim() : '',
+    summary:      typeof raw?.summary === 'string' ? stripDashes(raw.summary.trim()) : '',
+    strengths:    asArray(raw?.strengths).map(stripDashes),
+    growth_areas: asArray(raw?.growth_areas).map(stripDashes),
+    roommate_fit: typeof raw?.roommate_fit === 'string' ? stripDashes(raw.roommate_fit.trim()) : '',
   };
 }
 

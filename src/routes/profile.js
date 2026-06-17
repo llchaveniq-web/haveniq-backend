@@ -26,6 +26,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { NO_DASH_RULE, stripDashesDeep } = require('../lib/textStyle');
 
 // ── Schema bootstrap (idempotent — runs on first call) ─────────────────
 async function ensureTable() {
@@ -179,7 +180,9 @@ Produce ONLY a JSON object matching this exact schema. No markdown, no commentar
   "growth_edges": ["<constructive phrase>", "<constructive phrase>"],
   "vector": [<16 floats between -1 and 1 — used by the matching algorithm; capture personality/lifestyle dimensions>],
   "confidence_notes": "<one sentence on what data was thin or missing>"
-}`;
+}
+
+${NO_DASH_RULE}`;
 
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -208,7 +211,9 @@ Produce ONLY a JSON object matching this exact schema. No markdown, no commentar
   if (!Array.isArray(parsed.vector) || parsed.vector.length !== 16) {
     parsed.vector = new Array(16).fill(0);
   }
-  return parsed;
+  // House style — no dashes as punctuation in any prose field. Numbers (the
+  // vector) and compound-word hyphens are left untouched by stripDashesDeep.
+  return stripDashesDeep(parsed);
 }
 
 // ── Routes ─────────────────────────────────────────────────────────────

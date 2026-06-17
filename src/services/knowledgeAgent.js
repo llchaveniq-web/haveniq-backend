@@ -16,6 +16,7 @@
 const fs   = require('fs');
 const path = require('path');
 const analytics = require('./analytics');
+const { NO_DASH_RULE, stripDashes } = require('../lib/textStyle');
 
 const ANTHROPIC_URL     = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -41,10 +42,11 @@ Your expertise is grounded in:
 Rules:
 - Be concrete and actionable. Give the student something they can actually say or do, not vague reassurance.
 - Be warm and non-judgmental. Never diagnose mental illness or use clinical disorder labels.
-- Keep answers tight — 2 to 4 short paragraphs or a short list. The student is reading on a phone.
+- Keep answers tight, 2 to 4 short paragraphs or a short list. The student is reading on a phone.
 - Stay in scope: roommates, cohabitation, conflict, compatibility, and the transition to living with someone. If asked something well outside that, gently redirect.
-- When safety is involved (threats, harassment, feeling unsafe), tell them plainly to use HavenIQ's block/report tools and to involve their RA, campus housing, or campus safety — do not try to coach them through a dangerous situation.
-- You are not a therapist or a lawyer. For a mental-health crisis, point them to campus counseling or the 988 Suicide & Crisis Lifeline.`;
+- When safety is involved (threats, harassment, feeling unsafe), tell them plainly to use HavenIQ's block/report tools and to involve their RA, campus housing, or campus safety. Do not try to coach them through a dangerous situation.
+- You are not a therapist or a lawyer. For a mental-health crisis, point them to campus counseling or the 988 Suicide & Crisis Lifeline.
+- ${NO_DASH_RULE}`;
 
 // HavenIQ's matching-philosophy doc — loaded into the agent's knowledge so
 // it answers grounded in how HavenIQ actually thinks about compatibility
@@ -270,9 +272,14 @@ async function chatWithPersona(persona, messages, context = '', userId = null) {
   while (cleaned.length && cleaned[0].role !== 'user') cleaned.shift();
   if (cleaned.length === 0) return { answer: FALLBACK_ANSWER, source: 'fallback' };
 
+  // Prose personas get the no-dashes house rule; feature_router does NOT (it
+  // returns a JSON array whose route paths contain hyphens like "/ai-advisor").
+  const baseline = persona === 'feature_router'
+    ? PERSONA_BASELINE
+    : `${PERSONA_BASELINE}\n\n${NO_DASH_RULE}`;
   const systemPrompt = context
-    ? `${personaPrompt}\n\n# Context on this user — reference it naturally, don't recite it back\n\n${context}${PERSONA_BASELINE}`
-    : `${personaPrompt}${PERSONA_BASELINE}`;
+    ? `${personaPrompt}\n\n# Context on this user — reference it naturally, don't recite it back\n\n${context}${baseline}`
+    : `${personaPrompt}${baseline}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
@@ -298,8 +305,11 @@ async function chatWithPersona(persona, messages, context = '', userId = null) {
     }
     const data = await res.json();
     const block = (data.content || []).find(b => b.type === 'text');
-    const answer = block && typeof block.text === 'string' ? block.text.trim() : '';
-    if (!answer) throw new Error('empty response');
+    const rawAnswer = block && typeof block.text === 'string' ? block.text.trim() : '';
+    if (!rawAnswer) throw new Error('empty response');
+    // House style: strip dashes from PROSE answers. feature_router returns a
+    // JSON array (route paths have hyphens), so leave it untouched.
+    const answer = persona === 'feature_router' ? rawAnswer : stripDashes(rawAnswer);
     analytics.track(analytics.EVENTS.ai_call_made, userId, {
       persona,
       tokens_in:  data.usage?.input_tokens ?? null,
@@ -359,7 +369,7 @@ async function askAssistant(question, profileContext = '', userId = null) {
     }
     const data = await res.json();
     const block = (data.content || []).find(b => b.type === 'text');
-    const answer = block && typeof block.text === 'string' ? block.text.trim() : '';
+    const answer = block && typeof block.text === 'string' ? stripDashes(block.text.trim()) : '';
     if (!answer) throw new Error('empty response');
     analytics.track(analytics.EVENTS.ai_call_made, userId, {
       persona:    'ask_assistant',

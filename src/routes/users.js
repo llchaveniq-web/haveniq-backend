@@ -6,6 +6,7 @@ const suspicious = require('../middleware/suspiciousActivity');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
+const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const crypto    = require('crypto');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
@@ -675,9 +676,9 @@ Examples of bad summaries (do NOT write like this):
         ? payload.safety_reason.slice(0, 300)
         : null,
       score:         typeof payload.score === 'number' ? Math.max(0, Math.min(100, Math.round(payload.score))) : null,
-      summary:       typeof payload.summary === 'string' ? payload.summary.slice(0, 200) : '',
-      issues:        Array.isArray(payload.issues) ? payload.issues.slice(0, 3).map(String) : [],
-      suggestion:    typeof payload.suggestion === 'string' ? payload.suggestion.slice(0, 200) : null,
+      summary:       typeof payload.summary === 'string' ? stripDashes(payload.summary.slice(0, 200)) : '',
+      issues:        Array.isArray(payload.issues) ? payload.issues.slice(0, 3).map(s => stripDashes(String(s))) : [],
+      suggestion:    typeof payload.suggestion === 'string' ? stripDashes(payload.suggestion.slice(0, 200)) : null,
       good_enough:   payload.good_enough !== false, // default to true unless explicitly false
     };
 
@@ -1102,6 +1103,7 @@ WRITE 5 EDITORIAL SECTIONS. Each:
 - NO clichés ("you're amazing!", "what makes you you!")
 - NO advice; pure observation
 - Lowercase except proper nouns
+- ${NO_DASH_RULE}
 - Never invent answers the user didn't give. If the answer list above doesn't include a topic, don't write about it.
 
 NOT A DIAGNOSIS — this is the most important rule:
@@ -1200,6 +1202,10 @@ Output ONLY valid JSON, no markdown:
       });
     }
 
+    // House style — strip any dashes the model used as punctuation from every
+    // section (body, title, kicker, pullQuote) before we cache OR return them.
+    const cleanSections = stripDashesDeep(sections);
+
     // 4. Cache
     await pool.query(
       `INSERT INTO about_you_cache (user_id, answers_hash, sections, model, updated_at)
@@ -1209,10 +1215,10 @@ Output ONLY valid JSON, no markdown:
              sections     = EXCLUDED.sections,
              model        = EXCLUDED.model,
              updated_at   = NOW()`,
-      [userId, answersHash, JSON.stringify(sections), 'claude-sonnet-4-5'],
+      [userId, answersHash, JSON.stringify(cleanSections), 'claude-sonnet-4-5'],
     ).catch((e) => console.error('[about-you] cache insert failed:', e.message));
 
-    res.json({ ready: true, sections, cached: false });
+    res.json({ ready: true, sections: cleanSections, cached: false });
   } catch (err) {
     console.error('[about-you] failed:', err.message);
     res.json({

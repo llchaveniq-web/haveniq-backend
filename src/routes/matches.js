@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
+const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const suspicious = require('../middleware/suspiciousActivity');
 const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectRequestEmail } = require('../services/email');
 const { isFounder } = require('../utils/founders');
@@ -701,6 +702,7 @@ VOICE RULES (this is the difference between good and trash):
 - One sentence + one question is the format. Open + invite reply.
 - No emojis. No exclamation points. Lowercase 'hey' is fine.
 - 8-25 words total each.
+- ${NO_DASH_RULE}
 
 Output ONLY a JSON array of 3 strings (no markdown fence, no explanation):
 ["<opener 1>", "<opener 2>", "<opener 3>"]`;
@@ -734,7 +736,7 @@ Output ONLY a JSON array of 3 strings (no markdown fence, no explanation):
       openers = [];
     }
     if (!Array.isArray(openers)) openers = [];
-    openers = openers.filter((s) => typeof s === 'string' && s.length > 0 && s.length < 300).slice(0, 3);
+    openers = openers.filter((s) => typeof s === 'string' && s.length > 0 && s.length < 300).slice(0, 3).map(stripDashes);
 
     if (openers.length === 0) {
       return res.status(502).json({ error: 'Opener generation returned no usable suggestions' });
@@ -873,6 +875,7 @@ VOICE RULES:
 - "Talk about it" framing for divergences, not "this is a red flag" framing.
 - NEVER mention question numbers or "Q14"/Q-ids — the user has no idea what those refer to. Paraphrase the topic instead.
 - 50-90 words total in 'story'. Brevity matters.
+- ${NO_DASH_RULE}
 
 Return ONLY JSON:
 {
@@ -917,11 +920,11 @@ No markdown fence. No explanation outside JSON.`;
     }
 
     // Defensive shape
-    payload.headline       = typeof payload.headline === 'string' ? payload.headline.slice(0, 200) : '';
-    payload.story          = typeof payload.story === 'string' ? payload.story.slice(0, 1000) : '';
-    payload.agreements     = Array.isArray(payload.agreements) ? payload.agreements.slice(0, 3) : [];
-    payload.tension_points = Array.isArray(payload.tension_points) ? payload.tension_points.slice(0, 2) : [];
-    payload.vibe           = typeof payload.vibe === 'string' ? payload.vibe.slice(0, 60) : '';
+    payload.headline       = typeof payload.headline === 'string' ? stripDashes(payload.headline.slice(0, 200)) : '';
+    payload.story          = typeof payload.story === 'string' ? stripDashes(payload.story.slice(0, 1000)) : '';
+    payload.agreements     = Array.isArray(payload.agreements) ? stripDashesDeep(payload.agreements.slice(0, 3)) : [];
+    payload.tension_points = Array.isArray(payload.tension_points) ? stripDashesDeep(payload.tension_points.slice(0, 2)) : [];
+    payload.vibe           = typeof payload.vibe === 'string' ? stripDashes(payload.vibe.slice(0, 60)) : '';
 
     if (!payload.headline || !payload.story) {
       return res.status(502).json({ error: 'Explainer produced empty output' });
