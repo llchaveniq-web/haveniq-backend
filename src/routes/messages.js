@@ -205,7 +205,10 @@ const MAX_MESSAGE_CHARS = 10000;
 router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { body } = req.body || {};
-    if (!body?.trim()) return res.status(400).json({ error: 'body required' });
+    // Type-guard before calling .trim()/.length — a non-string body (a hostile
+    // or buggy client sending {body: 123} or {body: {}}) would otherwise throw
+    // and surface as a 500 instead of a clean 400.
+    if (typeof body !== 'string' || !body.trim()) return res.status(400).json({ error: 'body required' });
     if (body.length > MAX_MESSAGE_CHARS) {
       return res.status(400).json({ error: `message exceeds ${MAX_MESSAGE_CHARS} char limit` });
     }

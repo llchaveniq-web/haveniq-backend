@@ -255,7 +255,10 @@ const CONNECT_MIN_SCORE = 50;
 router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { toUserId } = req.body || {};
-    if (!toUserId) return res.status(400).json({ error: 'toUserId required' });
+    // Type-guard: toUserId must be a non-empty string (UUID). A non-string
+    // (array/object/number) would bind oddly into the query and surface as a
+    // 500 — reject it cleanly as a 400 instead.
+    if (typeof toUserId !== 'string' || !toUserId) return res.status(400).json({ error: 'toUserId required' });
     if (toUserId === req.user.id) {
       return res.status(400).json({ error: 'Cannot connect to yourself' });
     }
@@ -344,8 +347,10 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
 // Accept or decline a connect request
 router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
   try {
-    const { fromUserId, action } = req.body; // action: 'accept' | 'decline'
-    if (!fromUserId || !['accept', 'decline'].includes(action)) {
+    const { fromUserId, action } = req.body || {}; // action: 'accept' | 'decline'
+    // `|| {}` guards a bodyless request (req.body undefined when no JSON sent)
+    // from throwing on destructure → 500. fromUserId must be a non-empty string.
+    if (typeof fromUserId !== 'string' || !fromUserId || !['accept', 'decline'].includes(action)) {
       return res.status(400).json({ error: 'fromUserId and action (accept|decline) required' });
     }
 
