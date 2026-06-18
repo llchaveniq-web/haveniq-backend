@@ -4,7 +4,7 @@ const { requireAuth, refuseBanned } = require('../middleware/auth');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const suspicious = require('../middleware/suspiciousActivity');
 const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectRequestEmail } = require('../services/email');
-const { isFounder } = require('../utils/founders');
+const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -125,7 +125,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // a populated match feed instead of "you + your brother." Real
     // student trust is preserved because the filter still hides demos
     // for everyone else.
-    const includeDemos = isFounder(userId);
+    const includeDemos = isFounderUser(req.user);
     const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
 
     // Current user's MBTI/DISC — feeds the secondary personality-pairing
@@ -435,7 +435,7 @@ router.get('/requests', requireAuth, async (req, res) => {
     // Same founder-bypass pattern as /feed. Demo connect requests are
     // hidden from real students but shown to founders so the "incoming
     // requests" tab is also populated for investor demos.
-    const includeDemos = isFounder(req.user.id);
+    const includeDemos = isFounderUser(req.user);
     const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
 
     const { rows } = await pool.query(

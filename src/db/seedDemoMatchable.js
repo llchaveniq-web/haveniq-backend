@@ -20,7 +20,7 @@
 const pool = require('./pool');
 const QUESTIONS = require('../data/quizQuestions');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
-const { getFounderIds } = require('../utils/founders');
+const { getFounderIds, getFounderEmails } = require('../utils/founders');
 
 // Deterministic, varied option index for a (userId, questionId) pair — FNV-1a
 // over the pair, clamped to the question's option count. Same demo user always
@@ -78,10 +78,14 @@ async function seedDemoMatchable() {
   let pairs = 0;
   try {
     const founderIds = getFounderIds();
+    const founderEmails = getFounderEmails();
     const { rows: founders } = await pool.query(
-      `SELECT user_id, answers FROM quiz_answers
-        WHERE completed = TRUE AND user_id::text = ANY($1)`,
-      [founderIds],
+      `SELECT qa.user_id, qa.answers
+         FROM quiz_answers qa
+         JOIN users u ON u.id = qa.user_id
+        WHERE qa.completed = TRUE
+          AND (u.id::text = ANY($1) OR lower(u.email) = ANY($2))`,
+      [founderIds, founderEmails],
     );
     const { rows: demoAns } = await pool.query(
       `SELECT qa.user_id, qa.answers

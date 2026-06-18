@@ -132,8 +132,8 @@ router.post('/preview-matches', requireAuth, async (req, res) => {
 
     // Pull completed users at the same school. Filter demo accounts unless
     // the caller is a founder (matches the rest of the app's behavior).
-    const { isFounder } = require('../utils/founders');
-    const includeDemos = isFounder(req.user.id);
+    const { isFounderUser } = require('../utils/founders');
+    const includeDemos = isFounderUser(req.user);
     const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
 
     const { rows: candidates } = await pool.query(
