@@ -121,20 +121,48 @@ router.get('/progress', requireAuth, async (req, res) => {
 // anything to compatibility_scores; final scoring still happens on submit.
 router.post('/preview-matches', requireAuth, async (req, res) => {
   try {
+    // Filter demo accounts unless the caller is a founder (by id OR email).
+    const { isFounderUser } = require('../utils/founders');
+    const includeDemos = isFounderUser(req.user);
+    const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+
+    // PREFER the user's REAL already-scored matches — this is literally "who
+    // you've matched with so far," and it's what a returning user (incl. the
+    // founder testing the demo pool) should see, independent of how many
+    // in-progress answers this request happens to carry.
+    const { rows: stored } = await pool.query(
+      `SELECT u.id AS user_id, u.first_name, u.last_name, u.photo_url, u.school, cs.score
+         FROM compatibility_scores cs
+         JOIN users u ON u.id = (CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END)
+        WHERE (cs.user_a = $1 OR cs.user_b = $1)
+          AND cs.score >= 50 AND cs.is_hard_blocked = FALSE
+          AND u.is_paused = FALSE AND u.is_banned = FALSE AND u.quiz_completed = TRUE
+          ${demoFilter}
+        ORDER BY cs.score DESC
+        LIMIT 3`,
+      [req.user.id],
+    );
+    if (stored.length > 0) {
+      return res.json({
+        matches: stored.map(r => ({
+          userId:      r.user_id,
+          firstName:   r.first_name,
+          lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
+          photoUrl:    r.photo_url,
+          school:      r.school,
+          score:       Math.round(r.score),
+        })),
+      });
+    }
+
+    // FALLBACK — first-time taker with no scores yet: score the in-progress
+    // answers against the pool on the fly.
     const { answers } = req.body || {};
     const err = validateAnswers(answers);
     if (err) return res.status(400).json({ error: err });
 
-    // Need at least a handful of answers for the score to mean anything —
-    // otherwise the top result is just whoever happens to be in the DB.
     const answerCount = Object.keys(answers || {}).length;
     if (answerCount < 5) return res.json({ matches: [] });
-
-    // Pull completed users at the same school. Filter demo accounts unless
-    // the caller is a founder (matches the rest of the app's behavior).
-    const { isFounderUser } = require('../utils/founders');
-    const includeDemos = isFounderUser(req.user);
-    const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
 
     const { rows: candidates } = await pool.query(
       `SELECT qa.user_id, qa.answers, u.first_name, u.last_name, u.photo_url, u.school
