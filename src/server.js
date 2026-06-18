@@ -502,8 +502,8 @@ async function bootstrapSchemaAsync() {
   // try/catch keeps a seed error from affecting the running server.
   try {
     const { seedDemoMatchable } = require('./db/seedDemoMatchable');
-    const seeded = await seedDemoMatchable();
-    console.log(`[bootstrap] demo-matchable seed: ${seeded} demo user(s) given quiz answers`);
+    const r = await seedDemoMatchable();
+    console.log(`[bootstrap] demo-matchable seed: ${r.seededAnswers} answers seeded, ${r.scoredPairs} founder↔demo pairs scored`);
   } catch (err) {
     console.error('[bootstrap] demo-matchable seed failed:', err.message);
   }

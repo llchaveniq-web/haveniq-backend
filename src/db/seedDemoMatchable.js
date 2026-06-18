@@ -19,6 +19,8 @@
 
 const pool = require('./pool');
 const QUESTIONS = require('../data/quizQuestions');
+const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
+const { getFounderIds } = require('../utils/founders');
 
 // Deterministic, varied option index for a (userId, questionId) pair — FNV-1a
 // over the pair, clamped to the question's option count. Same demo user always
@@ -67,7 +69,48 @@ async function seedDemoMatchable() {
       WHERE email LIKE '%@haveniq-demo.edu' AND (photo_url IS NULL OR photo_url = '')`,
   );
 
-  return demos.length;
+  // Generate founder↔demo compatibility_scores with the REAL engine so the
+  // founder's normal matches feed populates immediately — no quiz retake
+  // needed. Only for founder accounts (getFounderIds) that have completed the
+  // quiz; demos are hidden from everyone else by the feed's demo filter.
+  // ON CONFLICT DO NOTHING never overwrites a real score (e.g. if the founder
+  // later retakes their quiz, their submit upserts the authoritative value).
+  let pairs = 0;
+  try {
+    const founderIds = getFounderIds();
+    const { rows: founders } = await pool.query(
+      `SELECT user_id, answers FROM quiz_answers
+        WHERE completed = TRUE AND user_id::text = ANY($1)`,
+      [founderIds],
+    );
+    const { rows: demoAns } = await pool.query(
+      `SELECT qa.user_id, qa.answers
+         FROM quiz_answers qa
+         JOIN users u ON u.id = qa.user_id
+        WHERE u.email LIKE '%@haveniq-demo.edu' AND qa.completed = TRUE`,
+    );
+    for (const f of founders) {
+      for (const dm of demoAns) {
+        const r = calculateCompatibility(f.answers, dm.answers);
+        const [a, b] = String(f.user_id) < String(dm.user_id)
+          ? [f.user_id, dm.user_id]
+          : [dm.user_id, f.user_id];
+        await pool.query(
+          `INSERT INTO compatibility_scores
+             (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (user_a, user_b) DO NOTHING`,
+          [a, b, r.finalPct, !!r.isHardBlocked, !!r.isSoftBlocked, r.shadowPenalty || 0,
+           JSON.stringify(r.breakdown || {}), generateWhyMatched(r.breakdown, r.finalPct)],
+        );
+        pairs++;
+      }
+    }
+  } catch (err) {
+    console.error('[seedDemoMatchable] founder↔demo scoring failed:', err.message);
+  }
+
+  return { seededAnswers: demos.length, scoredPairs: pairs };
 }
 
 module.exports = { seedDemoMatchable };
