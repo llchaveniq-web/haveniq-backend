@@ -496,6 +496,17 @@ async function bootstrapSchemaAsync() {
   if (failed > 0) {
     sentry.captureMessage?.(`bootstrap had ${failed} failing statement(s)`, 'warning');
   }
+
+  // Make the demo pool live-matchable (idempotent, demo-only). Runs after the
+  // schema migration so quiz_answers exists. Never blocks the API — its own
+  // try/catch keeps a seed error from affecting the running server.
+  try {
+    const { seedDemoMatchable } = require('./db/seedDemoMatchable');
+    const seeded = await seedDemoMatchable();
+    console.log(`[bootstrap] demo-matchable seed: ${seeded} demo user(s) given quiz answers`);
+  } catch (err) {
+    console.error('[bootstrap] demo-matchable seed failed:', err.message);
+  }
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────
