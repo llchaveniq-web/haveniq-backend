@@ -113,6 +113,32 @@ router.get('/progress', requireAuth, async (req, res) => {
   }
 });
 
+// ── TEMP diagnostic (key-gated, no auth) — remove after debugging ──────────
+router.get('/__previewcheck', async (req, res) => {
+  if (req.query.key !== 'haveniq-demo-check') return res.status(404).end();
+  try {
+    const { isFounderUser, getFounderEmails } = require('../utils/founders');
+    const email = String(req.query.email || 'jberney@student.cccd.edu');
+    const u = (await pool.query('SELECT id, email FROM users WHERE lower(email)=lower($1)', [email])).rows[0];
+    if (!u) return res.json({ founderFound: false, triedEmail: email });
+    const founder = isFounderUser(u);
+    const demoFilter = founder ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+    const stored = (await pool.query(
+      `SELECT u.first_name, u.email, cs.score
+         FROM compatibility_scores cs
+         JOIN users u ON u.id = (CASE WHEN cs.user_a=$1 THEN cs.user_b ELSE cs.user_a END)
+        WHERE (cs.user_a=$1 OR cs.user_b=$1) AND cs.score>=50 AND cs.is_hard_blocked=FALSE
+          AND u.is_paused=FALSE AND u.is_banned=FALSE AND u.quiz_completed=TRUE ${demoFilter}
+        ORDER BY cs.score DESC LIMIT 5`,
+      [u.id])).rows;
+    res.json({
+      founderFound: true, accountEmail: u.email, isFounderUser: founder,
+      founderEmails: getFounderEmails(), storedMatchCount: stored.length,
+      sample: stored.map(r => ({ name: r.first_name, email: r.email, score: Math.round(r.score) })),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── POST /quiz/preview-matches ────────────────────────────────────────────
 // Mid-quiz hook: show the user 1-3 already-completed students whose answers
 // are most compatible with whatever they've answered so far. Drives quiz
