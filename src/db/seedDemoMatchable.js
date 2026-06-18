@@ -1,30 +1,84 @@
 // src/db/seedDemoMatchable.js
 //
-// Make the seeded demo pool (@haveniq-demo.edu) genuinely live-matchable for
-// the founder, so the real matches feed + the in-quiz Q10 preview populate
-// without any preview flag. Idempotent + demo-only — real students never see
-// demo accounts (the /matches/feed demo filter hides them).
+// Make a seeded demo pool (@haveniq-demo.edu) genuinely live-matchable for the
+// founder, so the real matches feed + the in-quiz Q10 preview populate without
+// any preview flag. Idempotent + demo-only — real students never see demo
+// accounts (the /matches/feed demo filter hides them).
 //
-// What it does (only for demo users that need it):
-//   1. Generates a VALID, varied quiz-answer set from the REAL questions
-//      (correct sparse ids + per-question option counts) so the scoring engine
-//      produces realistic, varied scores — not garbage.
-//   2. Marks them quiz-complete.
-//   3. Gives them a college-aged placeholder photo.
-//
-// The founder↔demo compatibility_scores themselves are produced by the REAL
-// engine the next time the founder submits/recomputes their quiz
-// (scoreNewMatches scores against ALL completed users, demos included). The
-// Q10 preview works immediately (it scores demos on the fly).
+// Steps (each idempotent):
+//   1. CREATE a ~30-user demo cohort if it doesn't exist (a chunk at the
+//      founder's school so they read as realistic same-school matches), with
+//      photos + recent last-active so presence shows.
+//   2. Give each demo a VALID, varied quiz-answer set from the REAL questions
+//      (correct sparse ids + per-question option counts → realistic scores).
+//   3. Generate founder↔demo compatibility_scores with the REAL engine so the
+//      feed populates immediately — no quiz retake needed.
 
 const pool = require('./pool');
 const QUESTIONS = require('../data/quizQuestions');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 const { getFounderIds, getFounderEmails } = require('../utils/founders');
 
+const FIRST = [
+  'Maya', 'Jordan', 'Sofia', 'Noah', 'Priya', 'Olivia', 'Liam', 'Ava', 'Ethan',
+  'Isabella', 'Mason', 'Mia', 'Lucas', 'Harper', 'Diego', 'Emma', 'Aiden', 'Zoe',
+  'Leo', 'Nina', 'Owen', 'Camila', 'Eli', 'Ruby', 'Theo', 'Layla', 'Jonah', 'Iris',
+  'Sage', 'Tobias',
+];
+const LAST = 'RTLMBKPSDCNWAHEGJFVOIYZQXU';
+const GENDERS = ['Woman', 'Man', 'Nonbinary'];
+const YEARS = ['Freshman', 'Sophomore', 'Junior', 'Senior'];
+const MAJORS = ['Design', 'Business', 'Biology', 'Computer Science', 'Psychology',
+  'Nursing', 'Communications', 'Engineering', 'Art History', 'Economics'];
+const BIOS = [
+  'Early riser, big on a clean kitchen. Coffee fixes everything.',
+  'Night owl, quiet study vibes. Respect the headphones.',
+  'Plants, playlists, and slow Sundays.',
+  'Gym in the morning, library by night. Tidy but not uptight.',
+  'Love cooking for people. Dishes done same day.',
+  'Easygoing, just no surprise guests at 2am.',
+  'Into film, thrifting, and keeping shared spaces calm.',
+  'Studious during the week, down to explore on weekends.',
+];
+// Half at the founder's school so they show even with a school filter; the
+// rest nearby for an "All schools" mix.
+const OCC = ['Orange Coast College', 'cccd.edu'];
+const OTHER_SCHOOLS = [
+  ['UC Irvine', 'uci.edu'],
+  ['Cal State Fullerton', 'fullerton.edu'],
+  ['UCLA', 'ucla.edu'],
+  ['UC San Diego', 'ucsd.edu'],
+];
+const COHORT = 30;
+
+async function ensureDemoUsers() {
+  for (let i = 0; i < COHORT; i++) {
+    const email = `sample${String(i + 1).padStart(2, '0')}@haveniq-demo.edu`;
+    const [school, domain] = i < 15 ? OCC : OTHER_SCHOOLS[i % OTHER_SCHOOLS.length];
+    const first = FIRST[i % FIRST.length];
+    const last = LAST[i % LAST.length];
+    const gender = GENDERS[i % GENDERS.length];
+    const year = YEARS[i % YEARS.length];
+    const major = MAJORS[i % MAJORS.length];
+    const bio = BIOS[i % BIOS.length];
+    const age = 18 + (i % 6);
+    const photo = `https://i.pravatar.cc/512?img=${1 + (i % 70)}`;
+    // Recent, spread-out last-active so the "Active today / Nd ago" label shows.
+    const lastActive = new Date(Date.now() - Math.round((i % 7) * 0.9 * 86400000)).toISOString();
+    await pool.query(
+      `INSERT INTO users
+         (email, school, school_domain, first_name, last_name, bio, major, school_year,
+          age, gender, looking_for, is_verified, quiz_completed, trust_score, photo_url, last_active_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,TRUE,85,$12,$13)
+       ON CONFLICT (email) DO NOTHING`,
+      [email, school, domain, first, last, bio, major, year, age, gender,
+       ['Woman', 'Man', 'Nonbinary'], photo, lastActive],
+    );
+  }
+}
+
 // Deterministic, varied option index for a (userId, questionId) pair — FNV-1a
-// over the pair, clamped to the question's option count. Same demo user always
-// gets the same answers (stable scores across reboots).
+// over the pair, clamped to the question's option count.
 function pickIndex(userId, qid, nopts) {
   let h = 2166136261;
   const s = `${userId}:${qid}`;
@@ -36,9 +90,11 @@ function pickIndex(userId, qid, nopts) {
 }
 
 async function seedDemoMatchable() {
+  await ensureDemoUsers();
+
   const optionQs = QUESTIONS.filter(q => Array.isArray(q.options) && q.options.length > 1);
 
-  // Only demo users that don't already have a quiz_answers row.
+  // Demo users that don't yet have a quiz_answers row.
   const { rows: demos } = await pool.query(
     `SELECT u.id
        FROM users u
@@ -46,7 +102,6 @@ async function seedDemoMatchable() {
       WHERE u.email LIKE '%@haveniq-demo.edu'
         AND qa.user_id IS NULL`,
   );
-
   for (const d of demos) {
     const answers = {};
     for (const q of optionQs) answers[q.id] = pickIndex(d.id, q.id, q.options.length);
@@ -58,7 +113,6 @@ async function seedDemoMatchable() {
     );
   }
 
-  // Flag + photo (guarded so they're no-ops once set).
   await pool.query(
     `UPDATE users SET quiz_completed = TRUE
       WHERE email LIKE '%@haveniq-demo.edu' AND quiz_completed IS DISTINCT FROM TRUE`,
@@ -69,12 +123,9 @@ async function seedDemoMatchable() {
       WHERE email LIKE '%@haveniq-demo.edu' AND (photo_url IS NULL OR photo_url = '')`,
   );
 
-  // Generate founder↔demo compatibility_scores with the REAL engine so the
-  // founder's normal matches feed populates immediately — no quiz retake
-  // needed. Only for founder accounts (getFounderIds) that have completed the
-  // quiz; demos are hidden from everyone else by the feed's demo filter.
-  // ON CONFLICT DO NOTHING never overwrites a real score (e.g. if the founder
-  // later retakes their quiz, their submit upserts the authoritative value).
+  // Founder↔demo scores via the REAL engine so the feed populates with no
+  // retake. Founder by id OR email; ON CONFLICT DO NOTHING never clobbers a
+  // real score.
   let pairs = 0;
   try {
     const founderIds = getFounderIds();
@@ -114,7 +165,7 @@ async function seedDemoMatchable() {
     console.error('[seedDemoMatchable] founder↔demo scoring failed:', err.message);
   }
 
-  return { seededAnswers: demos.length, scoredPairs: pairs };
+  return { demoUsers: COHORT, seededAnswers: demos.length, scoredPairs: pairs };
 }
 
 module.exports = { seedDemoMatchable };
