@@ -10,29 +10,6 @@ const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
 
-// ── TEMP diagnostic (key-gated, no auth) ─────────────────────────────────
-// Lets us see exactly what the matches pipeline sees in prod — demo pool
-// size, how many demos have completed quizzes, and the founder account's
-// state — instead of guessing why the feed is empty. Remove after debugging.
-router.get('/__debug', async (req, res) => {
-  if (req.query.key !== 'haveniq-demo-check') return res.status(404).end();
-  try {
-    const q = async (sql, p = []) => (await pool.query(sql, p)).rows;
-    const demoUsers   = (await q(`SELECT count(*)::int n FROM users WHERE email LIKE '%@haveniq-demo.edu'`))[0].n;
-    const demosWithQuiz = (await q(`SELECT count(*)::int n FROM quiz_answers qa JOIN users u ON u.id=qa.user_id WHERE u.email LIKE '%@haveniq-demo.edu' AND qa.completed=TRUE`))[0].n;
-    const f = (await q(`SELECT id, quiz_completed FROM users WHERE lower(email)=lower($1)`, ['jberney@student.cccd.edu']))[0] || null;
-    let founderQuizCompleted = null, founderScores = null;
-    if (f) {
-      const fq = (await q(`SELECT completed FROM quiz_answers WHERE user_id=$1`, [f.id]))[0];
-      founderQuizCompleted = fq ? fq.completed : false;
-      founderScores = (await q(`SELECT count(*)::int n FROM compatibility_scores WHERE (user_a=$1 OR user_b=$1) AND score >= 50`, [f.id]))[0].n;
-    }
-    res.json({ demoUsers, demosWithQuiz, founderExists: !!f, founderUserQuizCompleted: founderQuizCompleted, founderScoresOver50: founderScores });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Best-effort parent notification on a student's FIRST accepted match.
 // Called twice — once for each side of the pair. Each user's row has
 // `parent_notified` which gates against repeat sends. Wrapped in its own
