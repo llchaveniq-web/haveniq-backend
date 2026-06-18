@@ -82,6 +82,29 @@ async function requireAuth(req, res, next) {
 }
 
 /**
+ * Optional auth — sets req.user when a valid session token is present, but
+ * NEVER rejects when it's missing/invalid. For endpoints that serve both
+ * signed-in and anonymous callers (e.g. the in-quiz preview, which runs
+ * before signup in the anonymous quiz-first flow).
+ */
+async function optionalAuth(req, res, next) {
+  try {
+    const header = req.headers.authorization;
+    if (!header || !header.startsWith('Bearer ')) return next();
+    const decoded = jwt.verify(header.split(' ')[1], process.env.JWT_SECRET);
+    if (decoded.purpose) return next();
+    const { rows } = await pool.query(
+      'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason FROM users WHERE id = $1',
+      [decoded.userId],
+    );
+    if (rows[0]) req.user = rows[0];
+  } catch {
+    // Invalid/expired token → treat as anonymous, never error.
+  }
+  next();
+}
+
+/**
  * Stricter gate for write actions — refuses banned users with a clear
  * 403. Banned users can still call requireAuth (so they can see why
  * they were banned + reach support) but cannot send messages, connect
@@ -112,4 +135,4 @@ function signToken(userId) {
   });
 }
 
-module.exports = { requireAuth, refuseBanned, signToken };
+module.exports = { requireAuth, optionalAuth, refuseBanned, signToken };

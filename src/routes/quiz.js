@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch } = require('../services/personalityPairing');
@@ -119,44 +119,47 @@ router.get('/progress', requireAuth, async (req, res) => {
 // completion — empirically, "here's who you're already matching with" is
 // a much stronger pull than a generic progress bar. Does NOT persist
 // anything to compatibility_scores; final scoring still happens on submit.
-router.post('/preview-matches', requireAuth, async (req, res) => {
+router.post('/preview-matches', optionalAuth, async (req, res) => {
   try {
-    // Filter demo accounts unless the caller is a founder (by id OR email).
     const { isFounderUser } = require('../utils/founders');
-    const includeDemos = isFounderUser(req.user);
-    const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+    const authed = !!req.user;
 
-    // PREFER the user's REAL already-scored matches — this is literally "who
-    // you've matched with so far," and it's what a returning user (incl. the
-    // founder testing the demo pool) should see, independent of how many
-    // in-progress answers this request happens to carry.
-    const { rows: stored } = await pool.query(
-      `SELECT u.id AS user_id, u.first_name, u.last_name, u.photo_url, u.school, cs.score
-         FROM compatibility_scores cs
-         JOIN users u ON u.id = (CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END)
-        WHERE (cs.user_a = $1 OR cs.user_b = $1)
-          AND cs.score >= 50 AND cs.is_hard_blocked = FALSE
-          AND u.is_paused = FALSE AND u.is_banned = FALSE AND u.quiz_completed = TRUE
-          ${demoFilter}
-        ORDER BY cs.score DESC
-        LIMIT 3`,
-      [req.user.id],
-    );
-    if (stored.length > 0) {
-      return res.json({
-        matches: stored.map(r => ({
-          userId:      r.user_id,
-          firstName:   r.first_name,
-          lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
-          photoUrl:    r.photo_url,
-          school:      r.school,
-          score:       Math.round(r.score),
-        })),
-      });
+    // AUTHED: prefer the caller's REAL already-scored matches — literally "who
+    // you've matched with so far," independent of in-progress answers.
+    if (authed) {
+      const includeDemos = isFounderUser(req.user);
+      const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+      const { rows: stored } = await pool.query(
+        `SELECT u.id AS user_id, u.first_name, u.last_name, u.photo_url, u.school, cs.score
+           FROM compatibility_scores cs
+           JOIN users u ON u.id = (CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END)
+          WHERE (cs.user_a = $1 OR cs.user_b = $1)
+            AND cs.score >= 50 AND cs.is_hard_blocked = FALSE
+            AND u.is_paused = FALSE AND u.is_banned = FALSE AND u.quiz_completed = TRUE
+            ${demoFilter}
+          ORDER BY cs.score DESC
+          LIMIT 3`,
+        [req.user.id],
+      );
+      if (stored.length > 0) {
+        return res.json({
+          matches: stored.map(r => ({
+            userId:      r.user_id,
+            firstName:   r.first_name,
+            lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
+            photoUrl:    r.photo_url,
+            school:      r.school,
+            score:       Math.round(r.score),
+          })),
+        });
+      }
     }
 
-    // FALLBACK — first-time taker with no scores yet: score the in-progress
-    // answers against the pool on the fly.
+    // ON-THE-FLY — score the in-progress answers against the pool. Runs for an
+    // authed first-time taker (no scores yet) AND for ANONYMOUS quiz-takers
+    // (the normal pre-signup flow). PRIVACY: an anonymous caller is ONLY scored
+    // against the DEMO pool — real students' names/photos are never returned to
+    // an unauthenticated request.
     const { answers } = req.body || {};
     const err = validateAnswers(answers);
     if (err) return res.status(400).json({ error: err });
@@ -164,16 +167,28 @@ router.post('/preview-matches', requireAuth, async (req, res) => {
     const answerCount = Object.keys(answers || {}).length;
     if (answerCount < 5) return res.json({ matches: [] });
 
-    const { rows: candidates } = await pool.query(
-      `SELECT qa.user_id, qa.answers, u.first_name, u.last_name, u.photo_url, u.school
-       FROM quiz_answers qa
-       JOIN users u ON u.id = qa.user_id
-       WHERE qa.completed = TRUE
-         AND qa.user_id != $1
-         AND u.is_paused = FALSE
-         ${demoFilter}`,
-      [req.user.id]
-    );
+    let candidates;
+    if (authed) {
+      const includeDemos = isFounderUser(req.user);
+      const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+      ({ rows: candidates } = await pool.query(
+        `SELECT qa.user_id, qa.answers, u.first_name, u.last_name, u.photo_url, u.school
+           FROM quiz_answers qa
+           JOIN users u ON u.id = qa.user_id
+          WHERE qa.completed = TRUE
+            AND qa.user_id != $1
+            AND u.is_paused = FALSE
+            ${demoFilter}`,
+        [req.user.id]));
+    } else {
+      ({ rows: candidates } = await pool.query(
+        `SELECT qa.user_id, qa.answers, u.first_name, u.last_name, u.photo_url, u.school
+           FROM quiz_answers qa
+           JOIN users u ON u.id = qa.user_id
+          WHERE qa.completed = TRUE
+            AND u.is_paused = FALSE
+            AND u.email LIKE '%@haveniq-demo.edu'`));
+    }
 
     // Normalize the wire shape into the flat { questionId: number } map
     // the scoring engine expects. Frontend stores three answer shapes:
