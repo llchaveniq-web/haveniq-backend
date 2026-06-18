@@ -161,6 +161,45 @@ async function seedDemoMatchable() {
         pairs++;
       }
     }
+
+    // Seed ONE demo conversation per founder, with their top-scored named
+    // sample as the partner + a short realistic exchange — so the founder can
+    // see the full chat experience (name, presence, messages) without waiting
+    // for a real match to reply. Idempotent: conversation is UNIQUE(user_a,
+    // user_b), and messages only seed when the conversation is newly created.
+    for (const f of founders) {
+      const partner = (await pool.query(
+        `SELECT u.id FROM compatibility_scores cs
+           JOIN users u ON u.id = (CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END)
+          WHERE (cs.user_a = $1 OR cs.user_b = $1)
+            AND u.email LIKE '%@haveniq-demo.edu'
+            AND u.first_name IS NOT NULL AND u.first_name <> ''
+          ORDER BY cs.score DESC LIMIT 1`,
+        [f.user_id],
+      )).rows[0];
+      if (!partner) continue;
+      const [ca, cb] = String(f.user_id) < String(partner.id)
+        ? [f.user_id, partner.id] : [partner.id, f.user_id];
+      const conv = (await pool.query(
+        `INSERT INTO conversations (user_a, user_b) VALUES ($1, $2)
+         ON CONFLICT (user_a, user_b) DO NOTHING RETURNING id`,
+        [ca, cb],
+      )).rows[0];
+      if (conv) {
+        const msgs = [
+          [partner.id, "hey! saw we matched — your place sounds like my vibe. still looking?", true,  '26 hours'],
+          [f.user_id,  "yeah! when are you hoping to move in?",                                 true,  '25 hours'],
+          [partner.id, "aiming for fall. clean kitchen, quiet weeknights — that work for you?", false, '35 minutes'],
+        ];
+        for (const [sender, body, read, ago] of msgs) {
+          await pool.query(
+            `INSERT INTO messages (conversation_id, sender_id, body, read, created_at)
+             VALUES ($1, $2, $3, $4, NOW() - $5::interval)`,
+            [conv.id, sender, body, read, ago],
+          );
+        }
+      }
+    }
   } catch (err) {
     console.error('[seedDemoMatchable] founder↔demo scoring failed:', err.message);
   }
