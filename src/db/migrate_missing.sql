@@ -350,3 +350,16 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS email_undeliverable_reason TEXT;
 --    whole thread looking for the offending line.
 ALTER TABLE user_reports ADD COLUMN IF NOT EXISTS message_id UUID REFERENCES messages(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_user_reports_message ON user_reports (message_id) WHERE message_id IS NOT NULL;
+
+-- ── Presence: last time a user was active in the app. Updated (throttled to
+--    once / 5 min) by requireAuth on every authenticated request; returned in
+--    the match feed and shown on match cards as "Active today / Active Nd ago".
+--    Additive + nullable = safe; real users get a real value on first request.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
+
+-- Seed the demo pool with a realistic recent spread so the founder can SEE the
+-- presence label while testing (demo accounts never make real requests).
+-- Guarded on IS NULL: seeds once, never overwrites a real user's activity.
+UPDATE users
+   SET last_active_at = NOW() - (random() * INTERVAL '6 days')
+ WHERE email LIKE '%@haveniq-demo.edu' AND last_active_at IS NULL;

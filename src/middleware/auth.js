@@ -50,6 +50,17 @@ async function requireAuth(req, res, next) {
 
     req.user = rows[0];
 
+    // Record real presence — powers the "Active today / Active Nd ago" label
+    // on match cards. Fire-and-forget + throttled (only writes when the stored
+    // value is older than 5 min), so it adds at most one write per user per
+    // 5 min and never delays this request. Any authenticated request counts as
+    // "active" — the most accurate signal we have.
+    pool.query(
+      `UPDATE users SET last_active_at = NOW()
+       WHERE id = $1 AND (last_active_at IS NULL OR last_active_at < NOW() - INTERVAL '5 minutes')`,
+      [decoded.userId],
+    ).catch(() => { /* presence is best-effort — never break a request over it */ });
+
     // Pre-launch lock — refuse even a valid existing session if the account
     // isn't on the allowlist, so the app stays private to the founder
     // (+ invited helpers) until launch. Founder is always allowed; opens

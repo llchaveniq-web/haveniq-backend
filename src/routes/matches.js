@@ -159,6 +159,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          u.is_verified,
          u.trust_score,
          u.identity_verified_at,
+         u.last_active_at,
          pp.mbti  AS pairing_mbti,
          pp.disc  AS pairing_disc,
          cr.id     AS connect_request_id,
@@ -219,6 +220,9 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // hasn't done selfie+ID; non-null = the "ID ✓" badge renders on
       // their match card. Distinct from `isVerified` (= .edu email).
       identityVerifiedAt: r.identity_verified_at,
+      // Last time this candidate was active in the app — drives the
+      // "Active today / Active Nd ago" presence label on their match card.
+      lastActiveAt:  r.last_active_at,
       compatScore:   parseFloat(r.score),
       isSoftBlocked: r.is_soft_blocked,
       shadowPenalty: parseFloat(r.shadow_penalty),
