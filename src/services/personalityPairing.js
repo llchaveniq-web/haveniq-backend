@@ -215,4 +215,26 @@ function computePersonalityMatch(a, b) {
   return Math.round(mbtiScore !== null ? mbtiScore : workScore);
 }
 
-module.exports = { computePairing, computePersonalityMatch };
+// ─── Personality-score calibration (for the 30 % match blend) ─────────────
+// The heuristic above is intentionally generous — "no MBTI combo is a true
+// mismatch" — so its output lives in a high, narrow band (~55-93, centred
+// ~72), nothing like the clinical score's spread. Left RAW in the 70/30
+// blend, a near-constant ~72 dragged the final match score back toward the
+// mean and quietly undid the clinical calibration (see scoring.js). Stretch
+// personality around ITS OWN centre (72, not 50) so it actually
+// differentiates within the 30 % it owns.
+//
+// Deliberately GENTLER than the clinical curve (gain 1.5 vs 2.2): MBTI/DISC
+// pairing is pop-psychology, not validated science, so we widen it enough to
+// matter without faking precision. MONOTONIC → ranking preserved. Constants
+// are a first pass — retune against real paired-outcome data alongside the
+// clinical GAIN/MID.
+const PERS_CAL_GAIN = 1.5;
+const PERS_CAL_MID  = 72;
+function calibratePersonality(rawPct) {
+  if (rawPct === null || !Number.isFinite(rawPct)) return rawPct;
+  const stretched = PERS_CAL_MID + (rawPct - PERS_CAL_MID) * PERS_CAL_GAIN;
+  return Math.round(Math.min(99, Math.max(5, stretched)));
+}
+
+module.exports = { computePairing, computePersonalityMatch, calibratePersonality };

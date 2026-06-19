@@ -3,7 +3,7 @@ const pool   = require('../db/pool');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 const { derivePersonality } = require('../services/personality');
-const { computePersonalityMatch } = require('../services/personalityPairing');
+const { computePersonalityMatch, calibratePersonality } = require('../services/personalityPairing');
 const { textToSpeech, transcribe } = require('../services/voice');
 const { analyzeVoiceEmotion } = require('../services/voiceEmotion');
 const analytics = require('../services/analytics');
@@ -433,8 +433,12 @@ async function scoreNewMatches(userId, newAnswers) {
     // lift a hard-blocked pair back over the feed's score >= 50 cutoff.
     let finalPct = result.finalPct;  // already 0 when hard-blocked
     if (!result.isHardBlocked) {
-      const personality = computePersonalityMatch(meProfile, profileById[other.user_id]);
-      if (personality !== null) {
+      const personalityRaw = computePersonalityMatch(meProfile, profileById[other.user_id]);
+      if (personalityRaw !== null) {
+        // Calibrate the raw heuristic (compressed ~55-93) the same way the
+        // clinical score is stretched, so the 30% personality factor actually
+        // moves the blended number instead of pinning it near its ~72 mean.
+        const personality = calibratePersonality(personalityRaw);
         finalPct = Math.round(result.finalPct * 0.7 + personality * 0.3);
       } else if (meProfile && !profileById[other.user_id]) {
         // The other user has a completed quiz but no personality profile —
