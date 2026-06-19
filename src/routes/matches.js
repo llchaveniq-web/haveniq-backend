@@ -560,6 +560,43 @@ router.delete('/:matchId/block', requireAuth, async (req, res) => {
   }
 });
 
+// ── POST /matches/:matchId/unmatch ───────────────────────────────────────
+// Gracefully disconnect from an accepted match — distinct from block. We
+// SOFT-end the conversation (keep the row for safety/audit, e.g. harassment
+// after an unmatch), which stops messaging and drops the thread off both
+// users' lists. Reversible by design; not hostile like a block. Idempotent:
+// re-unmatching an already-ended conversation keeps the FIRST ender + time.
+// NOTE: this intentionally touches ONLY the conversation. Whether an unmatched
+// pair can re-connect / how the feed renders them is a client decision that
+// lands with the app-side "Unmatch" button — left untouched here on purpose.
+router.post('/:matchId/unmatch', requireAuth, async (req, res) => {
+  try {
+    const me    = req.user.id;
+    const other = req.params.matchId;
+    if (!other)        return res.status(400).json({ error: 'matchId is required' });
+    if (other === me)  return res.status(400).json({ error: "You can't unmatch yourself" });
+
+    // conversations stores the pair canonically (user_a < user_b). COALESCE so
+    // a second unmatch is a no-op that preserves who ended it first + when.
+    const [a, b] = me < other ? [me, other] : [other, me];
+    const { rows } = await pool.query(
+      `UPDATE conversations
+          SET ended_at = COALESCE(ended_at, NOW()),
+              ended_by = COALESCE(ended_by, $3)
+        WHERE user_a = $1 AND user_b = $2
+        RETURNING id`,
+      [a, b, me],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'No conversation to unmatch' });
+
+    audit(req, 'match.unmatch', { other }).catch(() => {});
+    res.json({ unmatched: true });
+  } catch (err) {
+    console.error('unmatch failed:', err);
+    res.status(500).json({ error: 'Could not unmatch' });
+  }
+});
+
 // ── POST /matches/:matchId/report ────────────────────────────────────────
 // Body: { reason?, category?, severity?, details? }
 //

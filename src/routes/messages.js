@@ -111,6 +111,10 @@ router.get('/conversations', requireAuth, async (req, res) => {
          (cs.user_b = $1 AND cs.user_a = u.id)
        )
        WHERE (c.user_a = $1 OR c.user_b = $1)
+         -- Soft-disconnected ("unmatched") threads drop off both lists but
+         -- the row is kept (safety/audit). Re-uses the same hide-not-delete
+         -- principle as blocks below.
+         AND c.ended_at IS NULL
          -- Hide conversations where either side has blocked the other.
          -- We don't delete the conversation row (audit trail) — just
          -- filter it from this user's list.
@@ -222,10 +226,16 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
     // check, and do not add a code path that creates a conversation
     // outside the accept handler in matches.js.
     const { rows: convRows } = await pool.query(
-      'SELECT user_a, user_b FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
+      'SELECT user_a, user_b, ended_at FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
       [req.params.conversationId, req.user.id]
     );
     if (!convRows[0]) return res.status(403).json({ error: 'Not authorized' });
+
+    // Soft-disconnect ("unmatch"): the conversation is ended → no new messages
+    // either way. Distinct from a block (which 403s above via user_blocks).
+    if (convRows[0].ended_at) {
+      return res.status(409).json({ error: 'This conversation has ended.', code: 'conversation_ended' });
+    }
 
     // Block the send if either side has blocked the other. We refuse
     // BOTH directions — a blocked user can't message the blocker, and

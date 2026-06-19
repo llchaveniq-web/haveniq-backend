@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS conversations (
   UNIQUE(user_a, user_b),
   CHECK (user_a < user_b)
 );
+-- Soft-disconnect ("unmatch") — a graceful end to a connection, distinct from
+-- a block. We keep the row (safety/audit, e.g. harassment AFTER an unmatch)
+-- and just mark it ended: messaging stops and the thread drops off both lists.
+-- Reversible by design; not hostile like a block.
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS ended_by UUID;
 
 -- ── Messages ──────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS messages (
