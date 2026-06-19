@@ -688,6 +688,24 @@ router.post('/recompute-matches', requireBotToken, async (req, res) => {
   }
 });
 
+// ── POST /bot-admin/heal-personalities ─────────────────────────────────
+// Repairs completed-quiz users left with NO personality_profiles row (a lost
+// derivation → clinical-only, degraded matches). Re-derives + re-scores them,
+// bounded per run so a backlog can't spike Anthropic cost. Same function the
+// server's self-heal interval runs, so a cron and the loop stay in sync.
+router.post('/heal-personalities', requireBotToken, async (req, res) => {
+  try {
+    const { healMissingPersonalities } = require('./quiz');
+    const limit = Math.min(100, Math.max(1, parseInt(req.body?.limit, 10) || 25));
+    const summary = await healMissingPersonalities({ limit });
+    await audit('match-recompute', 'heal-personalities', null, summary, 'healed');
+    res.json({ ok: true, ...summary });
+  } catch (err) {
+    console.error('[botAdmin] heal-personalities failed:', err);
+    res.status(500).json({ error: 'Heal failed' });
+  }
+});
+
 // ── POST /bot-admin/clear-blocks ───────────────────────────────────────
 // Support/admin tool: remove ALL user_blocks involving one account (both
 // directions). Built for the case where a tester swiped left on their only

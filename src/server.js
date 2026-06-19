@@ -518,6 +518,25 @@ server.listen(PORT, () => {
   // Fire the bootstrap after listen — Railway's healthcheck sees a live
   // /health within ms and won't roll back if the migration is slow.
   bootstrapSchemaAsync();
+
+  // Self-heal loop: periodically repair completed-quiz users left with no
+  // personality_profiles row (a failed derivation → degraded clinical-only
+  // matches). Bounded per run so a backlog can't spike Anthropic cost;
+  // idempotent (healed users drop out of the query); best-effort. Runs ~90s
+  // after boot (let the schema settle), then every 3h. The same function is
+  // exposed at POST /bot-admin/heal-personalities for cron/manual triggering.
+  const runPersonalityHeal = () => {
+    try {
+      const { healMissingPersonalities } = require('./routes/quiz');
+      healMissingPersonalities({ limit: 20 })
+        .then(s => { if (s.missing) console.log('[heal] personalities:', JSON.stringify(s)); })
+        .catch(err => console.error('[heal] sweep failed:', err.message));
+    } catch (err) {
+      console.error('[heal] could not start sweep:', err.message);
+    }
+  };
+  setTimeout(runPersonalityHeal, 90 * 1000);
+  setInterval(runPersonalityHeal, 3 * 60 * 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };

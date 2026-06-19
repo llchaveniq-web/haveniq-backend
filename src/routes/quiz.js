@@ -548,6 +548,53 @@ async function recomputeAllMatches() {
   return { completedUsers: users.length, processed, failed };
 }
 
+// ── Self-heal: re-derive personalities that failed to persist ──────────────
+// derivePersonality() is best-effort and never rejects, but a transient DB
+// write failure (or a crash between the Anthropic call and the INSERT) can
+// leave a completed-quiz user with NO personality_profiles row. Those users
+// then get clinical-ONLY scores — no 60/40 MBTI/DISC/OCEAN blend — quietly
+// degraded until something repairs them. scoreNewMatches logs each such gap to
+// Sentry; this closes the loop by actually healing it: find the missing rows,
+// re-derive (BOUNDED per run so a backlog can't spike Anthropic cost), then
+// re-score the healed users so their feed reflects the full blend.
+//
+// Only NULL rows are healed — a 'fallback' (deterministic) profile is already
+// a valid blendable profile, not a gap, so we don't burn a call re-deriving it.
+// Best-effort per user; one failure never aborts the sweep. Driven by a
+// low-frequency interval (server.js) AND a bot-token endpoint (botAdmin) so a
+// cron can also trigger it. Idempotent — a healed user drops out of the query.
+async function healMissingPersonalities({ limit = 25 } = {}) {
+  const { rows: gaps } = await pool.query(
+    `SELECT qa.user_id, qa.answers
+       FROM quiz_answers qa
+       JOIN users u ON u.id = qa.user_id
+       LEFT JOIN personality_profiles pp ON pp.user_id = qa.user_id
+      WHERE qa.completed = TRUE
+        AND COALESCE(u.is_banned, FALSE) = FALSE
+        AND pp.user_id IS NULL
+      ORDER BY qa.updated_at ASC
+      LIMIT $1`,
+    [limit],
+  );
+  let healed = 0, rescored = 0, failed = 0;
+  for (const g of gaps) {
+    try {
+      await rederivePersonalityFor(g.user_id);   // writes the missing profile
+      healed++;
+      try {
+        await scoreNewMatches(g.user_id, g.answers); // blend now applies
+        rescored++;
+      } catch (err) {
+        console.error(`[heal] rescore failed for ${g.user_id}:`, err.message);
+      }
+    } catch (err) {
+      failed++;
+      console.error(`[heal] re-derive failed for ${g.user_id}:`, err.message);
+    }
+  }
+  return { missing: gaps.length, healed, rescored, failed };
+}
+
 // ── DELETE /quiz/reset ─────────────────────────────────────────────────────
 // Clears the user's quiz_answers row + quiz_completed flag so they can
 // retake. Snapshots are intentionally preserved — they're the longitudinal
@@ -888,3 +935,4 @@ module.exports = router;
 // live scoring code into a separate module.
 module.exports.scoreNewMatches    = scoreNewMatches;
 module.exports.recomputeAllMatches = recomputeAllMatches;
+module.exports.healMissingPersonalities = healMissingPersonalities;
