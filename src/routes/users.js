@@ -6,6 +6,7 @@ const suspicious = require('../middleware/suspiciousActivity');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
+const { notDemo } = require('../lib/demoFilter');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const { screenMessage } = require('../lib/contentFilter');
 const crypto    = require('crypto');
@@ -65,7 +66,7 @@ router.get('/signup-stats', async (req, res) => {
          COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') AS this_week,
          COUNT(*) AS total
        FROM users
-       WHERE school = $1 AND email NOT LIKE '%@haveniq-demo.edu'`,
+       WHERE school = $1 AND ${notDemo('email')}`,
       [schoolName],
     );
 
@@ -112,7 +113,7 @@ router.get('/leaderboard', requireAuth, async (req, res) => {
         SELECT id, first_name, last_name, school, validation_score
         FROM users
         WHERE is_paused = FALSE
-          AND email NOT LIKE '%@haveniq-demo.edu'
+          AND ${notDemo('email')}
           AND validation_score IS NOT NULL
         ORDER BY validation_score DESC NULLS LAST
         LIMIT 50`;
@@ -123,7 +124,7 @@ router.get('/leaderboard', requireAuth, async (req, res) => {
         FROM users
         WHERE school = $1
           AND is_paused = FALSE
-          AND email NOT LIKE '%@haveniq-demo.edu'
+          AND ${notDemo('email')}
           AND validation_score IS NOT NULL
         ORDER BY validation_score DESC NULLS LAST
         LIMIT 50`;
@@ -525,7 +526,7 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
     // Founder bypass: investor demos see populated "who viewed your
     // profile" lists. Real students see only real viewers.
     const includeDemos = isFounder(req.user.id);
-    const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
+    const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     const { rows } = await pool.query(
       `SELECT u.id, u.first_name, u.last_name, u.school, u.photo_url, pv.viewed_at
@@ -811,10 +812,10 @@ router.get('/me/honest-state', requireAuth, async (req, res) => {
       q(`SELECT COUNT(*)::int AS n FROM users
           WHERE COALESCE(is_paused, FALSE) = FALSE
             AND COALESCE(is_banned, FALSE) = FALSE
-            AND email NOT LIKE '%@haveniq-demo.edu'`),
+            AND ${notDemo('email')}`),
       q(`SELECT COUNT(DISTINCT school)::int AS n FROM users
           WHERE school IS NOT NULL
-            AND email NOT LIKE '%@haveniq-demo.edu'`),
+            AND ${notDemo('email')}`),
       q(`SELECT EXTRACT(DAY FROM NOW() - MIN(created_at))::int AS n FROM users`),
     ]);
 
@@ -923,7 +924,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
               AND created_at > NOW() - INTERVAL '7 days'
               AND COALESCE(is_paused, FALSE) = FALSE
               AND COALESCE(is_banned, FALSE) = FALSE
-              AND email NOT LIKE '%@haveniq-demo.edu'`,
+              AND ${notDemo('email')}`,
           [me.school, userId],
         );
         const newAtSchool = rows[0]?.n ?? 0;

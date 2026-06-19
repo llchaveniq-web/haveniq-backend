@@ -4,6 +4,7 @@ const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch, calibratePersonality } = require('../services/personalityPairing');
+const { notDemo } = require('../lib/demoFilter');
 const { textToSpeech, transcribe } = require('../services/voice');
 const { analyzeVoiceEmotion } = require('../services/voiceEmotion');
 const analytics = require('../services/analytics');
@@ -128,7 +129,7 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
     // you've matched with so far," independent of in-progress answers.
     if (authed) {
       const includeDemos = isFounderUser(req.user);
-      const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+      const demoFilter = includeDemos ? '' : `AND ${notDemo('u.email')}`;
       const { rows: stored } = await pool.query(
         `SELECT u.id AS user_id, u.first_name, u.last_name, u.photo_url, u.school, cs.score
            FROM compatibility_scores cs
@@ -170,7 +171,7 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
     let candidates;
     if (authed) {
       const includeDemos = isFounderUser(req.user);
-      const demoFilter = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+      const demoFilter = includeDemos ? '' : `AND ${notDemo('u.email')}`;
       ({ rows: candidates } = await pool.query(
         `SELECT qa.user_id, qa.answers, u.first_name, u.last_name, u.photo_url, u.school
            FROM quiz_answers qa

@@ -6,6 +6,7 @@ const suspicious = require('../middleware/suspiciousActivity');
 const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectRequestEmail } = require('../services/email');
 const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
+const { notDemo } = require('../lib/demoFilter');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
@@ -126,7 +127,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // student trust is preserved because the filter still hides demos
     // for everyone else.
     const includeDemos = isFounderUser(req.user);
-    const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
+    const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     // Current user's MBTI/DISC — feeds the secondary personality-pairing
     // readout on each match card. Display-only; never touches scoring.
@@ -444,7 +445,7 @@ router.get('/requests', requireAuth, async (req, res) => {
     // hidden from real students but shown to founders so the "incoming
     // requests" tab is also populated for investor demos.
     const includeDemos = isFounderUser(req.user);
-    const demoFilter   = includeDemos ? '' : "AND u.email NOT LIKE '%@haveniq-demo.edu'";
+    const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     const { rows } = await pool.query(
       `SELECT cr.id, cr.from_user, cr.created_at,

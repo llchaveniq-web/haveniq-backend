@@ -34,9 +34,9 @@ const pool   = require('../db/pool');
 //                          reference) so the standard @haveniq-demo.edu filter
 //                          misses them — which is how they leaked into the
 //                          retention re-engagement drafts.
-// Pass the column reference (e.g. 'email' or 'u.email').
-const notDemo = (col) =>
-  `${col} NOT LIKE '%@haveniq-demo.edu' AND ${col} NOT LIKE '%@demo.haveniq.app'`;
+// Pass the column reference (e.g. 'email' or 'u.email'). Now shared with the
+// rest of the codebase so the two-domain rule can't drift apart again.
+const { notDemo } = require('../lib/demoFilter');
 
 // ── Static token auth ──────────────────────────────────────────────────
 

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
+const { notDemo }     = require('../lib/demoFilter');
 
 // ── GET /search?q=... ─────────────────────────────────────────────────────
 // Single-bar search across:
@@ -20,7 +21,7 @@ router.get('/', requireAuth, async (req, res) => {
     const { rows: userRows } = await pool.query('SELECT school FROM users WHERE id = $1', [req.user.id]);
     const callerSchool = userRows[0]?.school ?? null;
     const includeDemos = isFounder(req.user.id);
-    const demoFilter   = includeDemos ? '' : `AND u.email NOT LIKE '%@haveniq-demo.edu'`;
+    const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     // ILIKE wins on prefix matches ("Jac" → "Jackson") and pg_trgm
     // covers fat-finger typos. We OR them and rank by trigram similarity
