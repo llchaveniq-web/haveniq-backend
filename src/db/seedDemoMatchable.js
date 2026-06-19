@@ -154,7 +154,14 @@ async function seedDemoMatchable() {
           `INSERT INTO compatibility_scores
              (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (user_a, user_b) DO NOTHING`,
+           ON CONFLICT (user_a, user_b) DO UPDATE
+             SET score = EXCLUDED.score,
+                 is_hard_blocked = EXCLUDED.is_hard_blocked,
+                 is_soft_blocked = EXCLUDED.is_soft_blocked,
+                 shadow_penalty  = EXCLUDED.shadow_penalty,
+                 breakdown       = EXCLUDED.breakdown,
+                 why_matched     = EXCLUDED.why_matched,
+                 calculated_at   = NOW()`,
           [a, b, r.finalPct, !!r.isHardBlocked, !!r.isSoftBlocked, r.shadowPenalty || 0,
            JSON.stringify(r.breakdown || {}), generateWhyMatched(r.breakdown, r.finalPct)],
         );

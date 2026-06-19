@@ -134,6 +134,22 @@ function diffScore(pts, diff) {
   return 0;
 }
 
+// ── Display calibration ──────────────────────────────────────────────────
+// Raw weighted-agreement regresses toward ~50% as questions accumulate (law of
+// large numbers), so unscaled scores compress into a narrow ~45-65 band —
+// "everyone's a 65% match," 94% unreachable, 52% meaningless. Stretch the band
+// around the 50 midpoint so the displayed score uses the full range and real
+// differences are visible. MONOTONIC: a better-agreeing pair always scores
+// higher, so ranking + honesty are preserved; nothing is fabricated. GAIN/MID
+// are a first-pass calibration — retune against real paired-outcome data
+// (the N≈50 60-day check-ins the weights comment already anticipates).
+const CAL_GAIN = 2.2;
+const CAL_MID  = 50;
+function calibrate(rawPct) {
+  const stretched = CAL_MID + (rawPct - CAL_MID) * CAL_GAIN;
+  return Math.min(99, Math.max(5, stretched));
+}
+
 /**
  * @param rawA, rawB — answer maps (wire shape or flat)
  * @param opts.dealbreakers — array of dealbreaker tags from the UNION of
@@ -237,16 +253,23 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   const totalReduction = Math.min(0.40, softReduction + shadowPenalty);
 
   const layer1Pct = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;
-  let finalPct = Math.round(layer1Pct * (1 - totalReduction));
-  finalPct = Math.min(100, Math.max(0, finalPct));
+  // Calibrate (stretch) BEFORE applying soft-block reductions, so the reduction
+  // bites a meaningful, spread-out number rather than a compressed one. No
+  // shared answers (maxScore === 0) → 0: can't score strangers, and the
+  // calibration floor must NOT turn that into a phantom 5%.
+  let finalPct = maxScore > 0
+    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * (1 - totalReduction))))
+    : 0;
 
   // Hard block trumps everything.
   if (hardBlocked) finalPct = 0;
 
-  // Per-category breakdown (0-100) for the match-detail screen.
+  // Per-category breakdown (0-100) for the match-detail screen — calibrated
+  // the same way so the Fit Report bars differentiate (a real strength reads
+  // as 90+, a real gap as 40-) instead of all hovering near the mean.
   const breakdown = {};
   for (const [cat, s] of Object.entries(catScores)) {
-    breakdown[cat] = s.max > 0 ? Math.round((s.earned / s.max) * 100) : 0;
+    breakdown[cat] = s.max > 0 ? Math.round(calibrate((s.earned / s.max) * 100)) : 0;
   }
 
   return {
