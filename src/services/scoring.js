@@ -110,12 +110,22 @@ const DEALBREAKER_MULTIPLIER = 1.75;
 function flatten(answers) {
   const flat = {};
   if (!answers || typeof answers !== 'object') return flat;
+  // Coerce to a finite number, accepting numeric STRINGS too. Without the
+  // string path, an answer stored as "2" (some client/JSON paths) was silently
+  // dropped — the question then never counted, quietly skewing the score.
+  // Index 0 must survive (it's a valid option), so test finiteness, not truthiness.
+  const num = (x) => {
+    if (typeof x === 'number' && Number.isFinite(x)) return x;
+    if (typeof x === 'string' && x.trim() !== '' && Number.isFinite(Number(x))) return Number(x);
+    return null;
+  };
   for (const [k, v] of Object.entries(answers)) {
-    if (typeof v === 'number') { flat[k] = v; continue; }
-    if (v && typeof v === 'object') {
-      if (typeof v.index === 'number')      flat[k] = v.index;
-      else if (typeof v.value === 'number') flat[k] = v.value;
+    let n = num(v);
+    if (n === null && v && typeof v === 'object') {
+      n = num(v.index);
+      if (n === null) n = num(v.value);
     }
+    if (n !== null) flat[k] = n;
   }
   return flat;
 }

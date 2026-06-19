@@ -117,3 +117,24 @@ test('soft block: alcohol comfort (Q54) mismatch sets isSoftBlocked', () => {
   const r = calculateCompatibility({ 54: 0 }, { 54: 3 });
   assert.equal(r.isSoftBlocked, true);
 });
+
+// ── flatten robustness: numeric-string answers must not be silently dropped ──
+
+test('numeric-string answers are coerced, not dropped (would otherwise skew score)', () => {
+  // Same answers, one side stored as strings — must score identical to numbers.
+  const nums = calculateCompatibility({ 1: 0, 14: 0, 25: 1 }, { 1: 0, 14: 0, 25: 1 });
+  const strs = calculateCompatibility({ 1: '0', 14: '0', 25: '1' }, { 1: 0, 14: 0, 25: 1 });
+  assert.equal(strs.finalPct, nums.finalPct, 'string-encoded answers must score the same as numbers');
+});
+
+test('string answers still trigger hard blocks (Q51 "0" vs "3")', () => {
+  const r = calculateCompatibility({ 51: '0' }, { 51: '3' });
+  assert.equal(r.isHardBlocked, true);
+  assert.equal(r.finalPct, 0);
+});
+
+test('option index 0 survives coercion (finiteness, not truthiness)', () => {
+  // A bare 0 and "0" are valid answers; a buggy guard could drop them.
+  const r = calculateCompatibility({ 1: 0 }, { 1: '0' });
+  assert.ok(r.finalPct >= 95, `identical Q1 (0 vs "0") should be ~100, got ${r.finalPct}`);
+});
