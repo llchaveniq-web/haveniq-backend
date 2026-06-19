@@ -360,12 +360,20 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
     }
 
     const newStatus = action === 'accept' ? 'accepted' : 'declined';
+    // Optional, decline-only: a short free-text reason for tuning metadata.
+    // Ignored on accept; trimmed/capped/null-coalesced so a missing or junk
+    // value never breaks the response.
+    const declineReason = action === 'decline' && typeof req.body?.reason === 'string'
+      ? (req.body.reason.trim().slice(0, 300) || null)
+      : null;
 
     const { rows } = await pool.query(
-      `UPDATE connect_requests SET status = $1, updated_at = NOW()
+      `UPDATE connect_requests
+         SET status = $1, updated_at = NOW(),
+             decline_reason = CASE WHEN $1 = 'declined' THEN $4 ELSE decline_reason END
        WHERE from_user = $2 AND to_user = $3 AND status = 'pending'
        RETURNING *`,
-      [newStatus, fromUserId, req.user.id]
+      [newStatus, fromUserId, req.user.id, declineReason]
     );
 
     if (!rows[0]) {

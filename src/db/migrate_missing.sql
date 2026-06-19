@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS connect_requests (
   UNIQUE(from_user, to_user)
 );
 CREATE INDEX IF NOT EXISTS idx_requests_to ON connect_requests(to_user);
+-- Optional free-text reason captured when a request is DECLINED. Low-friction
+-- metadata for matching-algorithm tuning ("why didn't it work?") — only ever
+-- prompted at the decline decision point, never on the high-frequency swipe.
+ALTER TABLE connect_requests ADD COLUMN IF NOT EXISTS decline_reason TEXT;
 
 -- ── Conversations ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS conversations (
