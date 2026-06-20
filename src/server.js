@@ -207,6 +207,7 @@ io.on('connection', (socket) => {
   // We reply immediately with the current state, then push future changes.
   socket.on('presence:watch', (watchedId) => {
     if (!watchedId || typeof watchedId !== 'string') return;
+    if (watchedId === socket.userId) return; // no point watching your own presence
     let set = presenceWatchers.get(watchedId);
     if (!set) { set = new Set(); presenceWatchers.set(watchedId, set); }
     set.add(socket);
@@ -574,13 +575,18 @@ server.listen(PORT, () => {
   // idempotent (healed users drop out of the query); best-effort. Runs ~90s
   // after boot (let the schema settle), then every 3h. The same function is
   // exposed at POST /bot-admin/heal-personalities for cron/manual triggering.
+  let healInFlight = false;
   const runPersonalityHeal = () => {
+    if (healInFlight) return; // never overlap runs — each fires Anthropic calls
+    healInFlight = true;
     try {
       const { healMissingPersonalities } = require('./routes/quiz');
       healMissingPersonalities({ limit: 20 })
         .then(s => { if (s.missing) console.log('[heal] personalities:', JSON.stringify(s)); })
-        .catch(err => console.error('[heal] sweep failed:', err.message));
+        .catch(err => console.error('[heal] sweep failed:', err.message))
+        .finally(() => { healInFlight = false; });
     } catch (err) {
+      healInFlight = false;
       console.error('[heal] could not start sweep:', err.message);
     }
   };

@@ -434,8 +434,11 @@ router.get('/bot-admin/stale-profiles', requireBotToken, async (req, res) => {
 // but auth'd by bot token + targets an arbitrary user. Used by the nightly cron.
 router.post('/bot-admin/synthesize/:userId', requireBotToken, async (req, res) => {
   await ensureTable();
-  const userId = parseInt(req.params.userId, 10);
-  if (!Number.isFinite(userId)) return res.status(400).json({ error: 'invalid user id' });
+  // user ids are UUIDs — parseInt() turned every real id into NaN → 400, so
+  // this bot/cron synthesize endpoint never actually ran for anyone (the same
+  // bug already fixed in matchOutcomes.js). Validate as a non-empty string.
+  const userId = req.params.userId;
+  if (!userId || typeof userId !== 'string') return res.status(400).json({ error: 'invalid user id' });
 
   try {
     const bundle = await gatherUserData(userId);
