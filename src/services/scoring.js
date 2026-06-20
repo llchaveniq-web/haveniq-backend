@@ -135,13 +135,34 @@ function optIdx(flat, qid) {
   return typeof v === 'number' ? v : null;
 }
 
-// Points earned for an answer pair, by index distance.
-// diff 0 → full points, 1 → 60%, 2 → 20%, 3+ → nothing.
-function diffScore(pts, diff) {
-  if (diff === 0) return pts;
-  if (diff === 1) return Math.round(pts * 0.6);
-  if (diff === 2) return Math.round(pts * 0.2);
-  return 0;
+// Option counts for the few SCORED questions that aren't the 4-option default.
+// Normalizes answer-distance by scale length (see diffScore). KEEP IN LOCKSTEP
+// with the quiz options (backend src/data/quizQuestions.js · app
+// constants/quiz.ts) — anything not listed is treated as 4 options.
+const OPTION_COUNTS = { 9: 3, 14: 2, 17: 3, 31: 2, 32: 2, 34: 3, 59: 5 };
+
+// Points earned for an answer pair, scaled by how far apart the two answers are
+// RELATIVE to the question's number of options. We map the raw index distance
+// onto the canonical 4-option (0..3) reference scale, so a FULL disagreement
+// costs the same no matter how many options a question has.
+//
+// Why: a flat "diff 1 = 60%" curve under-penalized small-scale questions — on a
+// 2-option (yes/no) item the MAX gap is 1, so a TOTAL disagreement scored 60%,
+// meaning a complete clash on a binary (contempt, stonewalling — high-weight
+// shadow/communication Qs) counted as MORE compatible than being 2 apart on a
+// 4-option item. Normalizing fixes that: a full binary clash now scores 0%.
+// 4-option questions are UNCHANGED (eq === diff → identical to the old curve).
+// MUST match app stores/quizStore.ts diffScore.
+function diffScore(pts, diff, numOptions) {
+  const maxDiff = Math.max(1, (numOptions || 4) - 1);
+  const eq = (diff * 3) / maxDiff;            // distance on the 0..3 reference scale
+  let frac;                                   // piecewise-linear: 0→1, 1→.6, 2→.2, 3→0
+  if (eq <= 0)      frac = 1;
+  else if (eq <= 1) frac = 1 - 0.4 * eq;
+  else if (eq <= 2) frac = 0.6 - 0.4 * (eq - 1);
+  else if (eq <= 3) frac = 0.2 - 0.2 * (eq - 2);
+  else              frac = 0;
+  return Math.round(pts * frac);
 }
 
 // ── Display calibration ──────────────────────────────────────────────────
@@ -218,7 +239,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
       catScores[cat].max += pts;
 
       const diff   = Math.abs(ai - bi);
-      const earned = diffScore(pts, diff);
+      const earned = diffScore(pts, diff, OPTION_COUNTS[qid]);
       rawScore += earned;
       catScores[cat].earned += earned;
 
@@ -361,6 +382,8 @@ module.exports = {
   calculateCompatibility,
   generateWhyMatched,
   calculateGroupCompatibility,
+  diffScore,        // exported for direct unit tests of the option-count normalization
+  OPTION_COUNTS,
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
   // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its

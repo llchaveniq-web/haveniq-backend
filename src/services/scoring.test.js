@@ -6,6 +6,7 @@ const {
   calculateCompatibility,
   generateWhyMatched,
   calculateGroupCompatibility,
+  diffScore,
 } = require('./scoring');
 
 test('identical answers score higher than opposite answers', () => {
@@ -116,6 +117,44 @@ test('soft block: overnight-partner (Q52) mismatch sets isSoftBlocked', () => {
 test('soft block: alcohol comfort (Q54) mismatch sets isSoftBlocked', () => {
   const r = calculateCompatibility({ 54: 0 }, { 54: 3 });
   assert.equal(r.isSoftBlocked, true);
+});
+
+// ── diffScore option-count normalization (2026-06-19) ────────────────────────
+// Fix: a FULL disagreement should cost the same regardless of how many options a
+// question has. 4-option questions must be UNCHANGED.
+
+test('diffScore: 4-option curve is unchanged (100/60/20/0)', () => {
+  assert.equal(diffScore(100, 0, 4), 100);
+  assert.equal(diffScore(100, 1, 4), 60);
+  assert.equal(diffScore(100, 2, 4), 20);
+  assert.equal(diffScore(100, 3, 4), 0);
+});
+
+test('diffScore: a full 2-option (binary) disagreement now scores 0, not 60', () => {
+  assert.equal(diffScore(100, 0, 2), 100); // agree
+  assert.equal(diffScore(100, 1, 2), 0);   // total clash → full mismatch (was 60)
+});
+
+test('diffScore: 3- and 5-option scales normalize onto the 0..3 curve', () => {
+  assert.equal(diffScore(100, 1, 3), 40);  // one apart of two steps
+  assert.equal(diffScore(100, 2, 3), 0);   // full clash
+  assert.equal(diffScore(100, 4, 5), 0);   // full clash
+  assert.equal(diffScore(100, 1, 5), 70);  // one of four steps
+});
+
+test('diffScore: missing option count defaults to 4-option behavior', () => {
+  assert.equal(diffScore(100, 1, undefined), 60);
+});
+
+test('binary full clash (Q14, 2-opt) is now scored worse than a 4-opt one-step gap (Q1)', () => {
+  // The inversion the fix targets: before, a total yes/no clash earned 60% —
+  // as much as a mild 4-option gap. Now the binary clash scores strictly lower.
+  const binaryClash = calculateCompatibility({ 14: 0 }, { 14: 1 }); // 2-opt, max gap
+  const quadOneStep = calculateCompatibility({ 1: 0 },  { 1: 1 });  // 4-opt, small gap
+  assert.ok(
+    binaryClash.finalPct < quadOneStep.finalPct,
+    `binary clash (${binaryClash.finalPct}) should score below a 4-opt one-step gap (${quadOneStep.finalPct})`,
+  );
 });
 
 // ── flatten robustness: numeric-string answers must not be silently dropped ──
