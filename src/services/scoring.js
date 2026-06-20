@@ -189,10 +189,14 @@ function calibrate(rawPct) {
  *   before scoring, so a mismatch on a flagged dimension hits the score
  *   harder than a mismatch on a non-flagged one. Empty / undefined disables
  *   the amplification (falls back to vanilla weights).
+ * @param opts.weights — OPTIONAL per-question point overrides for what-if
+ *   modeling / A-B tuning. Defaults to the live QUESTION_POINTS, so production
+ *   behavior is unchanged unless a caller explicitly passes alternative weights.
  */
 function calculateCompatibility(rawA, rawB, opts = {}) {
   const A = flatten(rawA);
   const B = flatten(rawB);
+  const POINTS = opts.weights || QUESTION_POINTS;
 
   // Build the amplified-question set from the union of both users' tags.
   // Stored as a Set<number> for O(1) lookup inside the inner loop.
@@ -214,7 +218,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   for (const [cat, { ids }] of Object.entries(CATEGORIES)) {
     catScores[cat] = { earned: 0, max: 0 };
     for (const qid of ids) {
-      const basePts = QUESTION_POINTS[qid] || 0;
+      const basePts = POINTS[qid] || 0;
       // Amplify questions flagged as dealbreakers by either user. Math.round
       // keeps the points an integer for consistent ratios downstream; the
       // multiplier is conservative (1.75×) — strong enough that a flagged
