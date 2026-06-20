@@ -388,6 +388,9 @@ module.exports = {
   calculateGroupCompatibility,
   diffScore,        // exported for direct unit tests of the option-count normalization
   OPTION_COUNTS,
+  QUESTION_POINTS,  // exported for the engine-analysis script (weight audit)
+  SHADOW_WORST_INDEX,
+  SHADOW_BEST_INDEX,
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
   // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its
