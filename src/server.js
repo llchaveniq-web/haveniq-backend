@@ -172,11 +172,50 @@ io.use(async (socket, next) => {
   }
 });
 
+// ── Real-time presence ──────────────────────────────────────────────────────
+// onlineCounts: userId → number of live sockets (ref-count so multiple tabs /
+// devices for one person are handled — they go "offline" only when the LAST
+// socket drops). presenceWatchers: watchedUserId → sockets that asked to be
+// told when that user goes on/offline (an open chat thread subscribes to the
+// other person). Both in-memory — presence is ephemeral; a restart re-derives
+// it as clients reconnect.
+const onlineCounts     = new Map(); // userId -> count
+const presenceWatchers = new Map(); // watchedUserId -> Set<socket>
+const isUserOnline = (uid) => (onlineCounts.get(uid) || 0) > 0;
+function notifyPresence(uid) {
+  const set = presenceWatchers.get(uid);
+  if (!set || set.size === 0) return;
+  const payload = { userId: uid, online: isUserOnline(uid) };
+  for (const s of set) s.emit('presence', payload);
+}
+
 io.on('connection', (socket) => {
   console.log(`⚡ Socket connected: ${socket.firstName || socket.userId}`);
 
   // Join personal room (for DMs)
   socket.join(`user:${socket.userId}`);
+
+  // Mark online (ref-counted). Only the 0→1 transition is a real "came online"
+  // event worth pushing to watchers.
+  {
+    const n = (onlineCounts.get(socket.userId) || 0) + 1;
+    onlineCounts.set(socket.userId, n);
+    if (n === 1) notifyPresence(socket.userId);
+  }
+
+  // A client (the open chat thread) subscribes to another user's live presence.
+  // We reply immediately with the current state, then push future changes.
+  socket.on('presence:watch', (watchedId) => {
+    if (!watchedId || typeof watchedId !== 'string') return;
+    let set = presenceWatchers.get(watchedId);
+    if (!set) { set = new Set(); presenceWatchers.set(watchedId, set); }
+    set.add(socket);
+    socket.emit('presence', { userId: watchedId, online: isUserOnline(watchedId) });
+  });
+  socket.on('presence:unwatch', (watchedId) => {
+    const set = presenceWatchers.get(watchedId);
+    if (set) { set.delete(socket); if (set.size === 0) presenceWatchers.delete(watchedId); }
+  });
 
   // Join a conversation room
   socket.on('join_conversation', (conversationId) => {
@@ -239,6 +278,16 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log(`Socket disconnected: ${socket.userId}`);
+    // Decrement online ref-count; on the 1→0 transition the user is truly
+    // offline → tell watchers. Guards against ghost-online when a tab/device
+    // drops without a clean close (socket.io's own heartbeat fires this).
+    const n = (onlineCounts.get(socket.userId) || 1) - 1;
+    if (n <= 0) { onlineCounts.delete(socket.userId); notifyPresence(socket.userId); }
+    else onlineCounts.set(socket.userId, n);
+    // Drop this socket from any watcher sets it joined (no leaks / stale refs).
+    for (const [uid, set] of presenceWatchers) {
+      if (set.delete(socket) && set.size === 0) presenceWatchers.delete(uid);
+    }
   });
 });
 
