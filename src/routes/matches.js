@@ -414,8 +414,14 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
         : [fromUserId, req.user.id];
 
       await pool.query(
+        // Revive on reconnect: if this pair previously unmatched, the
+        // conversation row still exists but is ended_*; clear it so a
+        // re-accepted connection can message again (DO NOTHING would leave it
+        // ended → "connected but can't message").
         `INSERT INTO conversations (user_a, user_b)
-         VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+         VALUES ($1, $2)
+         ON CONFLICT (user_a, user_b) DO UPDATE
+           SET ended_at = NULL, ended_by = NULL`,
         [userA, userB]
       );
 
@@ -592,9 +598,12 @@ router.delete('/:matchId/block', requireAuth, async (req, res) => {
 // after an unmatch), which stops messaging and drops the thread off both
 // users' lists. Reversible by design; not hostile like a block. Idempotent:
 // re-unmatching an already-ended conversation keeps the FIRST ender + time.
-// NOTE: this intentionally touches ONLY the conversation. Whether an unmatched
-// pair can re-connect / how the feed renders them is a client decision that
-// lands with the app-side "Unmatch" button — left untouched here on purpose.
+// "Disconnect + allow reconnect" (founder's chosen semantics): END the
+// conversation AND reset the connection so the pair shows as a normal,
+// connectable match again — either can send a fresh request later, which
+// revives the conversation (see the accept handler's ON CONFLICT … ended_at =
+// NULL). Reversible + non-punitive; distinct from Block. Compatibility score
+// is untouched.
 router.post('/:matchId/unmatch', requireAuth, async (req, res) => {
   try {
     const me    = req.user.id;
@@ -602,8 +611,8 @@ router.post('/:matchId/unmatch', requireAuth, async (req, res) => {
     if (!other)        return res.status(400).json({ error: 'matchId is required' });
     if (other === me)  return res.status(400).json({ error: "You can't unmatch yourself" });
 
-    // conversations stores the pair canonically (user_a < user_b). COALESCE so
-    // a second unmatch is a no-op that preserves who ended it first + when.
+    // 1) End the conversation (canonical pair order). COALESCE so a second
+    //    unmatch is a no-op that preserves who ended it first + when.
     const [a, b] = me < other ? [me, other] : [other, me];
     const { rows } = await pool.query(
       `UPDATE conversations
@@ -614,6 +623,14 @@ router.post('/:matchId/unmatch', requireAuth, async (req, res) => {
       [a, b, me],
     );
     if (!rows[0]) return res.status(404).json({ error: 'No conversation to unmatch' });
+
+    // 2) Reset the connection (both directions) so they reappear as a
+    //    connectable match and a fresh request won't hit the UNIQUE clash.
+    await pool.query(
+      `DELETE FROM connect_requests
+        WHERE (from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1)`,
+      [me, other],
+    );
 
     audit(req, 'match.unmatch', { other }).catch(() => {});
     res.json({ unmatched: true });
