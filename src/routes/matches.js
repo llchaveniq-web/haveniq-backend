@@ -137,6 +137,18 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     );
     const me = meRows[0] || {};
 
+    // Viewer's own gender + roommate gender preference — used to filter the feed
+    // so BOTH sides' stated preferences are respected (matching previously
+    // ignored gender entirely → a student who only wants same-gender roommates
+    // still saw, and scored high with, excluded genders). Empty preference or an
+    // undeclared / "Prefer not to say" gender stays inclusive.
+    const { rows: meUserRows } = await pool.query(
+      'SELECT gender, looking_for FROM users WHERE id = $1',
+      [userId],
+    );
+    const myGender     = meUserRows[0]?.gender ?? null;
+    const myLookingFor = Array.isArray(meUserRows[0]?.looking_for) ? meUserRows[0].looking_for : [];
+
     const { rows } = await pool.query(
       `SELECT
          cs.score,
@@ -195,10 +207,24 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
               OR (ub.blocker_id = u.id AND ub.blocked_id = $1)
          )
          ${demoFilter}
-         ${school ? 'AND u.school = $2' : ''}
+         -- Mutual gender-preference filter. Respect BOTH sides: the candidate's
+         -- gender must be in MY looking_for, AND my gender must be in THEIR
+         -- looking_for. Either side with no preference (empty looking_for) or an
+         -- undeclared / "Prefer not to say" gender passes (inclusive default).
+         AND (
+           $2::text[] IS NULL OR array_length($2::text[], 1) IS NULL
+           OR u.gender IS NULL OR u.gender = 'Prefer not to say'
+           OR u.gender = ANY($2::text[])
+         )
+         AND (
+           u.looking_for IS NULL OR array_length(u.looking_for, 1) IS NULL
+           OR $3::text IS NULL OR $3::text = 'Prefer not to say'
+           OR $3::text = ANY(u.looking_for)
+         )
+         ${school ? 'AND u.school = $4' : ''}
        ORDER BY cs.score DESC
        LIMIT 50`,
-      school ? [userId, school] : [userId]
+      school ? [userId, myLookingFor, myGender, school] : [userId, myLookingFor, myGender]
     );
 
     const matches = rows.map(r => ({
