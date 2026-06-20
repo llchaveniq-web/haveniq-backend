@@ -716,8 +716,11 @@ const OPENER_TTL_MS = 24 * 60 * 60 * 1000;
 
 router.get('/:userId/openers', requireAuth, async (req, res) => {
   const viewerId = req.user.id;
-  const targetId = parseInt(req.params.userId, 10);
-  if (!Number.isFinite(targetId) || targetId === viewerId) {
+  // User IDs are UUIDs, not integers — parseInt() turned every real id into
+  // NaN, so this endpoint 400'd for every match (and the cache key collapsed
+  // to `…:NaN`). Keep the raw string id.
+  const targetId = req.params.userId;
+  if (!targetId || typeof targetId !== 'string' || targetId === viewerId) {
     return res.status(400).json({ error: 'invalid target user id' });
   }
 
@@ -864,8 +867,10 @@ const EXPLAIN_TTL_MS = 24 * 60 * 60 * 1000;
 
 router.get('/:userId/explain', requireAuth, async (req, res) => {
   const viewerId = req.user.id;
-  const targetId = parseInt(req.params.userId, 10);
-  if (!Number.isFinite(targetId) || targetId === viewerId) {
+  // User IDs are UUIDs, not integers — parseInt() made this 400 for every
+  // match. Keep the raw string id (matches /matched/:userId above).
+  const targetId = req.params.userId;
+  if (!targetId || typeof targetId !== 'string' || targetId === viewerId) {
     return res.status(400).json({ error: 'invalid target user id' });
   }
 
