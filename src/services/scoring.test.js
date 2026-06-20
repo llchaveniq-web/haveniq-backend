@@ -146,6 +146,25 @@ test('diffScore: missing option count defaults to 4-option behavior', () => {
   assert.equal(diffScore(100, 1, undefined), 60);
 });
 
+test('ranking quality: score decreases monotonically as disagreement grows', () => {
+  // The one property that matters most for a matching feed: correct ORDERING.
+  // Anchor with two fully-opposite 4-opt questions (Q1/Q3) to keep scores off
+  // the 99 calibration clamp, then add disagreement on Q25/Q35/Q45 step by step
+  // and confirm the score strictly drops each time. None of these are block Qs.
+  const score = (extra) => calculateCompatibility(
+    { 1: 0, 3: 0, 25: 0, 35: 0, 45: 0 },
+    { 1: 3, 3: 3, ...extra },
+  ).finalPct;
+  const none = score({ 25: 0, 35: 0, 45: 0 }); // agree on the rest
+  const some = score({ 25: 1, 35: 0, 45: 0 }); // one off
+  const more = score({ 25: 1, 35: 1, 45: 0 }); // two off
+  const most = score({ 25: 1, 35: 1, 45: 1 }); // three off
+  assert.ok(
+    none > some && some > more && more > most,
+    `expected strict monotonic decrease, got ${none} > ${some} > ${more} > ${most}`,
+  );
+});
+
 test('binary full clash (Q14, 2-opt) is now scored worse than a 4-opt one-step gap (Q1)', () => {
   // The inversion the fix targets: before, a total yes/no clash earned 60% —
   // as much as a mild 4-option gap. Now the binary clash scores strictly lower.

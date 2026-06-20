@@ -333,8 +333,12 @@ function generateWhyMatched(breakdown, score) {
   const top = sorted.map(([cat]) => catLabels[cat] || cat);
   const a = top[0] || 'compatibility';
   const b = top[1] || a;
-  if (score >= 90) {
-    return `Exceptional alignment — your ${a} and ${b} are remarkably similar. This is one of the strongest matches in our system.`;
+  if (score >= 95) {
+    // Reserve the system-wide superlative for the genuinely rare top — the
+    // calibration crowds 90+, so "strongest in our system" must mean 95+.
+    return `Exceptional alignment — your ${a} and ${b} are remarkably similar. About as compatible as our matching gets.`;
+  } else if (score >= 90) {
+    return `Exceptional alignment — your ${a} and ${b} line up unusually well.`;
   } else if (score >= 80) {
     return `Strong compatibility in ${a} and ${b}. A few differences to discuss but nothing dealbreaking.`;
   } else {
