@@ -981,7 +981,9 @@ async function ensureAboutYouTable() {
 // v2 (2026-06-01): replaced bare Q-id prompt with full question text +
 // chosen option text. Forbids Q-numbers in output. Stops Jackson's
 // "explosive anger response in Q40" hallucination.
-const ABOUT_YOU_PROMPT_VERSION = 'v2';
+// v3 (2026-06-19): shorter reveal — sections cut from 70-120 to 40-60 words
+// for a quicker, punchier post-quiz read. Same 5 sections + pull quotes.
+const ABOUT_YOU_PROMPT_VERSION = 'v3';
 
 function hashAnswers(rows) {
   // Deterministic FNV-1a-style hash of the user's quiz answer set +
@@ -1113,7 +1115,7 @@ THEIR COMPUTED PROFILE:
 - Growth areas: ${JSON.stringify(profile.growth_areas ?? [])}
 
 WRITE 5 EDITORIAL SECTIONS. Each:
-- 70-120 words
+- 40-60 words — tight and punchy, NO filler. This is a quick, satisfying read, not an essay. Every sentence earns its place.
 - Second-person voice ("you", not "the user")
 - Reference at least ONE specific behavior from their answers — but PARAPHRASE the question theme. Example: GOOD = "you said you go quiet when frustrated" / BAD = "your Q9 answer means..."
 - NEVER mention question numbers, Q-ids, or "Q40 / question 14" — the user has no idea what those refer to. They only know they answered 32 questions.
