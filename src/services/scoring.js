@@ -24,7 +24,12 @@ const QUESTION_POINTS = {
   31: 40, 32: 40, 34: 40, 58: 35, // shadow
   37: 14, 40: 12, 59: 14,       // nervous system
   57: 30,                       // control / executive function
-  48: 5,  49: 5,  50: 4, 51: 5, 54: 5, 56: 20, // lifestyle
+  // Lifestyle — RE-WEIGHTED v2 (2026-06-19): daily-living friction (cleanliness,
+  // sleep, guests, money) is what actually drives roommate conflict but sat at
+  // ~7% of the score; raised toward ~18% (cleanliness highest). Smoking stays
+  // modest — its hard block already carries the extreme. First pass; retune with
+  // pilot data. KEEP IN LOCKSTEP with app quizStore.ts.
+  48: 20, 49: 25, 50: 30, 51: 10, 54: 15, 56: 25,
   // Big Five Personality (v5 — added May 2026). Weights tuned to the
   // cohabitation-research hierarchy: Conscientiousness > Agreeableness
   // > Emotional Stability > Extraversion. ~21% of total max. Retune
@@ -41,9 +46,9 @@ const QUESTION_POINTS = {
   62: 28,  // Boundary-setting / assertiveness (resentment precursor)
   63: 28,  // Repair initiation (Gottman)
   // ── v7 additions 2026-06-09 — keep in lockstep with app quizStore.ts ──
-  52: 5,   // Overnight partners (lifestyle, soft-block on big mismatch)
+  52: 15,  // Overnight partners (lifestyle, soft-block) — re-weighted v2
   53: 14,  // Study / focus environment (nervous)
-  55: 5,   // Food & kitchen sharing (lifestyle)
+  55: 15,  // Food & kitchen sharing (lifestyle) — re-weighted v2
 };
 
 // Category → question ids. The new `personality` bucket holds the
