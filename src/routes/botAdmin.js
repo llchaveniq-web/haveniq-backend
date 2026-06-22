@@ -414,6 +414,8 @@ router.get('/recent-scores', requireBotToken, async (req, res) => {
       LEFT JOIN users a ON a.id = cs.user_a
       LEFT JOIN users b ON b.id = cs.user_b
       WHERE cs.calculated_at > NOW() - INTERVAL '7 days'
+      AND a.email NOT LIKE '%@haveniq-demo.edu' AND a.email NOT LIKE '%@demo.haveniq.app'
+      AND b.email NOT LIKE '%@haveniq-demo.edu' AND b.email NOT LIKE '%@demo.haveniq.app'
       ORDER BY cs.calculated_at DESC
       LIMIT 200
     `);
