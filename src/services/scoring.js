@@ -297,8 +297,19 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   // bites a meaningful, spread-out number rather than a compressed one. No
   // shared answers (maxScore === 0) → 0: can't score strangers, and the
   // calibration floor must NOT turn that into a phantom 5%.
+   // Confidence cap — a sparse or straight-lined answer vector can't earn a
+  // top score. Without this, profiles with few/uniform answers hit ~99 against
+  // everyone (the degenerate cross-school cluster). Pair uses the lower of two.
+  const _confIdx = (X) => {
+    const v = [];
+    for (const { ids } of Object.values(CATEGORIES))
+      for (const qid of ids) { const i = optIdx(X, qid); if (i !== null) v.push(i); }
+    return v;
+  };
+  const _cv = (v) => (v.length < 12 ? 0.6 : (new Set(v).size <= 2 ? 0.7 : 1.0));
+  const conf = Math.min(_cv(_confIdx(A)), _cv(_confIdx(B)));
   let finalPct = maxScore > 0
-    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * (1 - totalReduction))))
+    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * (1 - totalReduction) * conf)))
     : 0;
 
   // Hard block trumps everything.
@@ -314,6 +325,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
 
   return {
     finalPct,
+    confidence: conf,
     isHardBlocked: hardBlocked,
     isSoftBlocked,
     shadowPenalty: Math.round(shadowPenalty * 100),
