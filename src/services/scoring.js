@@ -179,7 +179,7 @@ function diffScore(pts, diff, numOptions) {
 // higher, so ranking + honesty are preserved; nothing is fabricated. GAIN/MID
 // are a first-pass calibration — retune against real paired-outcome data
 // (the N≈50 60-day check-ins the weights comment already anticipates).
-const CAL_GAIN = 2.2;
+const CAL_GAIN = 1.3;
 const CAL_MID  = 50;
 function calibrate(rawPct) {
   const stretched = CAL_MID + (rawPct - CAL_MID) * CAL_GAIN;
