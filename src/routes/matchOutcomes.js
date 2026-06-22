@@ -172,20 +172,14 @@ router.get('/bot-admin/pending-checkins', requireBotToken, async (req, res) => {
 router.get('/bot-admin/match-outcomes-summary', requireBotToken, async (req, res) => {
   await ensureTable();
   try {
-    // Soft-fail each query: if the table doesn't exist (fresh deployment,
-    // ensureTable race, etc.) or the WITH clause hits a Postgres syntax
-    // quirk, return an empty result instead of 500ing the whole cron.
     const safeQuery = (sql) => pool.query(sql).catch((e) => {
       console.warn('[match-outcomes-summary] soft-fail:', e.message);
       return { rows: [] };
     });
-    const [byType, pairs] = await Promise.all([
+    const [byType, pairs, bands] = await Promise.all([
       safeQuery(
         `SELECT outcome, COUNT(*)::int AS n FROM match_outcomes GROUP BY outcome ORDER BY n DESC`
       ),
-      // The DISTINCT-on-tuple syntax tripped Postgres on some versions.
-      // Rewrote as a subquery that ROW()'s the pair into a single distinct
-      // value, which works across PG 12+.
       safeQuery(
         `SELECT COUNT(*)::int AS n FROM (
            SELECT DISTINCT LEAST(reporter_id, other_user_id) AS a,
@@ -193,14 +187,46 @@ router.get('/bot-admin/match-outcomes-summary', requireBotToken, async (req, res
            FROM match_outcomes WHERE outcome = 'survey_60d'
          ) sub`
       ),
+      // Calibration: bucket DECIDED outcomes by the score we PREDICTED for the
+      // pair (details.predictedScore, sent by the client), and count how many
+      // turned out positive. A predictive engine shows success rising with the
+      // band. 'still_chatting' (meet pending) is excluded from the denominator.
+      safeQuery(
+        `SELECT
+           CASE
+             WHEN (details->>'predictedScore')::numeric >= 90 THEN '90+'
+             WHEN (details->>'predictedScore')::numeric >= 80 THEN '80-89'
+             WHEN (details->>'predictedScore')::numeric >= 70 THEN '70-79'
+             WHEN (details->>'predictedScore')::numeric >= 60 THEN '60-69'
+             ELSE '<60'
+           END AS band,
+           COUNT(*)::int AS n,
+           COUNT(*) FILTER (
+             WHERE outcome = 'met_in_person' OR details->>'answer' = 'yes'
+           )::int AS success
+         FROM match_outcomes
+         WHERE (details->>'predictedScore') ~ '^[0-9.]+$'
+           AND outcome <> 'still_chatting'
+         GROUP BY band`
+      ),
     ]);
     const pairs60d = pairs.rows[0]?.n || 0;
+    const BAND_ORDER = ['90+', '80-89', '70-79', '60-69', '<60'];
+    const by_band = (bands.rows || [])
+      .map((r) => ({
+        band: r.band,
+        n: r.n,
+        success: r.success,
+        success_rate_pct: r.n ? Math.round((r.success / r.n) * 100) : 0,
+      }))
+      .sort((a, b) => BAND_ORDER.indexOf(a.band) - BAND_ORDER.indexOf(b.band));
     res.json({
       total_events: byType.rows.reduce((s, r) => s + r.n, 0),
       by_outcome: byType.rows,
       pairs_with_60d_survey: pairs60d,
       retune_ready: pairs60d >= 50,
       retune_progress_pct: Math.min(100, Math.round((pairs60d / 50) * 100)),
+      by_band,
     });
   } catch (err) {
     console.error('[match-outcomes] summary failed:', err);
