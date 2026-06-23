@@ -90,6 +90,14 @@ function pickIndex(userId, qid, nopts) {
 }
 
 async function seedDemoMatchable() {
+  // Fully gated behind DEMO_FEED. With it unset (the default / launch state),
+  // NO demo users, scores, or conversations are ever created — the app boots
+  // on a 100% real dataset, and a one-time prod cleanup of the demo cohort
+  // stays clean instead of being re-seeded on the next boot. Set
+  // DEMO_FEED=true (investor pitches) to re-create the cohort on next boot.
+  if (process.env.DEMO_FEED !== 'true') {
+    return { demoUsers: 0, seededAnswers: 0, scoredPairs: 0, skipped: true };
+  }
   await ensureDemoUsers();
 
   const optionQs = QUESTIONS.filter(q => Array.isArray(q.options) && q.options.length > 1);
@@ -174,13 +182,9 @@ async function seedDemoMatchable() {
     // see the full chat experience (name, presence, messages) without waiting
     // for a real match to reply. Idempotent: conversation is UNIQUE(user_a,
     // user_b), and messages only seed when the conversation is newly created.
-    //
-    // GATED behind DEMO_FEED: this writes a scripted bot thread straight into
-    // the messages table, so off-pitch it would show up as a "bot in the inbox"
-    // (the conversation list also filters demos, but we don't even generate the
-    // fake thread unless demos are explicitly on). Set DEMO_FEED=true for a
-    // pitch and it seeds on the next boot.
-    for (const f of (process.env.DEMO_FEED === 'true' ? founders : [])) {
+    // Reached only when DEMO_FEED=true (the whole function early-returns
+    // otherwise), so this scripted thread never exists outside pitch mode.
+    for (const f of founders) {
       const partner = (await pool.query(
         `SELECT u.id FROM compatibility_scores cs
            JOIN users u ON u.id = (CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END)
