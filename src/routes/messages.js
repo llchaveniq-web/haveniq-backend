@@ -5,7 +5,8 @@ const suspicious = require('../middleware/suspiciousActivity');
 const analytics = require('../services/analytics');
 const { screenMessage, CRISIS_SUPPORT } = require('../lib/contentFilter');
 const { sendNewMessageEmail } = require('../services/email');
-const { isDemoEmail } = require('../lib/demoFilter');
+const { isDemoEmail, notDemo } = require('../lib/demoFilter');
+const { isFounderUser } = require('../utils/founders');
 
 // Email the recipient on a NEW message — but only the FIRST unread one in a
 // conversation (they were caught up), so a burst of messages emails once, not
@@ -83,6 +84,12 @@ async function logMessageFlag(f) {
 // All conversations for the current user with last message
 router.get('/conversations', requireAuth, async (req, res) => {
   try {
+    // Demo/bot threads (the seeded founder↔demo conversation) stay out of the
+    // inbox unless DEMO_FEED=true is set for an investor pitch — same gate as
+    // the match feed. Real students never have demo threads, but this keeps the
+    // founder's own inbox clean by default.
+    const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
+    const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
     const { rows } = await pool.query(
       `SELECT
          c.id AS conversation_id,
@@ -124,6 +131,7 @@ router.get('/conversations', requireAuth, async (req, res) => {
            WHERE (ub.blocker_id = $1 AND ub.blocked_id = u.id)
               OR (ub.blocker_id = u.id AND ub.blocked_id = $1)
          )
+         ${demoFilter}
        ORDER BY COALESCE(m.created_at, c.created_at) DESC`,
       [req.user.id]
     );
