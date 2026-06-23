@@ -128,7 +128,7 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
     // AUTHED: prefer the caller's REAL already-scored matches — literally "who
     // you've matched with so far," independent of in-progress answers.
     if (authed) {
-      const includeDemos = isFounderUser(req.user);
+      const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
       const demoFilter = includeDemos ? '' : `AND ${notDemo('u.email')}`;
       const { rows: stored } = await pool.query(
         `SELECT u.id AS user_id, u.first_name, u.last_name, u.photo_url, u.school, cs.score
@@ -170,7 +170,7 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
 
     let candidates;
     if (authed) {
-      const includeDemos = isFounderUser(req.user);
+      const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
       const demoFilter = includeDemos ? '' : `AND ${notDemo('u.email')}`;
       ({ rows: candidates } = await pool.query(
         `SELECT qa.user_id, qa.answers, u.first_name, u.last_name, u.photo_url, u.school

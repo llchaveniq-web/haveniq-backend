@@ -19,6 +19,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { notDemo } = require('../lib/demoFilter');
 
 const CACHE_MS = 10 * 60 * 1000;
 const cache = new Map(); // userId → { until, messages }
@@ -49,7 +50,7 @@ router.get('/activity-pulse', requireAuth, async (req, res) => {
             AND created_at > NOW() - INTERVAL '7 days'
             AND COALESCE(is_paused, FALSE) = FALSE
             AND COALESCE(is_banned, FALSE) = FALSE
-            AND email NOT LIKE '%@haveniq-demo.edu'`,
+            AND ${notDemo('email')}`,
         [school, userId],
       );
       const n = count[0]?.n ?? 0;

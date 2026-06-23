@@ -5,6 +5,7 @@ const suspicious = require('../middleware/suspiciousActivity');
 const analytics = require('../services/analytics');
 const { screenMessage, CRISIS_SUPPORT } = require('../lib/contentFilter');
 const { sendNewMessageEmail } = require('../services/email');
+const { isDemoEmail } = require('../lib/demoFilter');
 
 // Email the recipient on a NEW message — but only the FIRST unread one in a
 // conversation (they were caught up), so a burst of messages emails once, not
@@ -27,7 +28,7 @@ async function maybeEmailNewMessage(conversationId, recipientId, senderFirstName
     );
     const r = rows[0];
     if (!r || !r.email) return;
-    if (/@haveniq-demo\.edu$/i.test(r.email)) return;
+    if (isDemoEmail(r.email)) return;
     await sendNewMessageEmail(r.email, r.first_name || 'there', senderFirstName || 'Your match', recipientId);
   } catch (err) {
     console.error('[message email] send failed:', err);

@@ -19,4 +19,19 @@ function notDemo(col = 'email') {
   return `${col} NOT LIKE '%@haveniq-demo.edu' AND ${col} NOT LIKE '%@demo.haveniq.app'`;
 }
 
-module.exports = { notDemo };
+// Positive form of the same rule — "this column IS a demo/test account".
+// Use inside EXISTS / NOT EXISTS sub-selects where you're matching demo rows
+// rather than excluding them. Keep this in lock-step with notDemo().
+function isDemo(col = 'email') {
+  return `(${col} LIKE '%@haveniq-demo.edu' OR ${col} LIKE '%@demo.haveniq.app')`;
+}
+
+// JS-side equivalent for code paths that test an email in JavaScript rather
+// than SQL (e.g. skipping app emails to demo recipients). Same two-domain
+// rule — added because scattered single-domain regexes were re-introducing
+// the exact leak notDemo() was built to kill.
+function isDemoEmail(email) {
+  return /@(haveniq-demo\.edu|demo\.haveniq\.app)$/i.test(String(email || ''));
+}
+
+module.exports = { notDemo, isDemo, isDemoEmail };

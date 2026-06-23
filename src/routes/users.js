@@ -523,9 +523,10 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'HavenIQ+ required to see profile viewers' });
     }
 
-    // Founder bypass: investor demos see populated "who viewed your
-    // profile" lists. Real students see only real viewers.
-    const includeDemos = isFounder(req.user.id);
+    // DEMO_FEED gate: only investor demos (DEMO_FEED=true) see populated
+    // "who viewed your profile" lists. By default — founder included —
+    // only real viewers show.
+    const includeDemos = isFounder(req.user.id) && process.env.DEMO_FEED === 'true';
     const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     const { rows } = await pool.query(

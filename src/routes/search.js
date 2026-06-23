@@ -20,7 +20,9 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const { rows: userRows } = await pool.query('SELECT school FROM users WHERE id = $1', [req.user.id]);
     const callerSchool = userRows[0]?.school ?? null;
-    const includeDemos = isFounder(req.user.id);
+    // Demos surface in search only when DEMO_FEED=true (investor pitches).
+    // By default the founder searches the real student pool like anyone else.
+    const includeDemos = isFounder(req.user.id) && process.env.DEMO_FEED === 'true';
     const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     // ILIKE wins on prefix matches ("Jac" → "Jackson") and pg_trgm

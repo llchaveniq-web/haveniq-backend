@@ -6,7 +6,7 @@ const suspicious = require('../middleware/suspiciousActivity');
 const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectRequestEmail } = require('../services/email');
 const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
-const { notDemo } = require('../lib/demoFilter');
+const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
@@ -71,7 +71,7 @@ async function maybeEmailMatch(studentId, matchUserId) {
     );
     const row = rows[0];
     if (!row || !row.to_email) return;
-    if (/@haveniq-demo\.edu$/i.test(row.to_email)) return; // seeded fakes, no inbox
+    if (isDemoEmail(row.to_email)) return; // demo/test accounts — never app-email
     await sendMatchEmail(
       row.to_email,
       row.to_name || 'there',
@@ -98,7 +98,7 @@ async function maybeEmailConnectRequest(toUserId, fromUserId, score) {
     );
     const row = rows[0];
     if (!row || !row.to_email) return;
-    if (/@haveniq-demo\.edu$/i.test(row.to_email)) return;
+    if (isDemoEmail(row.to_email)) return;
     await sendConnectRequestEmail(
       row.to_email,
       row.to_name || 'there',
@@ -121,12 +121,12 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     const userId = req.user.id;
     const { school } = req.query;  // optional school filter
 
-    // Demo-user filter is applied to REAL students only. Founders bypass
-    // it so investor demos (the conference, advisor meetings, etc.) show
-    // a populated match feed instead of "you + your brother." Real
-    // student trust is preserved because the filter still hides demos
-    // for everyone else.
-    const includeDemos = isFounderUser(req.user);
+    // Demos only appear when DEMO_FEED=true is explicitly set (investor
+    // pitches: the conference, advisor meetings, etc.). Otherwise everyone
+    // — including the founder — sees a real, bot-free match feed. Real
+    // student trust is preserved because the filter still hides demos for
+    // everyone else by default.
+    const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
     const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     // Current user's MBTI/DISC — feeds the secondary personality-pairing
@@ -473,10 +473,10 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
 // Incoming pending requests
 router.get('/requests', requireAuth, async (req, res) => {
   try {
-    // Same founder-bypass pattern as /feed. Demo connect requests are
-    // hidden from real students but shown to founders so the "incoming
-    // requests" tab is also populated for investor demos.
-    const includeDemos = isFounderUser(req.user);
+    // Same DEMO_FEED gate as /feed. Demo connect requests stay hidden for
+    // everyone — founder included — unless DEMO_FEED=true is set for an
+    // investor demo, where the "incoming requests" tab is populated too.
+    const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
     const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
     const { rows } = await pool.query(

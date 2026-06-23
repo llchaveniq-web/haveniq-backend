@@ -3,6 +3,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { calculateGroupCompatibility } = require('../services/scoring');
 const { isFounder } = require('../utils/founders');
+const { isDemo } = require('../lib/demoFilter');
 
 // Normalize the wire shape of quiz answers into the flat
 // { questionId: number } map the scoring engine expects.
@@ -164,11 +165,13 @@ router.get('/feed', requireAuth, async (req, res) => {
     }
 
     // Candidates: forming groups at same school (any member), excluding self.
-    const includeDemos = isFounder(req.user.id);
+    // Demo groups surface only when DEMO_FEED=true (investor pitches); by
+    // default the founder sees real forming groups like everyone else.
+    const includeDemos = isFounder(req.user.id) && process.env.DEMO_FEED === 'true';
     const demoFilter   = includeDemos ? '' : `AND NOT EXISTS (
       SELECT 1 FROM match_group_members mm2
       JOIN users u2 ON u2.id = mm2.user_id
-      WHERE mm2.group_id = g.id AND u2.email LIKE '%@haveniq-demo.edu'
+      WHERE mm2.group_id = g.id AND ${isDemo('u2.email')}
     )`;
 
     const { rows: candidates } = await pool.query(
