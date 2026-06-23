@@ -930,25 +930,20 @@ router.post('/writing', requireAuth, async (req, res) => {
   }
 });
 
-// ── TEMP: key-gated test-account quiz reset (REMOVE after match test) ──────
-// Railway's Data tab is read-only, so the founder can't reset quiz state from
-// there to bypass the 180-day reassessment cooldown for end-to-end testing.
-// This clears quiz_completed + answers for the named test accounts so they can
-// retake cleanly. No auth, gated by a throwaway key. DELETE THIS ROUTE after.
-router.get('/__resettest', async (req, res) => {
-  if (req.query.key !== 'reset-7k29xqp') return res.status(403).json({ error: 'forbidden' });
+// ── TEMP: key-gated one-shot demo-data purge (REMOVE after running once) ───
+// Railway's Data tab is read-only, so cleanup_demo_data.sql can't run there.
+// Deletes BOTH demo domains; every FK to users(id) is ON DELETE CASCADE/SET
+// NULL (verified), so children (scores, conversations, messages, requests,
+// quiz answers, profiles, views) cascade and audit/safety rows null out.
+// Real accounts (@student.cccd.edu etc.) are untouched. DELETE THIS ROUTE after.
+router.get('/__purgedemo', async (req, res) => {
+  if (req.query.key !== 'purge-7k29xqp') return res.status(403).json({ error: 'forbidden' });
+  const DEMO = `email LIKE '%@haveniq-demo.edu' OR email LIKE '%@demo.haveniq.app'`;
   try {
-    const emails = ['jberney@student.cccd.edu', 'bberney@student.cccd.edu'];
-    const r1 = await pool.query(
-      `UPDATE quiz_answers SET completed = FALSE, answers = '{}'::jsonb
-        WHERE user_id IN (SELECT id FROM users WHERE email = ANY($1))`,
-      [emails],
-    );
-    const r2 = await pool.query(
-      `UPDATE users SET quiz_completed = FALSE WHERE email = ANY($1)`,
-      [emails],
-    );
-    res.json({ ok: true, emails, quiz_answers_cleared: r1.rowCount, users_reset: r2.rowCount });
+    const before = (await pool.query(`SELECT count(*)::int AS n FROM users WHERE ${DEMO}`)).rows[0].n;
+    const del = await pool.query(`DELETE FROM users WHERE ${DEMO}`);
+    const after = (await pool.query(`SELECT count(*)::int AS n FROM users WHERE ${DEMO}`)).rows[0].n;
+    res.json({ ok: true, demo_users_before: before, deleted: del.rowCount, demo_users_after: after });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
