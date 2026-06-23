@@ -392,10 +392,15 @@ const sharedReviews = require('./routes/sharedReviews');
 app.use('/landlord-reviews', sharedReviews.landlordRouter);
 app.use('/building-reviews', sharedReviews.buildingRouter);
 
-// Health check
+// Health check. `commit` echoes the deployed git SHA (Railway injects
+// RAILWAY_GIT_COMMIT_SHA at build time) so a single curl confirms which
+// build is actually live — the hardcoded `version` couldn't. Falls back
+// to 'local' off-Railway.
+const DEPLOY_COMMIT = (process.env.RAILWAY_GIT_COMMIT_SHA || 'local').slice(0, 7);
 app.get('/health', (req, res) => res.json({
   status: 'ok',
   version: '1.0.0',
+  commit: DEPLOY_COMMIT,
   timestamp: new Date().toISOString(),
 }));
 
