@@ -92,6 +92,9 @@ CREATE TABLE IF NOT EXISTS messages (
 -- step. Idempotent ADD COLUMN IF NOT EXISTS makes this safe on every
 -- shape of database.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+-- read_at: when a message was read, for live read-receipts (socket
+-- 'mark_read' → 'messages_read'). Nullable; set only when the recipient reads.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at DESC);
 
 -- ── Roommate reviews ──────────────────────────────────────────

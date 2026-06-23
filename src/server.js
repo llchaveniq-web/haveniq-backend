@@ -277,6 +277,27 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Read receipts: when a client reads a thread, mark the OTHER side's unread
+  // messages read and broadcast so the sender's ticks update live. read_at is
+  // added by migrate_missing.sql. Best-effort — a DB error must never crash
+  // the socket connection (mirrors the send_message try/catch above).
+  socket.on('mark_read', async ({ conversationId } = {}) => {
+    if (!conversationId) return;
+    try {
+      const readAt = new Date().toISOString();
+      await pool.query(
+        `UPDATE messages SET read = true, read_at = $1
+         WHERE conversation_id = $2 AND sender_id <> $3 AND read = false`,
+        [readAt, conversationId, socket.userId],
+      );
+      io.to(`conv:${conversationId}`).emit('messages_read', {
+        conversationId, readerId: socket.userId, readAt,
+      });
+    } catch (err) {
+      console.error('[socket mark_read] failed:', err.message);
+    }
+  });
+
   socket.on('disconnect', () => {
     console.log(`Socket disconnected: ${socket.userId}`);
     // Decrement online ref-count; on the 1→0 transition the user is truly
@@ -397,10 +418,12 @@ app.use('/building-reviews', sharedReviews.buildingRouter);
 // build is actually live — the hardcoded `version` couldn't. Falls back
 // to 'local' off-Railway.
 const DEPLOY_COMMIT = (process.env.RAILWAY_GIT_COMMIT_SHA || 'local').slice(0, 7);
-app.get('/health', (req, res) => res.json({
+app.get('/health', (req, res) => res.status(200).json({
+  ok: true,                          // simple liveness flag (UptimeRobot/Railway)
   status: 'ok',
   version: '1.0.0',
-  commit: DEPLOY_COMMIT,
+  commit: DEPLOY_COMMIT,             // deployed git SHA — confirms which build is live
+  uptime: process.uptime(),          // seconds since this instance booted
   timestamp: new Date().toISOString(),
 }));
 
