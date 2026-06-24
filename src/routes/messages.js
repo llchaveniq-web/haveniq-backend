@@ -195,9 +195,13 @@ router.get('/:conversationId', requireAuth, suspicious.track('messages.thread', 
       [req.params.conversationId]
     );
 
-    // Mark messages as read
+    // Mark messages as read. Stamp read_at too — this REST path (thread open)
+    // usually wins the race against the socket 'mark_read', so without it
+    // read_at never populated and read-receipts showed no timestamp. WHERE
+    // read = FALSE means matched rows are unread, so NOW() never overwrites
+    // an earlier read_at.
     pool.query(
-      `UPDATE messages SET read = TRUE
+      `UPDATE messages SET read = TRUE, read_at = NOW()
        WHERE conversation_id = $1 AND sender_id != $2 AND read = FALSE`,
       [req.params.conversationId, req.user.id]
     ).catch(() => {});
