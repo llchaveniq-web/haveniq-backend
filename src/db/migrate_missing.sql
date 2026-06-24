@@ -376,3 +376,31 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
 UPDATE users
    SET last_active_at = NOW() - (random() * INTERVAL '6 days')
  WHERE email LIKE '%@haveniq-demo.edu' AND last_active_at IS NULL;
+
+-- ── Pairing outcomes (v8 scaffolding, 2026-06-24) ───────────────────────────
+-- One row per canonical pair, recording the funnel from connect → message →
+-- mutual match → met → moved-in, plus the failure signals (room change, block,
+-- ghost). Captured best-effort via services/pairingOutcomes.js. PURPOSE: feed a
+-- later per-school weight-learning step — back-solve which quiz dimensions
+-- actually predict a successful cohabitation and retune QUESTION_POINTS from
+-- real outcomes instead of priors. `school` + `score_at_match` are snapshotted
+-- at connect time so learning can segment by campus and calibrate against the
+-- score we showed. Additive + nullable; never blocks the user path.
+CREATE TABLE IF NOT EXISTS pairing_outcomes (
+  user_a           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_b           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  school           TEXT,
+  score_at_match   INTEGER,
+  connected_at     TIMESTAMPTZ,
+  first_message_at TIMESTAMPTZ,
+  matched_at       TIMESTAMPTZ,
+  met_at           TIMESTAMPTZ,
+  moved_in_at      TIMESTAMPTZ,
+  room_change_at   TIMESTAMPTZ,
+  blocked_at       TIMESTAMPTZ,
+  ghosted_at       TIMESTAMPTZ,
+  updated_at       TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_a, user_b),
+  CHECK (user_a < user_b)
+);
+CREATE INDEX IF NOT EXISTS idx_pairing_outcomes_school ON pairing_outcomes (school);

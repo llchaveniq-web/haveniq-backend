@@ -1,5 +1,13 @@
 // Tests for the compatibility scoring engine — the heart of HavenIQ matching.
 // Pure functions, no DB. Run with `npm test` (node --test).
+//
+// v8 (2026-06-24): lifestyle-first reweight. Scored set is now the 14 ids:
+//   lifestyle  50,49,48,53,55,54,52,51
+//   conflict   14,57,60,62,63
+//   money      56
+// Abstract-personality / equity-risk ids (1,3,9,17,22,25,29,31,32,34,35,37,
+// 40,45,58,59,61,15) are REMOVED — a pair differing only on those scores as if
+// they agree. Hard zeroes replaced by dealbreaker CAPS (ceilings).
 const test = require('node:test');
 const assert = require('node:assert');
 const {
@@ -9,119 +17,114 @@ const {
   diffScore,
 } = require('./scoring');
 
+// A 12-id identical baseline that clears the confidence floor (>=10 answered →
+// conf 1.0) and triggers no caps (51 both Never, 54/52 both aligned). Spread of
+// values keeps the Set size > 2 so confidence isn't throttled.
+const AGREE = { 50: 1, 49: 2, 48: 1, 53: 2, 55: 1, 54: 0, 52: 1, 51: 0, 14: 0, 57: 1, 60: 1, 62: 2, 63: 1, 56: 2 };
+
 test('identical answers score higher than opposite answers', () => {
-  const a = { 1: 0, 14: 0, 50: 1, 49: 1 };
-  const same = calculateCompatibility(a, { ...a });
-  const opp = calculateCompatibility(a, { 1: 3, 14: 1, 50: 3, 49: 0 });
-  assert.ok(
-    same.finalPct > opp.finalPct,
-    `same(${same.finalPct}) should beat opposite(${opp.finalPct})`,
-  );
+  const same = calculateCompatibility(AGREE, { ...AGREE });
+  const opp  = calculateCompatibility(AGREE, { 50: 3, 49: 3, 48: 3, 53: 3, 55: 3, 54: 0, 52: 1, 51: 0, 14: 1, 57: 3, 60: 3, 62: 3, 63: 3, 56: 3 });
+  assert.ok(same.finalPct > opp.finalPct, `same(${same.finalPct}) should beat opposite(${opp.finalPct})`);
 });
 
-test('Q61 / Q62 / Q63 are wired into scoring (they move the result)', () => {
-  const same = calculateCompatibility({ 61: 0, 62: 0, 63: 0 }, { 61: 0, 62: 0, 63: 0 });
-  const diff = calculateCompatibility({ 61: 0, 62: 0, 63: 0 }, { 61: 3, 62: 3, 63: 3 });
-  assert.ok(same.finalPct > diff.finalPct, 'newly-wired questions must affect the score');
+test('identical answers across the scored set read as near-perfect', () => {
+  const r = calculateCompatibility(AGREE, { ...AGREE });
+  assert.ok(r.finalPct >= 95, `identical should be ~100, got ${r.finalPct}`);
 });
 
-test('hard block: substances Never vs Regularly → 0%', () => {
-  const r = calculateCompatibility({ 51: 0 }, { 51: 3 });
-  assert.equal(r.isHardBlocked, true);
+test('REMOVED questions no longer affect scoring (differ on them, still ~100)', () => {
+  // Identical on every SCORED question, opposite on removed ones (1,25,58,35,45).
+  const a = { ...AGREE, 1: 0, 25: 0, 58: 0, 35: 0, 45: 0 };
+  const b = { ...AGREE, 1: 3, 25: 3, 58: 3, 35: 3, 45: 3 };
+  const r = calculateCompatibility(a, b);
+  assert.ok(r.finalPct >= 95, `removed-only differences must be ignored, got ${r.finalPct}`);
+});
+
+test('a pair sharing ONLY removed questions cannot be scored → 0', () => {
+  const r = calculateCompatibility({ 1: 0, 25: 0 }, { 1: 0, 25: 0 });
   assert.equal(r.finalPct, 0);
 });
 
-test('hard block: extreme bedtime gap → 0%', () => {
-  const r = calculateCompatibility({ 49: 0 }, { 49: 3 });
-  assert.equal(r.isHardBlocked, true);
-  assert.equal(r.finalPct, 0);
+test('newly-weighted conflict questions (62/63) still move the score', () => {
+  const same = calculateCompatibility({ 62: 0, 63: 0, 14: 0 }, { 62: 0, 63: 0, 14: 0 });
+  const diff = calculateCompatibility({ 62: 0, 63: 0, 14: 0 }, { 62: 3, 63: 3, 14: 1 });
+  assert.ok(same.finalPct > diff.finalPct, 'Q62/63/14 must affect the score');
 });
 
-test('soft block: cleanliness mismatch sets isSoftBlocked', () => {
-  const r = calculateCompatibility({ 50: 0 }, { 50: 3 });
+// ── Dealbreaker caps replace the old hard/soft blocks ───────────────────────
+
+test('cap: non-smoker x smoker is capped (~35), NOT a hard zero', () => {
+  // Identical on everything except Q51 (Never vs Regularly): base would be ~99,
+  // the smoke cap must pull it down to <= 35 — and it is NOT a hard block.
+  const a = { ...AGREE, 51: 0 };
+  const b = { ...AGREE, 51: 3 };
+  const r = calculateCompatibility(a, b);
+  assert.equal(r.isHardBlocked, false, 'v8 uses caps, not hard zeroes');
+  assert.ok(r.finalPct <= 35, `smoke mismatch should cap <= 35, got ${r.finalPct}`);
+  assert.equal(r.capReason, 'smoking');
+});
+
+test('cap: non-smoker x occasional-smoker (0 vs 2) also caps at 35', () => {
+  const r = calculateCompatibility({ ...AGREE, 51: 0 }, { ...AGREE, 51: 2 });
+  assert.ok(r.finalPct <= 35, `got ${r.finalPct}`);
+});
+
+test('cap: alcohol opposite-ends caps <= 50 and flags soft-block', () => {
+  const r = calculateCompatibility({ ...AGREE, 54: 0 }, { ...AGREE, 54: 3 });
+  assert.ok(r.finalPct <= 50, `alcohol mismatch should cap <= 50, got ${r.finalPct}`);
   assert.equal(r.isSoftBlocked, true);
 });
 
-test('breakdown exposes personality + communication categories', () => {
-  const r = calculateCompatibility({ 15: 0, 14: 0 }, { 15: 0, 14: 0 });
-  assert.ok('personality' in r.breakdown, 'personality category present');
+test('cap: overnight-partner opposite-ends caps <= 50 and flags soft-block', () => {
+  const r = calculateCompatibility({ ...AGREE, 52: 0 }, { ...AGREE, 52: 3 });
+  assert.ok(r.finalPct <= 50, `overnight mismatch should cap <= 50, got ${r.finalPct}`);
+  assert.equal(r.isSoftBlocked, true);
+});
+
+test('no pair is ever hard-blocked in v8 (caps, not zeroes)', () => {
+  const r = calculateCompatibility({ 51: 0 }, { 51: 3 });
+  assert.equal(r.isHardBlocked, false);
+});
+
+// ── Breakdown reflects the new category set ─────────────────────────────────
+
+test('breakdown exposes lifestyle + communication, and NOT removed categories', () => {
+  const r = calculateCompatibility(AGREE, { ...AGREE });
+  assert.ok('lifestyle' in r.breakdown, 'lifestyle category present');
   assert.ok('communication' in r.breakdown, 'communication category present');
+  assert.ok(!('personality' in r.breakdown), 'personality category removed');
+  assert.ok(!('shadow' in r.breakdown), 'shadow category removed');
+  assert.ok(!('attachment' in r.breakdown), 'attachment category removed');
 });
 
-test('dealbreaker amplification runs and returns a valid score', () => {
-  const r = calculateCompatibility(
-    { 50: 0, 49: 1 },
-    { 50: 2, 49: 1 },
-    { dealbreakers: ['cleanliness'] },
-  );
-  assert.ok(r.finalPct >= 0 && r.finalPct <= 100);
-});
+// ── Partial-completion fairness (progressive profiling) ─────────────────────
 
-test('finalPct is always clamped to 0..100', () => {
-  const r = calculateCompatibility({ 1: 0, 14: 0 }, { 1: 0, 14: 0 });
-  assert.ok(r.finalPct >= 0 && r.finalPct <= 100);
-});
-
-test('generateWhyMatched returns a non-empty string', () => {
-  const r = calculateCompatibility({ 1: 0 }, { 1: 0 });
-  const why = generateWhyMatched(r.breakdown, 92);
-  assert.equal(typeof why, 'string');
-  assert.ok(why.length > 10);
-});
-
-test('group compatibility hard-blocks if any cross-pair hard-blocks', () => {
-  const g = calculateGroupCompatibility([{ 51: 0 }], [{ 51: 3 }]);
-  assert.equal(g.isHardBlocked, true);
-  assert.equal(g.finalPct, 0);
-});
-
-test('group compatibility returns null when a group is empty', () => {
-  assert.equal(calculateGroupCompatibility([], [{ 1: 0 }]), null);
-});
-
-// ── Progressive profiling: partial-completion fairness (2026-06-09) ──────────
-// Regression guard for the "score only questions BOTH answered" fix that makes
-// the 12-core unlock viable. Before the fix these deflated badly (~41%).
-
-test('partial: identical shared answers score ~100; a question only one user answered is ignored', () => {
-  // Both answered Q1 identically; A also answered Q53, B did not. The
-  // unanswered Q53 must NOT drag the pair down.
-  const r = calculateCompatibility({ 1: 0, 53: 0 }, { 1: 0 });
+test('partial: a question only one user answered is ignored, not penalizing', () => {
+  // Both answered the scored set identically; A also answered Q53, B did not on
+  // one extra — the unshared answer must not drag the pair down.
+  const a = { ...AGREE };
+  const b = { ...AGREE }; delete b[56];          // B skipped one optional
+  const r = calculateCompatibility(a, b);
   assert.ok(r.finalPct >= 95, `shared-identical partial should be ~100, got ${r.finalPct}`);
 });
 
-test('partial: identical 12-core answers score ~100 (not deflated by skipped optional)', () => {
-  const core = { 49: 1, 51: 0, 50: 1, 54: 0, 1: 0, 14: 0, 25: 1, 45: 1, 57: 0, 58: 3, 60: 0, 35: 1 };
-  const r = calculateCompatibility(core, { ...core });
-  assert.ok(r.finalPct >= 95, `identical core should be ~100, got ${r.finalPct}`);
+// ── Ranking quality: monotonic decrease as disagreement grows ───────────────
+
+test('ranking quality: score decreases monotonically as disagreement grows', () => {
+  // Anchor opposite on two non-cap 4-opt lifestyle items (48/55) to sit off the
+  // calibration clamp, then add full disagreement on 60/62/63 step by step.
+  const A = { 48: 0, 55: 0, 50: 0, 49: 0, 53: 0, 57: 0, 14: 0, 60: 0, 62: 0, 63: 0 };
+  const score = (extra) => calculateCompatibility(A, { 48: 3, 55: 3, 50: 0, 49: 0, 53: 0, 57: 0, 14: 0, ...extra }).finalPct;
+  const none = score({ 60: 0, 62: 0, 63: 0 });
+  const some = score({ 60: 3, 62: 0, 63: 0 });
+  const more = score({ 60: 3, 62: 3, 63: 0 });
+  const most = score({ 60: 3, 62: 3, 63: 3 });
+  assert.ok(none > some && some > more && more > most,
+    `expected strict monotonic decrease, got ${none} > ${some} > ${more} > ${most}`);
 });
 
-test('partial: no shared answered questions → 0 (cannot score strangers)', () => {
-  const r = calculateCompatibility({ 1: 0 }, { 14: 0 });
-  assert.equal(r.finalPct, 0);
-});
-
-// ── v7 question additions (2026-06-09) ──────────────────────────────────────
-
-test('new v7 questions (52 partners / 53 study / 55 food) are wired into scoring', () => {
-  const same = calculateCompatibility({ 52: 0, 53: 0, 55: 0 }, { 52: 0, 53: 0, 55: 0 });
-  const diff = calculateCompatibility({ 52: 0, 53: 0, 55: 0 }, { 52: 3, 53: 3, 55: 3 });
-  assert.ok(same.finalPct > diff.finalPct, 'Q52/53/55 must affect the score');
-});
-
-test('soft block: overnight-partner (Q52) mismatch sets isSoftBlocked', () => {
-  const r = calculateCompatibility({ 52: 0 }, { 52: 3 });
-  assert.equal(r.isSoftBlocked, true);
-});
-
-test('soft block: alcohol comfort (Q54) mismatch sets isSoftBlocked', () => {
-  const r = calculateCompatibility({ 54: 0 }, { 54: 3 });
-  assert.equal(r.isSoftBlocked, true);
-});
-
-// ── diffScore option-count normalization (2026-06-19) ────────────────────────
-// Fix: a FULL disagreement should cost the same regardless of how many options a
-// question has. 4-option questions must be UNCHANGED.
+// ── diffScore option-count normalization (unchanged in v8) ──────────────────
 
 test('diffScore: 4-option curve is unchanged (100/60/20/0)', () => {
   assert.equal(diffScore(100, 0, 4), 100);
@@ -130,69 +133,78 @@ test('diffScore: 4-option curve is unchanged (100/60/20/0)', () => {
   assert.equal(diffScore(100, 3, 4), 0);
 });
 
-test('diffScore: a full 2-option (binary) disagreement now scores 0, not 60', () => {
-  assert.equal(diffScore(100, 0, 2), 100); // agree
-  assert.equal(diffScore(100, 1, 2), 0);   // total clash → full mismatch (was 60)
+test('diffScore: a full 2-option (binary) disagreement scores 0, not 60', () => {
+  assert.equal(diffScore(100, 0, 2), 100);
+  assert.equal(diffScore(100, 1, 2), 0);
 });
 
 test('diffScore: 3- and 5-option scales normalize onto the 0..3 curve', () => {
-  assert.equal(diffScore(100, 1, 3), 40);  // one apart of two steps
-  assert.equal(diffScore(100, 2, 3), 0);   // full clash
-  assert.equal(diffScore(100, 4, 5), 0);   // full clash
-  assert.equal(diffScore(100, 1, 5), 70);  // one of four steps
+  assert.equal(diffScore(100, 1, 3), 40);
+  assert.equal(diffScore(100, 2, 3), 0);
+  assert.equal(diffScore(100, 4, 5), 0);
+  assert.equal(diffScore(100, 1, 5), 70);
 });
 
 test('diffScore: missing option count defaults to 4-option behavior', () => {
   assert.equal(diffScore(100, 1, undefined), 60);
 });
 
-test('ranking quality: score decreases monotonically as disagreement grows', () => {
-  // The one property that matters most for a matching feed: correct ORDERING.
-  // Anchor with two fully-opposite 4-opt questions (Q1/Q3) to keep scores off
-  // the 99 calibration clamp, then add disagreement on Q25/Q35/Q45 step by step
-  // and confirm the score strictly drops each time. None of these are block Qs.
-  const score = (extra) => calculateCompatibility(
-    { 1: 0, 3: 0, 25: 0, 35: 0, 45: 0 },
-    { 1: 3, 3: 3, ...extra },
-  ).finalPct;
-  const none = score({ 25: 0, 35: 0, 45: 0 }); // agree on the rest
-  const some = score({ 25: 1, 35: 0, 45: 0 }); // one off
-  const more = score({ 25: 1, 35: 1, 45: 0 }); // two off
-  const most = score({ 25: 1, 35: 1, 45: 1 }); // three off
-  assert.ok(
-    none > some && some > more && more > most,
-    `expected strict monotonic decrease, got ${none} > ${some} > ${more} > ${most}`,
-  );
-});
-
-test('binary full clash (Q14, 2-opt) is now scored worse than a 4-opt one-step gap (Q1)', () => {
-  // The inversion the fix targets: before, a total yes/no clash earned 60% —
-  // as much as a mild 4-option gap. Now the binary clash scores strictly lower.
+test('Q14 (contempt) is the binary item: full clash scores below a 4-opt one-step gap', () => {
+  // Single-question maps so the result reflects that one question (not clamped
+  // at the 99 ceiling by an otherwise-identical baseline).
   const binaryClash = calculateCompatibility({ 14: 0 }, { 14: 1 }); // 2-opt, max gap
-  const quadOneStep = calculateCompatibility({ 1: 0 },  { 1: 1 });  // 4-opt, small gap
-  assert.ok(
-    binaryClash.finalPct < quadOneStep.finalPct,
-    `binary clash (${binaryClash.finalPct}) should score below a 4-opt one-step gap (${quadOneStep.finalPct})`,
-  );
+  const quadOneStep = calculateCompatibility({ 50: 0 }, { 50: 1 }); // 4-opt, one step
+  assert.ok(binaryClash.finalPct < quadOneStep.finalPct,
+    `binary clash (${binaryClash.finalPct}) should be below a 4-opt one-step gap (${quadOneStep.finalPct})`);
 });
 
-// ── flatten robustness: numeric-string answers must not be silently dropped ──
+// ── flatten robustness ──────────────────────────────────────────────────────
 
-test('numeric-string answers are coerced, not dropped (would otherwise skew score)', () => {
-  // Same answers, one side stored as strings — must score identical to numbers.
-  const nums = calculateCompatibility({ 1: 0, 14: 0, 25: 1 }, { 1: 0, 14: 0, 25: 1 });
-  const strs = calculateCompatibility({ 1: '0', 14: '0', 25: '1' }, { 1: 0, 14: 0, 25: 1 });
-  assert.equal(strs.finalPct, nums.finalPct, 'string-encoded answers must score the same as numbers');
-});
-
-test('string answers still trigger hard blocks (Q51 "0" vs "3")', () => {
-  const r = calculateCompatibility({ 51: '0' }, { 51: '3' });
-  assert.equal(r.isHardBlocked, true);
-  assert.equal(r.finalPct, 0);
+test('numeric-string answers are coerced, not dropped', () => {
+  const nums = calculateCompatibility(AGREE, { ...AGREE });
+  const asStr = {}; for (const [k, v] of Object.entries(AGREE)) asStr[k] = String(v);
+  const strs = calculateCompatibility(asStr, { ...AGREE });
+  assert.equal(strs.finalPct, nums.finalPct, 'string-encoded answers must score identically');
 });
 
 test('option index 0 survives coercion (finiteness, not truthiness)', () => {
-  // A bare 0 and "0" are valid answers; a buggy guard could drop them.
-  const r = calculateCompatibility({ 1: 0 }, { 1: '0' });
-  assert.ok(r.finalPct >= 95, `identical Q1 (0 vs "0") should be ~100, got ${r.finalPct}`);
+  const r = calculateCompatibility({ ...AGREE, 50: 0 }, { ...AGREE, 50: '0' });
+  assert.ok(r.finalPct >= 95, `identical (0 vs "0") should be ~100, got ${r.finalPct}`);
+});
+
+// ── dealbreaker amplification ───────────────────────────────────────────────
+
+test('dealbreaker amplification runs and returns a valid score', () => {
+  const r = calculateCompatibility(
+    { ...AGREE, 50: 0 },
+    { ...AGREE, 50: 2 },
+    { dealbreakers: ['cleanliness'] },
+  );
+  assert.ok(r.finalPct >= 0 && r.finalPct <= 100);
+});
+
+// ── group compatibility ─────────────────────────────────────────────────────
+
+test('group compatibility averages pairwise and returns a valid score', () => {
+  const g = calculateGroupCompatibility([AGREE], [{ ...AGREE }]);
+  assert.ok(g.finalPct >= 0 && g.finalPct <= 100);
+  assert.equal(g.isHardBlocked, false);
+});
+
+test('group compatibility returns null when a group is empty', () => {
+  assert.equal(calculateGroupCompatibility([], [AGREE]), null);
+});
+
+// ── why-matched copy ────────────────────────────────────────────────────────
+
+test('generateWhyMatched returns a non-empty string', () => {
+  const r = calculateCompatibility(AGREE, { ...AGREE });
+  const why = generateWhyMatched(r.breakdown, 92);
+  assert.equal(typeof why, 'string');
+  assert.ok(why.length > 10);
+});
+
+test('finalPct is always clamped to 0..100', () => {
+  const r = calculateCompatibility(AGREE, { ...AGREE });
+  assert.ok(r.finalPct >= 0 && r.finalPct <= 100);
 });

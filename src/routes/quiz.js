@@ -417,43 +417,14 @@ async function scoreNewMatches(userId, newAnswers) {
     // ON CONFLICT upsert below. The feed filters score >= 50 (and
     // is_hard_blocked = FALSE), so students still never see these pairs.
 
-    // Blend: the clinical quiz stays the major factor (70%); the MBTI/DISC/
-    // OCEAN personality match is a real second factor (30%). When either
-    // side has no derived profile, fall back to the clinical score alone.
-    //
-    // CONVERGENCE GUARANTEE: this function is called twice per submit —
-    // once before derivePersonality() finishes (clinical-only) and once
-    // after (blended when both profiles exist). The pair-row in
-    // compatibility_scores is upserted on each call via ON CONFLICT.
-    // Once both users in a pair have completed quiz AND had their
-    // personality derived, the stored score is the blended value. The
-    // only stale-state window is between submit and personality
-    // derivation, which is at most one Anthropic round trip (~3s).
-    //
-    // Hard block is ABSOLUTE: keep finalPct pinned at 0 and skip the
-    // personality blend entirely — a high MBTI/OCEAN overlap must never
-    // lift a hard-blocked pair back over the feed's score >= 50 cutoff.
-    let finalPct = result.finalPct;  // already 0 when hard-blocked
-    if (!result.isHardBlocked) {
-      const personalityRaw = computePersonalityMatch(meProfile, profileById[other.user_id]);
-      if (personalityRaw !== null) {
-        // Calibrate the raw heuristic (compressed ~55-93) the same way the
-        // clinical score is stretched, so the 30% personality factor actually
-        // moves the blended number instead of pinning it near its ~72 mean.
-        const personality = calibratePersonality(personalityRaw);
-        finalPct = Math.round(result.finalPct * 0.7 + personality * 0.3);
-      } else if (meProfile && !profileById[other.user_id]) {
-        // The other user has a completed quiz but no personality profile —
-        // this is the pathology the watchdog should catch. Log to Sentry
-        // so we know which users to re-run derivePersonality on.
-        try {
-          require('../utils/sentry').captureMessage?.(
-            `scoreNewMatches: missing personality for ${other.user_id}`,
-            'warning',
-          );
-        } catch { /* sentry not loaded */ }
-      }
-    }
+    // v8 (2026-06-24) — LIFESTYLE-FIRST: the abstract MBTI/DISC/OCEAN
+    // personality blend (formerly 30% of the score) has been REMOVED. The
+    // stored compatibility score is now exactly the scoring-engine result —
+    // daily-living friction + behavioral-conflict scenarios + money, with
+    // dealbreaker caps. Personality profiles are still derived for the in-app
+    // readout; they just no longer fold into matching. (computePersonalityMatch
+    // / calibratePersonality are intentionally left unused here.)
+    const finalPct = result.finalPct;
 
     const [userA, userB] = userId < other.user_id
       ? [userId, other.user_id]

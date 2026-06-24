@@ -8,6 +8,7 @@ const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
+const { recordPairingEvent } = require('../services/pairingOutcomes');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
@@ -347,6 +348,13 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
       [req.user.id, toUserId, 'pending']
     );
 
+    // Outcome scaffolding: stamp the 'connect' funnel step + snapshot the score
+    // and school for later per-school weight-learning. Best-effort, non-blocking.
+    recordPairingEvent(req.user.id, toUserId, 'connect', {
+      score:  parseFloat(compat[0].score),
+      school: req.user.school,
+    }).catch(() => {});
+
     // Recipient-side analytics. The frontend already fires connect_request_sent
     // on the sender; this captures the matching event for the user being
     // contacted so it appears on BOTH users' PostHog timelines.
@@ -425,6 +433,9 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
            SET ended_at = NULL, ended_by = NULL`,
         [userA, userB]
       );
+
+      // Outcome scaffolding: a mutual accept is the 'match' funnel step.
+      recordPairingEvent(req.user.id, fromUserId, 'match').catch(() => {});
 
       // Push notification to the person whose request was accepted
       const sendPushToUser = req.app.get('sendPushToUser');

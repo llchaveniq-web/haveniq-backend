@@ -7,6 +7,7 @@ const { screenMessage, CRISIS_SUPPORT } = require('../lib/contentFilter');
 const { sendNewMessageEmail } = require('../services/email');
 const { isDemoEmail, notDemo } = require('../lib/demoFilter');
 const { isFounderUser } = require('../utils/founders');
+const { recordPairingEvent } = require('../services/pairingOutcomes');
 
 // Email the recipient on a NEW message — but only the FIRST unread one in a
 // conversation (they were caught up), so a burst of messages emails once, not
@@ -292,6 +293,10 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
        VALUES ($1, $2, $3) RETURNING *`,
       [req.params.conversationId, req.user.id, body.trim()]
     );
+
+    // Outcome scaffolding: stamp the 'message' funnel step (first occurrence
+    // wins, so re-firing per message is harmless). Best-effort, non-blocking.
+    recordPairingEvent(req.user.id, otherUserId, 'message').catch(() => {});
 
     if (screen.action === 'flag') {
       logMessageFlag({

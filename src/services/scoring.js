@@ -16,54 +16,48 @@
 // Per-question point values — must match the app's quizStore.ts QUESTION_POINTS.
 // Keep this in lockstep with the frontend, or backend-computed scores will
 // drift from anything the app shows.
+//
+// ── v8 LIFESTYLE-FIRST REWEIGHT (2026-06-24) ──────────────────────────────
+// Realigned to what actually drives roommate conflict: daily-living friction.
+// REMOVED from scoring entirely (abstract-personality + equity-risk signals
+// that don't predict cohabitation and/or carried fairness risk): attachment
+// (1/3/22), emotional-regulation (9), directness (17), childhood/ACEs (29),
+// shadow/HEXACO (31/32/34/58), Big Five (15/25/35/45/61), polyvagal (37/40),
+// and the categorical sensory item (59 — its options aren't an ordinal scale,
+// so distance-scoring it was meaningless). Remaining 14 questions, ~54%
+// lifestyle / ~39% behavioral-conflict / ~8% money. First pass; the per-school
+// weight-learning step (pairing_outcomes) will retune these from real outcomes.
 const QUESTION_POINTS = {
-  1: 40,  3: 40, 22: 25,        // attachment
-  9: 35,                        // emotional regulation
-  14: 35, 17: 35, 60: 30,       // communication
-  29: 20,                       // childhood
-  31: 40, 32: 40, 34: 40, 58: 35, // shadow
-  37: 14, 40: 12, 59: 14,       // nervous system
-  57: 30,                       // control / executive function
-  // Lifestyle — RE-WEIGHTED v2 (2026-06-19): daily-living friction (cleanliness,
-  // sleep, guests, money) is what actually drives roommate conflict but sat at
-  // ~7% of the score; raised toward ~18% (cleanliness highest). Smoking stays
-  // modest — its hard block already carries the extreme. First pass; retune with
-  // pilot data. KEEP IN LOCKSTEP with app quizStore.ts.
-  48: 20, 49: 25, 50: 30, 51: 10, 54: 15, 56: 25,
-  // Big Five Personality (v5 — added May 2026). Weights tuned to the
-  // cohabitation-research hierarchy: Conscientiousness > Agreeableness
-  // > Emotional Stability > Extraversion. ~21% of total max. Retune
-  // after N=50 paired 60-day check-ins land. See frontend quizStore.ts
-  // for the full rationale.
-  15: 20,  // Extraversion
-  25: 45,  // Conscientiousness
-  35: 40,  // Agreeableness
-  45: 32,  // Emotional Stability
-  // v6 questions — wired in 2026-06-08 (were collected but unscored). Keep in
-  // lockstep with the app's quizStore.ts QUESTION_POINTS and the CATEGORIES
-  // map below (personality ← 61, communication ← 62/63).
-  61: 20,  // Openness (Big Five · 5th OCEAN trait)
-  62: 28,  // Boundary-setting / assertiveness (resentment precursor)
-  63: 28,  // Repair initiation (Gottman)
-  // ── v7 additions 2026-06-09 — keep in lockstep with app quizStore.ts ──
-  52: 15,  // Overnight partners (lifestyle, soft-block) — re-weighted v2
-  53: 14,  // Study / focus environment (nervous)
-  55: 15,  // Food & kitchen sharing (lifestyle) — re-weighted v2
+  // ── Lifestyle (daily-living friction) — ~54% ──
+  50: 45,  // cleanliness — shared-space standard
+  49: 35,  // bedtime
+  48: 30,  // hosting / guests
+  53: 25,  // study / focus environment
+  55: 20,  // food & kitchen sharing
+  54: 20,  // alcohol comfort
+  52: 20,  // overnight partners
+  51: 15,  // smoke / vape / cannabis at home
+  // ── Behavioral-conflict scenarios — ~39% ──
+  14: 35,  // contempt (Gottman #1 predictor)
+  57: 30,  // executive function — chore follow-through
+  60: 30,  // repair receptivity (after an apology)
+  63: 28,  // repair initiation
+  62: 28,  // boundary-setting
+  // ── Money — ~8% ──
+  56: 30,  // spending alignment
 };
 
-// Category → question ids. The new `personality` bucket holds the
-// four Big Five items (HEXACO Honesty-Humility stays in `shadow` since
-// it's a more diagnostic dark-trait signal there).
+// Category → question ids. Re-derived from the surviving v8 ids: every
+// category whose ids were all removed is dropped (attachment, emotional,
+// childhood, shadow, personality). Each category's max is the sum of its
+// surviving QUESTION_POINTS; the breakdown guards against 0/0. Keys are kept
+// stable so the existing display mappings (HABIT_LABEL, CATEGORY_DISPLAY,
+// generateWhyMatched) keep resolving without a frontend change.
 const CATEGORIES = {
-  attachment:    { ids: [1, 3, 22],               label: 'Attachment Style' },
-  emotional:     { ids: [9],                      label: 'Emotional Style'  },
-  communication: { ids: [14, 17, 60, 62, 63],     label: 'Communication'    },
-  childhood:     { ids: [29],                     label: 'Childhood'        },
-  shadow:        { ids: [31, 32, 34, 58],         label: 'Shadow Traits'    },
-  nervous:       { ids: [37, 40, 53, 59],         label: 'Nervous System'   },
-  control:       { ids: [57],                     label: 'Control Style'    },
-  personality:   { ids: [15, 25, 35, 45, 61],     label: 'Personality'      },
-  lifestyle:     { ids: [48, 49, 50, 51, 52, 54, 55, 56], label: 'Lifestyle' },
+  lifestyle:     { ids: [48, 49, 50, 51, 52, 54, 55, 56], label: 'Lifestyle' },      // 215
+  communication: { ids: [14, 60, 62, 63],                 label: 'Communication' },  // 121
+  control:       { ids: [57],                             label: 'Control Style' },  //  30
+  nervous:       { ids: [53],                             label: 'Focus & Environment' }, // 25
 };
 
 // Shadow-trait questions: index of the "worst" answer + index of the
@@ -95,6 +89,9 @@ const SHADOW_BEST_INDEX  = { 14: 1, 31: 1, 32: 1, 58: 3 };
 //   communication→ Q14, Q17, Q60 (contempt, directness, repair)
 //   noise        → Q59 (sensory disturbance)
 //   space        → Q37 (alone-time recharge needs)
+// v8: 'noise' (Q59) and 'space' (Q37) tags dropped — their questions were
+// removed from scoring. A user who still carries those tags simply finds no
+// ids to amplify (harmless no-op).
 const DEALBREAKER_QUESTIONS = {
   sleep:         [49],
   cleanliness:   [50],
@@ -102,9 +99,7 @@ const DEALBREAKER_QUESTIONS = {
   alcohol:       [54],
   money:         [56],
   guests:        [48],
-  communication: [14, 17, 60],
-  noise:         [59],
-  space:         [37],
+  communication: [14, 60, 62, 63],
 };
 const DEALBREAKER_MULTIPLIER = 1.75;
 
@@ -144,7 +139,7 @@ function optIdx(flat, qid) {
 // Normalizes answer-distance by scale length (see diffScore). KEEP IN LOCKSTEP
 // with the quiz options (backend src/data/quizQuestions.js · app
 // constants/quiz.ts) — anything not listed is treated as 4 options.
-const OPTION_COUNTS = { 9: 3, 14: 2, 17: 3, 31: 2, 32: 2, 34: 3, 59: 5 };
+const OPTION_COUNTS = { 14: 2 };  // v8: Q14 contempt is the only surviving non-4-option scored item
 
 // Points earned for an answer pair, scaled by how far apart the two answers are
 // RELATIVE to the question's number of options. We map the raw index distance
@@ -212,23 +207,16 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     if (ids) for (const id of ids) amplifiedQids.add(id);
   }
 
-  let rawScore     = 0;
-  let maxScore     = 0;
-  let hardBlocked  = false;
-  let isSoftBlocked = false;
-  let softReduction = 0;     // 0-1, from soft blocks
-  let shadowFlags   = 0;
+  let rawScore  = 0;
+  let maxScore  = 0;
   const catScores = {};      // cat -> { earned, max }
 
   for (const [cat, { ids }] of Object.entries(CATEGORIES)) {
     catScores[cat] = { earned: 0, max: 0 };
     for (const qid of ids) {
       const basePts = POINTS[qid] || 0;
-      // Amplify questions flagged as dealbreakers by either user. Math.round
-      // keeps the points an integer for consistent ratios downstream; the
-      // multiplier is conservative (1.75×) — strong enough that a flagged
-      // mismatch reshapes the ranking, gentle enough that it doesn't fully
-      // override the deep psych dimensions (attachment, shadow).
+      // Amplify questions flagged as a dealbreaker by either user (×1.75) —
+      // strong enough to reshape ranking, gentle enough not to dominate.
       const pts = amplifiedQids.has(qid)
         ? Math.round(basePts * DEALBREAKER_MULTIPLIER)
         : basePts;
@@ -236,88 +224,72 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
 
       const ai = optIdx(A, qid);
       const bi = optIdx(B, qid);
+      if (ai === null || bi === null) continue;  // score only questions BOTH answered
 
-      if (ai === null || bi === null) continue;
-
-      // Count toward the max ONLY when BOTH users answered. This makes partial
-      // completion (progressive profiling: a 12-question core unlocks matching,
-      // the rest are optional) FAIR — a core-only user is scored on the
-      // questions they share with their match, not penalized for the optional
-      // ones they skipped. Mirrors the app's quizStore.ts.
+      // Count toward the max ONLY when BOTH answered, so partial completion
+      // (12-core unlocks matching) is scored on shared answers, not penalized
+      // for skipped optional ones. Mirrors the app's quizStore.ts.
       maxScore += pts;
       catScores[cat].max += pts;
 
-      const diff   = Math.abs(ai - bi);
-      const earned = diffScore(pts, diff, OPTION_COUNTS[qid]);
+      const earned = diffScore(pts, Math.abs(ai - bi), OPTION_COUNTS[qid]);
       rawScore += earned;
       catScores[cat].earned += earned;
-
-      // ── Hard block: Q51 substances — "Never" vs "Regularly" ──────
-      if (qid === 51 && ((ai === 0 && bi === 3) || (ai === 3 && bi === 0))) {
-        hardBlocked = true;
-      }
-      // ── Hard block: Q49 bedtime — extreme sleep-schedule gap ─────
-      if (qid === 49 && diff >= 3) {
-        hardBlocked = true;
-      }
-      // ── Soft block: Q54 alcohol comfort mismatch ─────────────────
-      if (qid === 54 && diff >= 3) {
-        isSoftBlocked = true;
-        softReduction += 0.15;
-      }
-      // ── Soft block: Q50 cleanliness standards diverge ────────────
-      if (qid === 50 && diff >= 3) {
-        isSoftBlocked = true;
-        softReduction += 0.20;
-      }
-      // ── Soft block: Q52 overnight-partner comfort mismatch ───────
-      if (qid === 52 && diff >= 3) {
-        isSoftBlocked = true;
-        softReduction += 0.15;
-      }
-      // ── Shadow flag: one honest-worst vs one honest-best ─────────
-      if (qid in SHADOW_WORST_INDEX) {
-        const worst = SHADOW_WORST_INDEX[qid];
-        const best  = SHADOW_BEST_INDEX[qid];
-        if ((ai === worst && bi === best) || (bi === worst && ai === best)) {
-          shadowFlags += 1;
-        }
-      }
     }
   }
 
-  // Two or more shadow flags between the pair = a real honesty mismatch.
-  const shadowPenalty = shadowFlags >= 2 ? 0.15 : 0;
-
-  // Total reduction is capped so a pair never loses more than 40%.
-  const totalReduction = Math.min(0.40, softReduction + shadowPenalty);
+  // ── Dealbreaker caps (v8) ────────────────────────────────────────────────
+  // Replace the old hard-zero / soft-reduction / shadow tangle with explicit
+  // ceilings applied AFTER the weighted sum. A flagged mismatch is strongly
+  // discouraged (score capped low) but KEPT in the data — not erased — so the
+  // per-school weight-learning step can still observe the pairing's outcome.
+  // The smoke cap (35) sits below the default feed floor (MATCH_MIN_SCORE=40),
+  // so non-smoker × smoker pairs drop out of the feed without a hard zero.
+  let cap = 100;
+  let capReason = null;
+  const sm0 = optIdx(A, 51), sm1 = optIdx(B, 51);
+  if (sm0 !== null && sm1 !== null) {
+    const lo = Math.min(sm0, sm1), hi = Math.max(sm0, sm1);
+    // non-smoker (Never = 0) × someone who smokes/vapes at home (>= 2)
+    if (lo === 0 && hi >= 2) { cap = Math.min(cap, 35); capReason = capReason || 'smoking'; }
+  }
+  const al0 = optIdx(A, 54), al1 = optIdx(B, 54);  // alcohol comfort, opposite ends
+  if (al0 !== null && al1 !== null && Math.abs(al0 - al1) >= 3) {
+    cap = Math.min(cap, 50); capReason = capReason || 'alcohol';
+  }
+  const ov0 = optIdx(A, 52), ov1 = optIdx(B, 52);  // overnight partners, opposite ends
+  if (ov0 !== null && ov1 !== null && Math.abs(ov0 - ov1) >= 3) {
+    cap = Math.min(cap, 50); capReason = capReason || 'overnight';
+  }
 
   const layer1Pct = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;
-  // Calibrate (stretch) BEFORE applying soft-block reductions, so the reduction
-  // bites a meaningful, spread-out number rather than a compressed one. No
-  // shared answers (maxScore === 0) → 0: can't score strangers, and the
-  // calibration floor must NOT turn that into a phantom 5%.
-   // Confidence cap — a sparse or straight-lined answer vector can't earn a
-  // top score. Without this, profiles with few/uniform answers hit ~99 against
-  // everyone (the degenerate cross-school cluster). Pair uses the lower of two.
+
+  // Confidence cap — a sparse or straight-lined answer vector can't earn a top
+  // score (without it, thin/uniform profiles hit ~99 against everyone). Pair
+  // uses the lower of the two users'. Threshold 10 fits the v8 14-question set
+  // so a core completer isn't unfairly throttled.
   const _confIdx = (X) => {
     const v = [];
     for (const { ids } of Object.values(CATEGORIES))
       for (const qid of ids) { const i = optIdx(X, qid); if (i !== null) v.push(i); }
     return v;
   };
-  const _cv = (v) => (v.length < 12 ? 0.6 : (new Set(v).size <= 2 ? 0.7 : 1.0));
+  const _cv = (v) => (v.length < 10 ? 0.6 : (new Set(v).size <= 2 ? 0.7 : 1.0));
   const conf = Math.min(_cv(_confIdx(A)), _cv(_confIdx(B)));
+
+  // Calibrate (stretch around 50) so displayed scores use the full range.
+  // No shared answers (maxScore === 0) → 0: can't score strangers.
   let finalPct = maxScore > 0
-    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * (1 - totalReduction) * conf)))
+    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * conf)))
     : 0;
 
-  // Hard block trumps everything.
-  if (hardBlocked) finalPct = 0;
+  // Dealbreaker ceiling is applied LAST — nothing scores above its cap.
+  if (maxScore > 0) finalPct = Math.min(finalPct, cap);
 
-  // Per-category breakdown (0-100) for the match-detail screen — calibrated
-  // the same way so the Fit Report bars differentiate (a real strength reads
-  // as 90+, a real gap as 40-) instead of all hovering near the mean.
+  const isSoftBlocked = cap < 100;
+
+  // Per-category breakdown (0-100), calibrated like the headline so a real
+  // strength reads 90+ and a real gap reads 40-. Guards 0/0.
   const breakdown = {};
   for (const [cat, s] of Object.entries(catScores)) {
     breakdown[cat] = s.max > 0 ? Math.round(calibrate((s.earned / s.max) * 100)) : 0;
@@ -326,9 +298,10 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   return {
     finalPct,
     confidence: conf,
-    isHardBlocked: hardBlocked,
+    isHardBlocked: false,   // v8 uses caps, not hard zeroes
     isSoftBlocked,
-    shadowPenalty: Math.round(shadowPenalty * 100),
+    capReason,              // 'smoking' | 'alcohol' | 'overnight' | null
+    shadowPenalty: 0,       // retained for DB/back-compat; shadow scoring removed in v8
     breakdown,
   };
 }
