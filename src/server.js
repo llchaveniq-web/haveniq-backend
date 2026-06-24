@@ -349,6 +349,18 @@ app.use(rateLimit({
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
+  // Internal automation bots (signup auto-review, weekly digest, 60-day
+  // check-ins) hit /bot-admin/* on cron and would blow through the 200/15min
+  // budget. Exempt them — but only when they carry a valid bot token, so the
+  // exemption can't be abused to bypass the limit. The bots authenticate with
+  // `Authorization: Bearer <ADMIN_BOT_TOKEN>` (see requireBotToken in
+  // routes/botAdmin.js and routes/matchOutcomes.js), not x-bot-key.
+  skip: (req) => {
+    if (!req.path.startsWith('/bot-admin')) return false;
+    const auth = req.get('authorization') || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    return Boolean(token) && token === process.env.ADMIN_BOT_TOKEN;
+  },
 }));
 
 // ── Routes ────────────────────────────────────────────────────────────────
