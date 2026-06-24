@@ -255,11 +255,11 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   }
   const al0 = optIdx(A, 54), al1 = optIdx(B, 54);  // alcohol comfort, opposite ends
   if (al0 !== null && al1 !== null && Math.abs(al0 - al1) >= 3) {
-    cap = Math.min(cap, 50); capReason = capReason || 'alcohol';
+    cap = Math.min(cap, 55); capReason = capReason || 'alcohol';
   }
   const ov0 = optIdx(A, 52), ov1 = optIdx(B, 52);  // overnight partners, opposite ends
   if (ov0 !== null && ov1 !== null && Math.abs(ov0 - ov1) >= 3) {
-    cap = Math.min(cap, 50); capReason = capReason || 'overnight';
+    cap = Math.min(cap, 55); capReason = capReason || 'overnight';
   }
 
   const layer1Pct = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;

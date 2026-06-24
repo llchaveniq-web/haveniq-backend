@@ -70,15 +70,15 @@ test('cap: non-smoker x occasional-smoker (0 vs 2) also caps at 35', () => {
   assert.ok(r.finalPct <= 35, `got ${r.finalPct}`);
 });
 
-test('cap: alcohol opposite-ends caps <= 50 and flags soft-block', () => {
+test('cap: alcohol opposite-ends caps <= 55 and flags soft-block', () => {
   const r = calculateCompatibility({ ...AGREE, 54: 0 }, { ...AGREE, 54: 3 });
-  assert.ok(r.finalPct <= 50, `alcohol mismatch should cap <= 50, got ${r.finalPct}`);
+  assert.ok(r.finalPct <= 55, `alcohol mismatch should cap <= 55, got ${r.finalPct}`);
   assert.equal(r.isSoftBlocked, true);
 });
 
-test('cap: overnight-partner opposite-ends caps <= 50 and flags soft-block', () => {
+test('cap: overnight-partner opposite-ends caps <= 55 and flags soft-block', () => {
   const r = calculateCompatibility({ ...AGREE, 52: 0 }, { ...AGREE, 52: 3 });
-  assert.ok(r.finalPct <= 50, `overnight mismatch should cap <= 50, got ${r.finalPct}`);
+  assert.ok(r.finalPct <= 55, `overnight mismatch should cap <= 55, got ${r.finalPct}`);
   assert.equal(r.isSoftBlocked, true);
 });
 
