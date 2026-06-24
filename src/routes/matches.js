@@ -7,6 +7,7 @@ const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectR
 const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
+const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
@@ -188,7 +189,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
        )
        WHERE (cs.user_a = $1 OR cs.user_b = $1)
          AND cs.is_hard_blocked = FALSE
-         AND cs.score >= 50
+         AND cs.score >= ${MATCH_MIN_SCORE}
          AND u.is_paused = FALSE
          AND u.is_banned = FALSE
          AND u.quiz_completed = TRUE
@@ -283,7 +284,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
 // (verified 2026-06-08). Must stay in lockstep with the feed threshold in
 // the /feed query above. Tune upward as the user base grows and higher-
 // compatibility pairs become available.
-const CONNECT_MIN_SCORE = 50;
+const CONNECT_MIN_SCORE = MATCH_MIN_SCORE;  // coupled: you can connect to anything you can see
 router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { toUserId } = req.body || {};

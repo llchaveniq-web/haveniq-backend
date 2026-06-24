@@ -5,6 +5,7 @@ const { calculateCompatibility, generateWhyMatched } = require('../services/scor
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch, calibratePersonality } = require('../services/personalityPairing');
 const { notDemo } = require('../lib/demoFilter');
+const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { textToSpeech, transcribe } = require('../services/voice');
 const { analyzeVoiceEmotion } = require('../services/voiceEmotion');
 const analytics = require('../services/analytics');
@@ -135,7 +136,7 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
            FROM compatibility_scores cs
            JOIN users u ON u.id = (CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END)
           WHERE (cs.user_a = $1 OR cs.user_b = $1)
-            AND cs.score >= 50 AND cs.is_hard_blocked = FALSE
+            AND cs.score >= ${MATCH_MIN_SCORE} AND cs.is_hard_blocked = FALSE
             AND u.is_paused = FALSE AND u.is_banned = FALSE AND u.quiz_completed = TRUE
             ${demoFilter}
           ORDER BY cs.score DESC
