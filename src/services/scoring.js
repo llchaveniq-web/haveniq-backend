@@ -60,14 +60,6 @@ const CATEGORIES = {
   nervous:       { ids: [53],                             label: 'Focus & Environment' }, // 25
 };
 
-// Shadow-trait questions: index of the "worst" answer + index of the
-// "best" (most honest) answer. A shadow flag fires when one user picks
-// the worst end and the other picks the best end. Matches the app's
-// quizStore.ts SHADOW_WORST_INDEX. Q14/31/32 are forced-choice (2
-// options); Q58 has 4 options.
-const SHADOW_WORST_INDEX = { 14: 0, 31: 0, 32: 0, 58: 0 };
-const SHADOW_BEST_INDEX  = { 14: 1, 31: 1, 32: 1, 58: 3 };
-
 // ── Dealbreaker → amplified question IDs ─────────────────────────────────
 // Each student picks up to 3 "what matters most to you" tags during
 // profile setup. At scoring time we union both users' tags and amplify
@@ -383,8 +375,6 @@ module.exports = {
   diffScore,        // exported for direct unit tests of the option-count normalization
   OPTION_COUNTS,
   QUESTION_POINTS,  // exported for the engine-analysis script (weight audit)
-  SHADOW_WORST_INDEX,
-  SHADOW_BEST_INDEX,
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
   // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its
