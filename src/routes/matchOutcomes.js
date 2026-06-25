@@ -21,6 +21,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { screenMessage } = require('../lib/contentFilter');
 
 const ALLOWED_OUTCOMES = new Set([
   'met_in_person',
@@ -50,7 +51,34 @@ async function ensureTable() {
       ON match_outcomes(reporter_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_match_outcomes_pair
       ON match_outcomes(LEAST(reporter_id, other_user_id), GREATEST(reporter_id, other_user_id));
+    -- 2a: index the predicted-score band + stage that the calibration report
+    -- (2b) and the weight-learning step (2c) read out of the details JSONB.
+    CREATE INDEX IF NOT EXISTS idx_match_outcomes_predscore
+      ON match_outcomes(((details->>'predictedScore')));
+    CREATE INDEX IF NOT EXISTS idx_match_outcomes_stage
+      ON match_outcomes(((details->>'stage')));
   `).catch((e) => console.error('[match_outcomes] ensure table:', e.message));
+}
+
+// 2a: the free-text `note` in a check-in is user-generated. Run it through the
+// safety filter (egregious content dropped, not stored) and a PII scrub
+// (emails / phone numbers / @handles) before it lands — the founder and the
+// weight-learning step read these, and a note can name the other person.
+function sanitizeDetails(details) {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return details ?? null;
+  const out = { ...details };
+  if (typeof out.note === 'string' && out.note.trim()) {
+    let note = out.note.trim().slice(0, 2000)
+      .replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/gi, '[redacted]')  // emails
+      .replace(/(\+?\d[\d\s().-]{7,}\d)/g, '[redacted]')        // phone numbers
+      .replace(/@[A-Za-z0-9_.]{2,}/g, '[redacted]');           // social handles
+    try {
+      const screen = screenMessage(note);
+      if (screen && screen.action === 'block') note = '[removed by safety filter]';
+    } catch { /* screening is best-effort; never block the structured outcome */ }
+    out.note = note;
+  }
+  return out;
 }
 
 // ── POST /users/me/match-outcomes ──────────────────────────────────────
@@ -69,7 +97,7 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
     await pool.query(
       `INSERT INTO match_outcomes (reporter_id, other_user_id, outcome, details)
        VALUES ($1, $2, $3, $4)`,
-      [req.user.id, otherUserId, outcome, details || null]
+      [req.user.id, otherUserId, outcome, sanitizeDetails(details)]
     );
     res.json({ recorded: true });
   } catch (err) {
