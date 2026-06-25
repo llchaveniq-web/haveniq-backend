@@ -361,16 +361,17 @@ async function scoreNewMatches(userId, newAnswers) {
   // dealbreakers and passed into calculateCompatibility so flagged
   // categories carry amplified weight in the pair's score.
   const { rows: userRow } = await pool.query(
-    'SELECT school, dealbreakers FROM users WHERE id = $1',
+    'SELECT school, dealbreakers, validation_score FROM users WHERE id = $1',
     [userId]
   );
   if (!userRow[0]) return;
   const myDealbreakers = Array.isArray(userRow[0].dealbreakers) ? userRow[0].dealbreakers : [];
+  const myValidation   = userRow[0].validation_score != null ? Number(userRow[0].validation_score) : undefined;
 
   // Pull each candidate's quiz answers AND their dealbreakers in the same
   // query — saves an N+1 round-trip we'd otherwise pay on the per-user loop.
   const { rows: otherUsers } = await pool.query(
-    `SELECT qa.user_id, qa.answers, u.dealbreakers
+    `SELECT qa.user_id, qa.answers, u.dealbreakers, u.validation_score
      FROM quiz_answers qa
      JOIN users u ON u.id = qa.user_id
      WHERE qa.completed = TRUE
@@ -379,20 +380,10 @@ async function scoreNewMatches(userId, newAnswers) {
     [userId]
   );
 
-  // Personality profiles feed the MBTI/DISC/OCEAN blend (the advisor's
-  // 60/40 matching input). The submitting user's profile is written just
-  // before the re-score pass that calls this (see the /submit pipeline);
-  // anyone still missing a profile simply gets a clinical-only score.
-  const { rows: meProfRows } = await pool.query(
-    'SELECT mbti, disc, ocean FROM personality_profiles WHERE user_id = $1',
-    [userId],
-  );
-  const meProfile = meProfRows[0] || null;
-  const { rows: profRows } = await pool.query(
-    'SELECT user_id, mbti, disc, ocean FROM personality_profiles',
-  );
-  const profileById = {};
-  for (const p of profRows) profileById[p.user_id] = p;
+  // v8: the abstract MBTI/DISC/OCEAN personality blend was removed from matching,
+  // so the personality_profiles fetch (incl. a per-submit full-table scan) that
+  // used to live here is gone. Behavioral validation_score (above) is the only
+  // per-user signal the scorer now folds in (step-4 multiplier).
 
   // Build all the score rows in one pass, then bulk-INSERT in a single
   // round-trip. Previously this fired one INSERT per other user — at 100
@@ -406,6 +397,8 @@ async function scoreNewMatches(userId, newAnswers) {
     const combinedDealbreakers = [...new Set([...myDealbreakers, ...theirDealbreakers])];
     const result = calculateCompatibility(newAnswers, other.answers, {
       dealbreakers: combinedDealbreakers,
+      validationA:  myValidation,
+      validationB:  other.validation_score != null ? Number(other.validation_score) : undefined,
     });
 
     // NOTE: hard-blocked pairs are NO LONGER skipped. We used to `continue`

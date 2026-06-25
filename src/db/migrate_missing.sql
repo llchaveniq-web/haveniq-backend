@@ -15,6 +15,11 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALS
 -- v8 (1d): hard/soft match deal-breakers the app saves via PATCH /users/me.
 -- { smokeFree, petsOk, quietHours, cleanlinessMin, maxBudget, leaseLength, moveInBy }
 ALTER TABLE users ADD COLUMN IF NOT EXISTS match_dealbreakers JSONB DEFAULT '{}'::jsonb;
+-- 2d: behavioral-truth. Latest synced validation_score [0,1] + its sample size;
+-- fed into the scorer's step-4 multiplier. (validation_score may already exist
+-- from the leaderboard — IF NOT EXISTS keeps this idempotent.)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS validation_score        NUMERIC;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS validation_sample_size  INTEGER;
 
 -- The original quiz_answers table on Railway lacked the `completed` column
 -- that /quiz/submit relies on. Caused every real student's submit to 500

@@ -269,10 +269,18 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   const _cv = (v) => (v.length < 10 ? 0.6 : (new Set(v).size <= 2 ? 0.7 : 1.0));
   const conf = Math.min(_cv(_confIdx(A)), _cv(_confIdx(B)));
 
+  // PART-0 step 4 — behavioral-validation multiplier (±7.5%). Each user's synced
+  // validation_score in [0,1] (default 0.5 = neutral / unknown). A pair whose
+  // self-report is behaviorally corroborated gets a small lift; contradicted, a
+  // small penalty. Both unknown → mult 1.0 → no change (so callers that don't
+  // pass it, incl. the test suite, are unaffected).
+  const v01 = (v) => (typeof v === 'number' && v >= 0 && v <= 1 ? v : 0.5);
+  const validationMult = 1 + 0.15 * ((v01(opts.validationA) + v01(opts.validationB)) / 2 - 0.5);
+
   // Calibrate (stretch around 50) so displayed scores use the full range.
   // No shared answers (maxScore === 0) → 0: can't score strangers.
   let finalPct = maxScore > 0
-    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * conf)))
+    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * conf * validationMult)))
     : 0;
 
   // Dealbreaker ceiling is applied LAST — nothing scores above its cap.
@@ -290,6 +298,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   return {
     finalPct,
     confidence: conf,
+    validationMultiplier: Math.round(validationMult * 100) / 100,  // step-4 behavioral lift/penalty
     isHardBlocked: false,   // v8 uses caps, not hard zeroes
     isSoftBlocked,
     capReason,              // 'smoking' | 'alcohol' | 'overnight' | null

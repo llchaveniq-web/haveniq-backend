@@ -66,6 +66,25 @@ router.post('/batch', requireAuth, async (req, res) => {
     client.release();
   }
 
+  // 2d: persist the latest behavioral validation_score onto the user so the
+  // scorer's step-4 multiplier can read a live value (telemetry_events keeps
+  // the full history; users.validation_score is the current snapshot). Score is
+  // [0,1]; best-effort so a persist hiccup never fails the telemetry batch.
+  try {
+    const vEvents = valid.filter(e =>
+      e.type === 'validation_score' && e.payload &&
+      typeof e.payload.score === 'number' && e.payload.score >= 0 && e.payload.score <= 1);
+    if (vEvents.length) {
+      const latest = vEvents.reduce((a, b) => (b.timestamp > a.timestamp ? b : a));
+      await pool.query(
+        `UPDATE users SET validation_score = $1, validation_sample_size = $2 WHERE id = $3`,
+        [latest.payload.score, Number.isInteger(latest.payload.sampleSize) ? latest.payload.sampleSize : null, userId],
+      );
+    }
+  } catch (e) {
+    console.error('[telemetry] validation_score persist failed:', e.message);
+  }
+
   res.json({ accepted: valid.length, dropped: events.length - valid.length });
 });
 
