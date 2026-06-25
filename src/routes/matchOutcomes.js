@@ -262,4 +262,92 @@ router.get('/bot-admin/match-outcomes-summary', requireBotToken, async (req, res
   }
 });
 
+// ── 2c: Bot-admin weight-learning scaffolding ──────────────────────────────
+// Proposes recalibrated PART-0 weights from real outcomes — REGULARISED (shrunk
+// toward the CURRENT weights until N is large) and MANUAL: it never edits
+// scoring.js. The founder reviews this quarterly and, if a proposal holds up,
+// updates QUESTION_POINTS in services/scoring.js AND the app's quizStore.ts in
+// lockstep, then recomputes. Dormant (ready:false) until enough decided outcomes.
+router.get('/bot-admin/weight-learning', requireBotToken, async (req, res) => {
+  await ensureTable();
+  const { QUESTION_POINTS, OPTION_COUNTS } = require('../services/scoring');
+  const MIN_N = 50;
+
+  // Option index out of the wire shape ({type,index} | {index} | bare number).
+  const idx = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+    if (typeof v === 'object') return idx(v.index ?? v.value);
+    return null;
+  };
+  const POSITIVE = new Set(['met_in_person', 'moved_in_together', 'lease_signed']);
+  const NEGATIVE = new Set(['decided_not_to_continue', 'lost_contact', 'ended_roommate_relationship']);
+  const isPositive = (o, details) => {
+    if (POSITIVE.has(o)) return true;
+    if (NEGATIVE.has(o)) return false;
+    const ans = details && details.answer;
+    if (ans === 'yes') return true;
+    if (ans === 'no')  return false;
+    return null; // unknown — excluded from the denominator
+  };
+
+  try {
+    const { rows } = await pool.query(`
+      SELECT mo.outcome, mo.details, ra.answers AS a, oa.answers AS b
+        FROM match_outcomes mo
+        LEFT JOIN quiz_answers ra ON ra.user_id = mo.reporter_id
+        LEFT JOIN quiz_answers oa ON oa.user_id = mo.other_user_id
+       WHERE mo.outcome <> 'still_chatting'`);
+
+    const liveIds = Object.keys(QUESTION_POINTS).map(Number);
+    const stat = {}; for (const q of liveIds) stat[q] = { posSum: 0, posN: 0, negSum: 0, negN: 0 };
+    let decided = 0;
+
+    for (const r of rows) {
+      const pos = isPositive(r.outcome, r.details);
+      if (pos === null) continue;
+      decided++;
+      const A = r.a || {}, B = r.b || {};
+      for (const q of liveIds) {
+        const ai = idx(A[q]), bi = idx(B[q]);
+        if (ai == null || bi == null) continue;
+        const maxDiff = Math.max(1, (OPTION_COUNTS[q] || 4) - 1);
+        const agree = 1 - Math.abs(ai - bi) / maxDiff;   // 0..1
+        if (pos) { stat[q].posSum += agree; stat[q].posN++; }
+        else     { stat[q].negSum += agree; stat[q].negN++; }
+      }
+    }
+
+    const lambda = Math.min(1, decided / 300);   // shrink toward prior until N is large
+    const r2 = (x) => (x == null ? null : Math.round(x * 100) / 100);
+    const proposals = liveIds.map(q => {
+      const s = stat[q];
+      const posAvg = s.posN ? s.posSum / s.posN : null;
+      const negAvg = s.negN ? s.negSum / s.negN : null;
+      // Predictive lift: do pairs that AGREED on this question succeed more than
+      // pairs that disagreed? Positive lift → the question separates winners → up-weight.
+      const signal  = (posAvg != null && negAvg != null) ? (posAvg - negAvg) : 0;  // -1..1
+      const current = QUESTION_POINTS[q];
+      const dataTarget = Math.max(0, current * (1 + signal));
+      const proposed   = Math.round(current * (1 - lambda) + dataTarget * lambda);
+      return { qid: q, current, posAvgAgreement: r2(posAvg), negAvgAgreement: r2(negAvg), predictiveSignal: r2(signal), proposedWeight: proposed };
+    }).sort((a, b) => (b.predictiveSignal ?? 0) - (a.predictiveSignal ?? 0));
+
+    res.json({
+      ready: decided >= MIN_N,
+      decided_outcomes: decided,
+      shrink_lambda: r2(lambda),
+      method: 'per-question agreement lift (positive vs negative outcomes), shrunk toward current weights by lambda = min(1, N/300)',
+      action: decided >= MIN_N
+        ? 'HUMAN REVIEW before applying. If a proposal holds, edit QUESTION_POINTS in services/scoring.js AND app quizStore.ts in lockstep, then recompute.'
+        : `Illustrative only — need >= ${MIN_N} decided outcomes (have ${decided}).`,
+      proposals,
+    });
+  } catch (err) {
+    console.error('[weight-learning] failed:', err);
+    res.status(500).json({ error: 'weight-learning failed' });
+  }
+});
+
 module.exports = router;
