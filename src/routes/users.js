@@ -263,6 +263,17 @@ const validators = {
     typeof x === 'string' &&
     ['sleep', 'cleanliness', 'substances', 'alcohol', 'money', 'guests', 'communication', 'noise', 'space'].includes(x)
   ),
+  // v8 hard/soft match deal-breakers (1d). Small JSON object the app saves so
+  // the match query can filter on it. Strict: only known keys, correct types.
+  match_dealbreakers: v => v != null && typeof v === 'object' && !Array.isArray(v) &&
+    Object.keys(v).every(k => ['smokeFree','petsOk','quietHours','cleanlinessMin','maxBudget','leaseLength','moveInBy'].includes(k)) &&
+    (v.smokeFree      === undefined || typeof v.smokeFree  === 'boolean') &&
+    (v.petsOk         === undefined || typeof v.petsOk     === 'boolean') &&
+    (v.quietHours     === undefined || typeof v.quietHours === 'boolean') &&
+    (v.cleanlinessMin === undefined || ['any','moderate','very_clean','spotless'].includes(v.cleanlinessMin)) &&
+    (v.maxBudget      === undefined || v.maxBudget === null || (Number.isInteger(v.maxBudget) && v.maxBudget >= 0 && v.maxBudget <= 100000)) &&
+    (v.leaseLength    === undefined || (typeof v.leaseLength === 'string' && v.leaseLength.length <= 20)) &&
+    (v.moveInBy       === undefined || (typeof v.moveInBy === 'string' && v.moveInBy.length <= 20)),
   // Voluntary writing sample — feeds derivePersonality with richer tone +
   // voice signal than multiple-choice alone (Chad's "orthogonal info"
   // recommendation from the 2026-05-26 product session). 1000-char cap
@@ -310,6 +321,8 @@ router.patch('/me', requireAuth, async (req, res) => {
       // validator below caps the array length and tag vocabulary so a
       // malformed payload can't flood the scorer with bogus IDs.
       dealbreakers:   'dealbreakers',
+      // v8 hard/soft match filters (smokeFree/petsOk/cleanlinessMin/maxBudget…).
+      matchDealbreakers: 'match_dealbreakers',
       // Voluntary writing sample — see validator for rationale + cap.
       writingSample:  'writing_sample',
       // Instagram handle — collected as text today; OAuth scraping is a
@@ -334,6 +347,8 @@ router.patch('/me', requireAuth, async (req, res) => {
       // it was typed. Everything else writes through untouched.
       if (snake === 'instagram_handle' && typeof v === 'string' && v.startsWith('@')) {
         values.push(v.slice(1));
+      } else if (snake === 'match_dealbreakers') {
+        values.push(JSON.stringify(v));   // jsonb column — store as JSON text
       } else {
         values.push(v);
       }

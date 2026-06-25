@@ -12,6 +12,9 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods    TEXT[];
 ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status  TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_email     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALSE;
+-- v8 (1d): hard/soft match deal-breakers the app saves via PATCH /users/me.
+-- { smokeFree, petsOk, quietHours, cleanlinessMin, maxBudget, leaseLength, moveInBy }
+ALTER TABLE users ADD COLUMN IF NOT EXISTS match_dealbreakers JSONB DEFAULT '{}'::jsonb;
 
 -- The original quiz_answers table on Railway lacked the `completed` column
 -- that /quiz/submit relies on. Caused every real student's submit to 500

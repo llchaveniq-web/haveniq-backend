@@ -145,11 +145,18 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // still saw, and scored high with, excluded genders). Empty preference or an
     // undeclared / "Prefer not to say" gender stays inclusive.
     const { rows: meUserRows } = await pool.query(
-      'SELECT gender, looking_for FROM users WHERE id = $1',
+      'SELECT gender, looking_for, match_dealbreakers FROM users WHERE id = $1',
       [userId],
     );
     const myGender     = meUserRows[0]?.gender ?? null;
     const myLookingFor = Array.isArray(meUserRows[0]?.looking_for) ? meUserRows[0].looking_for : [];
+    // v8 deal-breaker hard-filter (1d). Only the TRUE-hard, data-backed breaker
+    // is hard-excluded (smoke-free, from Q51) so a cold-start deck never empties
+    // on the soft ones. No-op until the viewer sets it (the app's deal-breaker
+    // UI is still gated, so this is dormant in production until that ships).
+    const myBreakers = (meUserRows[0]?.match_dealbreakers && typeof meUserRows[0].match_dealbreakers === 'object')
+      ? meUserRows[0].match_dealbreakers : {};
+    const smokeFree  = myBreakers.smokeFree === true;
 
     const { rows } = await pool.query(
       `SELECT
@@ -188,6 +195,9 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          (cr.from_user = $1 AND cr.to_user = u.id) OR
          (cr.to_user = $1   AND cr.from_user = u.id)
        )
+       -- candidate's own quiz answers, for deal-breaker filters (Q51 smoke).
+       -- quiz_answers is one row per user (UNIQUE user_id) so this never fans out.
+       LEFT JOIN quiz_answers dq ON dq.user_id = u.id
        WHERE (cs.user_a = $1 OR cs.user_b = $1)
          AND cs.is_hard_blocked = FALSE
          AND cs.score >= ${MATCH_MIN_SCORE}
@@ -223,10 +233,19 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
            OR $3::text IS NULL OR $3::text = 'Prefer not to say'
            OR $3::text = ANY(u.looking_for)
          )
-         ${school ? 'AND u.school = $4' : ''}
+         -- v8 deal-breaker hard-filter (1d): if the viewer set smoke-free, drop
+         -- candidates who smoke/vape at home (Q51 index >= 2). Unanswered (→0) is
+         -- not excluded. $4 = FALSE (unset) short-circuits to no filtering.
+         AND (
+           $4::boolean = FALSE
+           OR COALESCE((dq.answers->'51'->>'index')::int, (dq.answers->>'51')::int, 0) < 2
+         )
+         ${school ? 'AND u.school = $5' : ''}
        ORDER BY cs.score DESC
        LIMIT 50`,
-      school ? [userId, myLookingFor, myGender, school] : [userId, myLookingFor, myGender]
+      school
+        ? [userId, myLookingFor, myGender, smokeFree, school]
+        : [userId, myLookingFor, myGender, smokeFree]
     );
 
     const matches = rows.map(r => ({
