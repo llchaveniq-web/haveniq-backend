@@ -1038,17 +1038,25 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
       answer_value: val,
     }));
 
-    if (answers.length < 10) {
+    // v8: gate readiness on the LIVE scored ids only (the 14 in the scoring
+    // engine — derived from QUESTION_POINTS so this can never drift out of
+    // lockstep). A profile made only of REMOVED-id answers must NOT read as
+    // ready (otherwise the app shows "composing…" forever or builds a portrait
+    // from questions we no longer score). >=10 live answers = the core is done.
+    const { QUESTION_POINTS } = require('../services/scoring');
+    const LIVE_IDS = new Set(Object.keys(QUESTION_POINTS).map(Number));
+    const liveAnswers = answers.filter(a => LIVE_IDS.has(a.question_id));
+    if (liveAnswers.length < 10) {
       return res.json({
         ready: false,
-        reason: 'You need to answer at least 10 quiz questions before the reveal is meaningful.',
+        reason: 'Answer at least 10 of the core quiz questions to unlock your reveal.',
         sections: [],
       });
     }
 
     const profile  = profileRes.rows[0] || {};
     const firstName = userRes.rows[0]?.first_name || 'you';
-    const answersHash = hashAnswers(answers);
+    const answersHash = hashAnswers(liveAnswers);  // key the cache on the live answers only
 
     // 2. Cache check
     const cached = await pool.query(
@@ -1083,7 +1091,7 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
     // referencing Q-numbers in output — it must paraphrase the theme.
     const QUIZ_QUESTIONS = require('../data/quizQuestions');
     const questionsById = Object.fromEntries(QUIZ_QUESTIONS.map(q => [q.id, q]));
-    const answerLines = answers
+    const answerLines = liveAnswers
       .slice()
       .sort((a, b) => a.question_id - b.question_id)
       .map(r => {
@@ -1097,9 +1105,11 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
       .filter(Boolean)
       .join('\n');
 
-    const prompt = `You are writing the "About You" editorial reveal for HavenIQ, a college roommate-matching app. The user just finished a 32-question compatibility quiz grounded in attachment theory (Bowlby), Big Five / OCEAN, Gottman communication research, polyvagal regulation, HEXACO Honesty-Humility, and executive function research.
+    const prompt = `You are writing the "About You" editorial reveal for HavenIQ, a college roommate-matching app. ${firstName} just finished the roommate-fit quiz.
 
-This screen is the "wow, this app actually knows me" moment — the single most important brand surface in HavenIQ. The user is about to see if their matches are good; first they need to see THEMSELVES reflected back with editorial honesty + warmth.
+This is the "wow, this app actually gets how I live" moment — the single most important brand surface in HavenIQ. Before they see their matches, they see THEMSELVES reflected back with editorial honesty and warmth.
+
+Write a LIFESTYLE PORTRAIT: how they keep their space, run their day, handle friction with the people they live with, and what they need from a home. This is about how they LIVE, not who they "are" — ground everything in their actual answers below.
 
 USER: ${firstName}
 
@@ -1107,44 +1117,28 @@ THEIR ACTUAL ANSWERS — each item is the FULL question text + the option they c
 
 ${answerLines}
 
-THEIR COMPUTED PROFILE:
-- Archetype: ${profile.archetype ?? '(not yet computed)'}
-- MBTI shorthand: ${profile.mbti ?? '?'}
-- Big Five (0-100): ${JSON.stringify(profile.ocean ?? {})}
-- Summary: ${profile.summary ?? '(not computed)'}
-- Strengths: ${JSON.stringify(profile.strengths ?? [])}
-- Growth areas: ${JSON.stringify(profile.growth_areas ?? [])}
-
-WRITE 5 EDITORIAL SECTIONS. Each:
-- 40-60 words — tight and punchy, NO filler. This is a quick, satisfying read, not an essay. Every sentence earns its place.
-- Second-person voice ("you", not "the user")
-- Reference at least ONE specific behavior from their answers — but PARAPHRASE the question theme. Example: GOOD = "you said you go quiet when frustrated" / BAD = "your Q9 answer means..."
-- NEVER mention question numbers, Q-ids, or "Q40 / question 14" — the user has no idea what those refer to. They only know they answered 32 questions.
-- Specific, observational, NOT horoscope-vague
-- Warm-but-honest tone — like a thoughtful friend, not a marketing voice
-- NO clichés ("you're amazing!", "what makes you you!")
-- NO advice; pure observation
-- Lowercase except proper nouns
+WRITE 4 EDITORIAL SECTIONS. Each:
+- 40-70 words — tight and specific, NO filler. A quick satisfying read, not an essay. Every sentence earns its place.
+- Second-person ("you", not "the user"), lowercase except proper nouns.
+- Reference at least ONE concrete behavior from their answers, PARAPHRASED into plain everyday language. GOOD = "you clean as you go, and a sink full of dishes genuinely gets to you" / BAD = "your cleanliness score is high" or "your Q50 answer means...".
+- Specific and observational, never horoscope-vague. Warm but honest — like a perceptive friend, not a marketing voice. Pure observation, NO advice, no clichés.
 - ${NO_DASH_RULE}
-- Never invent answers the user didn't give. If the answer list above doesn't include a topic, don't write about it.
 
-NOT A DIAGNOSIS — this is the most important rule:
-- These frameworks (attachment, polyvagal, shadow, etc.) are LENSES for describing everyday behavior, never a clinical assessment. The reader is a college student, not a patient.
-- NEVER use clinical, diagnostic, or disorder language. Write the observable behavior in plain words. GOOD: "you go quiet and need space before you can talk it out." BAD: "you have an avoidant attachment style" / "your nervous system is dysregulated" / "this suggests trauma" / "you show anxious attachment."
-- Never label the person anxious/avoidant/traumatized/insecure, never reference mental illness, never imply a disorder or that something is wrong with them.
-- If an answer touches something heavy (a hard childhood, loss, conflict), treat it with lightness and respect and move on — do NOT psychoanalyze it. This is a roommate app, not therapy.
+HARD RULES — do not break these:
+- This is a roommate app, NOT a personality test or therapy. NEVER use trait labels, personality types, or psychology framework names (no "attachment", "Big Five", "OCEAN", "introvert/extravert", "conscientious", "secure/anxious/avoidant", "nervous system", MBTI, "shadow", etc.). Describe the observable everyday behavior in plain words.
+- NEVER diagnose, pathologize, or imply something is wrong with them. No clinical or disorder language.
+- NEVER mention question numbers or Q-ids — the user has no idea what those are. Paraphrase the theme.
+- Never invent answers. If the answer list doesn't cover a topic, don't write about it.
 
-SECTION KICKERS (exactly these, in this order):
-1. THE WAY YOU REGULATE
-   — about how their nervous system handles stress, conflict, overstimulation
-2. THE WAY YOU REPAIR
-   — about how they handle the morning-after a fight, who initiates, who receives
-3. THE WAY YOU ATTACH
-   — about whether they reach out when they need someone, or pull away
-4. YOUR HONEST EDGE
-   — about their integrity / shadow side (HEXACO + Jungian Shadow Qs)
-5. WHAT YOU NEED FROM A HOME
-   — about sensory, lifestyle, cleanliness, hosting style
+SECTION KICKERS (exactly these four, in this order):
+1. HOW YOU KEEP SPACE
+   — cleanliness, clutter, the shared-space standard they hold
+2. HOW YOU RUN YOUR DAY
+   — their rhythm: when they sleep, how they host, what they need in order to focus
+3. HOW YOU HANDLE FRICTION
+   — what they do when something bugs them: raise it or sit on it, who repairs first, whether they follow through on their share of the work
+4. WHAT YOU NEED FROM A HOME
+   — the non-negotiables: kitchen + food, drinking / smoking / overnight comfort, money
 
 Each section ALSO needs a one-line "pull quote" — a short italic excerpt that could be lifted out as a Pinterest-style image quote. 8-14 words. Punchy.
 
@@ -1152,12 +1146,12 @@ Output ONLY valid JSON, no markdown:
 {
   "sections": [
     {
-      "kicker": "THE WAY YOU REGULATE",
-      "title": "<5-9 word title in lowercase>",
-      "body": "<70-120 word editorial paragraph>",
-      "pullQuote": "<8-14 word italic excerpt>"
+      "kicker": "HOW YOU KEEP SPACE",
+      "title": "<5-9 word lowercase title>",
+      "body": "<40-70 word paragraph>",
+      "pullQuote": "<8-14 word excerpt>"
     },
-    ... (5 sections total)
+    ... (4 sections total, in the kicker order above)
   ]
 }`;
 
@@ -1215,7 +1209,10 @@ Output ONLY valid JSON, no markdown:
       typeof s.title  === 'string' && s.title.trim().length  > 0 &&
       typeof s.body   === 'string' && s.body.trim().length   > 20  // bodies should be real prose, not single words
     );
-    if (sections.length < 5) {
+    // Contract: 3-5 sections, each with non-empty kicker/title and a body >20
+    // chars (so a malformed/blank section never renders as empty space). We
+    // prompt for 4; accept >=3.
+    if (sections.length < 3) {
       console.error('[about-you] validation failed:', { rawCount: sectionsRaw.length, validCount: sections.length });
       return res.json({
         ready: false,
