@@ -51,6 +51,12 @@ if (!isProd && allowedOrigins.includes('*')) {
 // class of bug (Sentry NODE-1) can never re-fire just because a user
 // hit a different alias of our own frontend.
 const PAGES_DEV_HOST = /^https:\/\/([a-z0-9-]+\.)?haveniq-app\.pages\.dev$/i;
+// Production app origins — ALWAYS trusted for both the HTTP API and the
+// socket.io server (presence / typing / live incoming messages), regardless of
+// the CLIENT_URL env var. socket.io reuses this same `corsOrigin`, so a missing
+// or misset CLIENT_URL can no longer silently block real-time on the live app.
+// `app.haveniq.org` = the SPA; `haveniq.org` = the marketing site.
+const PROD_APP_HOST = /^https:\/\/(app\.)?haveniq\.org$/i;
 
 const corsOrigin = allowedOrigins.includes('*')
   ? true  // express-cors treats `true` as "reflect request origin" — works for browsers but doesn't accept credentials with `*` literal
@@ -58,8 +64,9 @@ const corsOrigin = allowedOrigins.includes('*')
       // Same-origin / curl requests have no Origin header — let them through.
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
-      // Our own Cloudflare Pages aliases — always trusted, regardless of CLIENT_URL.
-      if (PAGES_DEV_HOST.test(origin)) return cb(null, true);
+      // Our own production origins + Cloudflare Pages aliases — always trusted,
+      // regardless of CLIENT_URL.
+      if (PROD_APP_HOST.test(origin) || PAGES_DEV_HOST.test(origin)) return cb(null, true);
       cb(new Error(`CORS: ${origin} not in allowed list`));
     };
 
@@ -128,20 +135,18 @@ app.use(
   require('./routes/resendWebhook'),
 );
 
-// ── Socket.io (real-time messaging) ──────────────────────────────────────
+// ── Socket.io (real-time: presence / typing / live incoming + read receipts) ─
 //
-// ⚠️  CURRENTLY UNUSED IN PRODUCTION (as of 2026-05-17). The web client at
-// app.haveniq.org goes through the HTTP messaging path only (see
-// stores/matchStore.ts sendMessage). The socket.io handler below is left
-// in place because:
-//   1. The helper `sendPushToUser` (which IS used by HTTP routes) lives in
-//      this file alongside the socket setup,
-//   2. A future native iOS/Android build can connect for real-time delivery
-//      without re-architecting the server.
+// As of 2026-06-24 (1b) the web client at app.haveniq.org IS allowed to connect
+// (PROD_APP_HOST is trusted by corsOrigin above), so the app's messageSocket
+// can receive live incoming messages, typing dots, presence, and read receipts
+// without a refresh.
 //
-// If we ever wire the web client to use socket.io, audit for duplicate
-// message rows — the HTTP POST and the `send_message` socket event would
-// BOTH insert into `messages`, which would silently double messages.
+// ⚠️  MESSAGE SENDING STAYS ON THE HTTP PATH (matchStore.sendMessage → POST
+// /messages). The socket is RECEIVE-ONLY for the web client. Do NOT wire the
+// web client to emit `send_message`: the HTTP POST and the socket insert would
+// BOTH write to `messages` and silently double every sent message. (A future
+// native build can pick ONE path.)
 const io = new Server(server, {
   cors: {
     origin: corsOrigin,
