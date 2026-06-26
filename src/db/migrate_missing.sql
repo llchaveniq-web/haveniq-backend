@@ -105,6 +105,13 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at DESC);
 
+-- OTP purpose tag — distinguishes signup codes from logged-in .edu
+-- re-verification codes ('email_verification') so the two streams share ONE
+-- table/mailer/limiter without consuming each other's codes. Existing rows
+-- backfill to 'signup' (the default), matching the live signup flow.
+ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT 'signup';
+CREATE INDEX IF NOT EXISTS idx_otp_email_purpose ON otp_codes(email, purpose);
+
 -- ── Roommate reviews ──────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS roommate_reviews (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

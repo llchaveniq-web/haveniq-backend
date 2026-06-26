@@ -37,7 +37,7 @@ function hashOtp(code) {
     .update(`${code}:${process.env.JWT_SECRET}`)
     .digest('hex');
 }
-const { signToken } = require('../middleware/auth');
+const { signToken, requireAuth } = require('../middleware/auth');
 const { signChallengeToken } = require('./twoFactor');
 const analytics = require('../services/analytics');
 
@@ -596,6 +596,149 @@ router.post('/refresh', refreshLimitIp, async (req, res) => {
     res.json({ token: signToken(decoded.userId) });
   } catch {
     res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+// ═══ Logged-in .edu re-verification ════════════════════════════════════════
+// Lets an already-signed-in student verify their school email and earn the
+// is_verified badge. Acts ONLY on the token-derived user + their account .edu —
+// never an email from the body (else a user could verify an address they don't
+// own). Reuses the signup OTP machinery (otp_codes / generateOTP / hashOtp /
+// sendOTPEmail / MAX_OTP_ATTEMPTS) with purpose='email_verification' so it's
+// ONE code path, not a parallel one.
+
+// Resend limiter: ~1 / 30s, keyed by the token user (no body email here).
+// Mirrors the send-code limiter's intent for the authenticated case.
+const resendVerifyLimit = rateLimit({
+  windowMs: 30 * 1000,
+  max: 1,
+  message: { error: 'Please wait a moment before requesting another code.' },
+  keyGenerator: (req) => (req.user?.id ? `uid:${req.user.id}` : ipKeyGenerator(req)),
+});
+
+// ── POST /auth/resend-verification (auth; no body) ─────────────────────────
+router.post('/resend-verification', requireAuth, resendVerifyLimit, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const email  = (req.user.email || '').toLowerCase().trim();
+
+    if (!/\.edu$/i.test(email)) {
+      return res.status(400).json({ error: 'Your account email is not a .edu address.' });
+    }
+
+    const { rows } = await pool.query('SELECT is_verified FROM users WHERE id = $1', [userId]);
+    if (!rows[0]) return res.status(404).json({ error: 'User not found.' });
+    if (rows[0].is_verified) return res.status(200).json({ ok: true, alreadyVerified: true });
+
+    // Invalidate any prior, still-unused verification codes for this user so
+    // only the newest is live. Scoped to purpose so it never touches a signup code.
+    await pool.query(
+      `UPDATE otp_codes SET used = TRUE
+        WHERE email = $1 AND purpose = 'email_verification' AND used = FALSE`,
+      [email]
+    );
+
+    const code      = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+    await pool.query(
+      `INSERT INTO otp_codes (email, code, expires_at, purpose)
+       VALUES ($1, $2, $3, 'email_verification')`,
+      [email, hashOtp(code), expiresAt]
+    );
+
+    if (process.env.NODE_ENV !== 'production') console.log(`📧 re-verify OTP for ${email}: ${code}`);
+
+    // Best-effort send (same posture as /send-code — never block on Resend).
+    try { await sendOTPEmail(email, code, req.user.first_name || ''); }
+    catch (e) { console.error('[resend-verification] email send failed:', e?.message); }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('resend-verification error:', err);
+    return res.status(500).json({ error: 'Failed to send verification code.' });
+  }
+});
+
+// ── POST /auth/verify-email (auth; body: { code }) ─────────────────────────
+// The ONLY place is_verified may be set to true post-signup.
+router.post('/verify-email', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const email  = (req.user.email || '').toLowerCase().trim();
+    const code   = (req.body?.code ?? '').toString().trim();
+    if (!code) return res.status(400).json({ error: 'Code required.' });
+
+    const { rows: otpRows } = await pool.query(
+      `SELECT id, code, attempts FROM otp_codes
+        WHERE email = $1 AND purpose = 'email_verification' AND used = FALSE AND expires_at > NOW()
+        ORDER BY created_at DESC LIMIT 1`,
+      [email]
+    );
+    // Missing / expired → 4xx (NOT 5xx) so the app shows "incorrect or expired".
+    if (!otpRows[0]) {
+      return res.status(400).json({ error: 'That code is incorrect or expired. Request a new one.' });
+    }
+    const rec = otpRows[0];
+
+    // Brute-force guard: atomically bump + cap attempts (mirrors /verify-code).
+    const { rows: bumped } = await pool.query(
+      'UPDATE otp_codes SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts',
+      [rec.id]
+    );
+    if ((bumped[0]?.attempts ?? rec.attempts + 1) > MAX_OTP_ATTEMPTS) {
+      await pool.query('DELETE FROM otp_codes WHERE id = $1', [rec.id]);
+      return res.status(400).json({ error: 'Too many attempts. Request a new code.' });
+    }
+
+    // Hashed compare (cleartext fallback for parity with /verify-code).
+    const stored = rec.code;
+    let equal = false;
+    if (stored === code) {
+      equal = true;
+    } else if (stored && stored.length === 64) {
+      equal = crypto.timingSafeEqual(
+        Buffer.from(stored, 'hex'),
+        Buffer.from(hashOtp(code), 'hex'),
+      );
+    }
+    if (!equal) {
+      return res.status(400).json({ error: 'That code is incorrect or expired. Request a new one.' });
+    }
+
+    // Valid → grant the badge, then delete the code (single-use).
+    await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [userId]);
+    await pool.query('DELETE FROM otp_codes WHERE id = $1', [rec.id]);
+
+    return res.json({ ok: true, isVerified: true });
+  } catch (err) {
+    console.error('verify-email error:', err);
+    return res.status(500).json({ error: 'Verification failed.' });
+  }
+});
+
+// ── GET /auth/me (auth) ────────────────────────────────────────────────────
+// Current user for the app to refetch after verifying. `isVerified` is the
+// field the frontend reads.
+router.get('/me', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, email, school, is_verified, trust_score, quiz_completed
+         FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'User not found.' });
+    const u = rows[0];
+    return res.json({
+      id:            u.id,
+      email:         u.email,
+      school:        u.school,
+      isVerified:    u.is_verified,
+      trustScore:    u.trust_score,
+      quizCompleted: u.quiz_completed,
+    });
+  } catch (err) {
+    console.error('auth/me error:', err);
+    return res.status(500).json({ error: 'Failed to load user.' });
   }
 });
 
