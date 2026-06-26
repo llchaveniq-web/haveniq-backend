@@ -126,10 +126,10 @@ test('ranking quality: score decreases monotonically as disagreement grows', () 
 
 // ── diffScore option-count normalization (unchanged in v8) ──────────────────
 
-test('diffScore: 4-option curve is unchanged (100/60/20/0)', () => {
+test('diffScore: 4-option v9 curve (100/85/50/0)', () => {
   assert.equal(diffScore(100, 0, 4), 100);
-  assert.equal(diffScore(100, 1, 4), 60);
-  assert.equal(diffScore(100, 2, 4), 20);
+  assert.equal(diffScore(100, 1, 4), 85);   // v9: one notch = 15% off (was 40%)
+  assert.equal(diffScore(100, 2, 4), 50);
   assert.equal(diffScore(100, 3, 4), 0);
 });
 
@@ -138,15 +138,15 @@ test('diffScore: a full 2-option (binary) disagreement scores 0, not 60', () => 
   assert.equal(diffScore(100, 1, 2), 0);
 });
 
-test('diffScore: 3- and 5-option scales normalize onto the 0..3 curve', () => {
-  assert.equal(diffScore(100, 1, 3), 40);
+test('diffScore: 3- and 5-option scales normalize onto the 0..3 v9 curve', () => {
+  assert.equal(diffScore(100, 1, 3), 68);   // v9
   assert.equal(diffScore(100, 2, 3), 0);
   assert.equal(diffScore(100, 4, 5), 0);
-  assert.equal(diffScore(100, 1, 5), 70);
+  assert.equal(diffScore(100, 1, 5), 89);   // v9
 });
 
 test('diffScore: missing option count defaults to 4-option behavior', () => {
-  assert.equal(diffScore(100, 1, undefined), 60);
+  assert.equal(diffScore(100, 1, undefined), 85);   // v9
 });
 
 test('Q14 (contempt) is the binary item: full clash scores below a 4-opt one-step gap', () => {

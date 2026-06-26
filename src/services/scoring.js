@@ -39,9 +39,9 @@ const QUESTION_POINTS = {
   51: 15,  // smoke / vape / cannabis at home
   // ── Behavioral-conflict scenarios — ~39% ──
   14: 35,  // contempt (Gottman #1 predictor)
-  57: 30,  // executive function — chore follow-through
+  57: 18,  // executive function — v9: was 30 (Q50 already carries tidiness)
   60: 30,  // repair receptivity (after an apology)
-  63: 28,  // repair initiation
+  63: 16,  // repair initiation — v9: was 28 (Q60 already carries repair)
   62: 28,  // boundary-setting
   // ── Money — ~8% ──
   56: 30,  // spending alignment
@@ -150,9 +150,9 @@ function diffScore(pts, diff, numOptions) {
   const eq = (diff * 3) / maxDiff;            // distance on the 0..3 reference scale
   let frac;                                   // piecewise-linear: 0→1, 1→.6, 2→.2, 3→0
   if (eq <= 0)      frac = 1;
-  else if (eq <= 1) frac = 1 - 0.4 * eq;
-  else if (eq <= 2) frac = 0.6 - 0.4 * (eq - 1);
-  else if (eq <= 3) frac = 0.2 - 0.2 * (eq - 2);
+  else if (eq <= 1) frac = 1 - 0.15 * eq;          // v9: one notch = 15% (was 40%)
+  else if (eq <= 2) frac = 0.85 - 0.35 * (eq - 1);
+  else if (eq <= 3) frac = 0.5 - 0.5 * (eq - 2);
   else              frac = 0;
   return Math.round(pts * frac);
 }
@@ -166,7 +166,7 @@ function diffScore(pts, diff, numOptions) {
 // higher, so ranking + honesty are preserved; nothing is fabricated. GAIN/MID
 // are a first-pass calibration — retune against real paired-outcome data
 // (the N≈50 60-day check-ins the weights comment already anticipates).
-const CAL_GAIN = 1.3;
+const CAL_GAIN = 1.15; // v9: was 1.3
 const CAL_MID  = 50;
 function calibrate(rawPct) {
   const stretched = CAL_MID + (rawPct - CAL_MID) * CAL_GAIN;
@@ -252,6 +252,10 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   const ov0 = optIdx(A, 52), ov1 = optIdx(B, 52);  // overnight partners, opposite ends
   if (ov0 !== null && ov1 !== null && Math.abs(ov0 - ov1) >= 3) {
     cap = Math.min(cap, 55); capReason = capReason || 'overnight';
+  }
+  const cl0 = optIdx(A, 50), cl1 = optIdx(B, 50);  // v9: cleanliness, opposite ends
+  if (cl0 !== null && cl1 !== null && Math.abs(cl0 - cl1) >= 3) {
+    cap = Math.min(cap, 50); capReason = capReason || 'cleanliness';
   }
 
   const layer1Pct = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;
