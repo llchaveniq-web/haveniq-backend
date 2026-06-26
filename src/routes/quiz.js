@@ -895,6 +895,21 @@ router.post('/writing', requireAuth, async (req, res) => {
   }
 });
 
+// ── TEMP: key-gated one-shot recompute (REMOVE after the v9 backfill) ──────
+// GitHub Actions is out of free minutes, so the Match Recompute workflow can't
+// run. This fires the SAME recomputeAllMatches() that the bot endpoint uses, to
+// backfill v9 scores onto every completed user. No auth, throwaway key. DELETE
+// THIS ROUTE after running.
+router.get('/__recompute', async (req, res) => {
+  if (req.query.key !== 'recompute-7k29xqp') return res.status(403).json({ error: 'forbidden' });
+  try {
+    const result = await recomputeAllMatches();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
 // Exposed for the bot-admin recompute tool (regenerates missing/stale
 // compatibility_scores). Attaching to the router export avoids moving the
