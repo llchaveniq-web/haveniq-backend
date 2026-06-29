@@ -430,24 +430,30 @@ async function scoreNewMatches(userId, newAnswers) {
       result.shadowPenalty,
       JSON.stringify(result.breakdown),
       generateWhyMatched(result.breakdown, finalPct),
+      // Part 2: behavioral-validation layer. validationMultiplier is an honest
+      // 1.0 unless BOTH users have a real validation_score; preValidationPct is
+      // the headline before that multiplier.
+      result.preValidationPct,
+      result.validationMultiplier,
     ]);
   }
 
   if (rows.length === 0) return;
 
-  // Flatten into a single $1...$N param list. 8 columns per row.
-  const COLS = 8;
+  // Flatten into a single $1...$N param list. 10 columns per row.
+  const COLS = 10;
   const valuePlaceholders = rows
     .map((_, rowIdx) => {
       const base = rowIdx * COLS;
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`;
+      const ph = Array.from({ length: COLS }, (_, i) => `$${base + i + 1}`).join(', ');
+      return `(${ph})`;
     })
     .join(', ');
   const params = rows.flat();
 
   await pool.query(
     `INSERT INTO compatibility_scores
-       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched)
+       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier)
      VALUES ${valuePlaceholders}
      ON CONFLICT (user_a, user_b) DO UPDATE
      SET score          = EXCLUDED.score,
@@ -456,6 +462,8 @@ async function scoreNewMatches(userId, newAnswers) {
          shadow_penalty  = EXCLUDED.shadow_penalty,
          breakdown       = EXCLUDED.breakdown,
          why_matched     = EXCLUDED.why_matched,
+         pre_validation_pct    = EXCLUDED.pre_validation_pct,
+         validation_multiplier = EXCLUDED.validation_multiplier,
          calculated_at   = NOW()`,
     params,
   );

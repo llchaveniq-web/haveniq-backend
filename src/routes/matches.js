@@ -9,6 +9,7 @@ const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { recordPairingEvent } = require('../services/pairingOutcomes');
+const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
@@ -165,6 +166,8 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          cs.shadow_penalty,
          cs.breakdown,
          cs.why_matched,
+         cs.pre_validation_pct,
+         cs.validation_multiplier,
          u.id,
          u.first_name,
          u.last_name,
@@ -248,7 +251,16 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
         : [userId, myLookingFor, myGender, smokeFree]
     );
 
-    const matches = rows.map(r => ({
+    const matches = rows.map(r => {
+      // Part 2 honesty gate: only surface the behavioral-validation layer when
+      // the multiplier is genuinely ≠ 1.0 (BOTH users had a real validation_score
+      // at score time). At a neutral 1.0 we OMIT both fields so the app renders
+      // nothing — no "validated" badge without real signal (trust fraud).
+      const vMult = r.validation_multiplier != null ? Number(r.validation_multiplier) : 1;
+      const validationFields = (vMult !== 1 && r.pre_validation_pct != null)
+        ? { validationMultiplier: vMult, preValidationPct: r.pre_validation_pct }
+        : {};
+      return ({
       userId:        r.id,
       firstName:     r.first_name,
       lastName:      r.last_name,
@@ -288,7 +300,26 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       disc:          r.pairing_disc || null,
       connectStatus: r.connect_status || null,
       requestId:     r.connect_request_id || null,
-    }));
+      ...validationFields,
+    });
+    });
+
+    // Part 3 — personalized re-rank. If the viewer has a learned category-weight
+    // model (enough real connect/accept/decline history), order their feed by
+    // those learned priorities instead of raw compatibility. No model → the feed
+    // stays in compat order (today's exact behavior). The DISPLAYED compatScore
+    // is never changed — only the order is personalized, so no client change is
+    // needed and the pairwise number stays honest for both sides.
+    try {
+      const weights = await getUserCategoryWeights(userId);
+      if (weights) {
+        matches.sort((a, b) =>
+          personalRankScore(b.breakdown, weights, b.compatScore) -
+          personalRankScore(a.breakdown, weights, a.compatScore));
+      }
+    } catch (e) {
+      console.error('[matches/feed] personalize failed:', e.message);
+    }
 
     res.json(matches);
   } catch (err) {
@@ -320,7 +351,7 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
     // connect requests at guessed UUIDs. Require a real compatibility
     // row above the surface threshold AND no hard-block flag.
     const { rows: compat } = await pool.query(
-      `SELECT score, is_hard_blocked
+      `SELECT score, is_hard_blocked, breakdown
          FROM compatibility_scores
         WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
         LIMIT 1`,
@@ -373,6 +404,10 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
       score:  parseFloat(compat[0].score),
       school: req.user.school,
     }).catch(() => {});
+
+    // Part 3 learning loop: log the 'connect' decision with the category
+    // breakdown captured now, so per-user weights can be fit later. Best-effort.
+    logDecision(req.user.id, toUserId, 'connect', compat[0].breakdown);
 
     // Recipient-side analytics. The frontend already fires connect_request_sent
     // on the sender; this captures the matching event for the user being
@@ -434,6 +469,18 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
     if (!rows[0]) {
       return res.status(404).json({ error: 'Pending request not found' });
     }
+
+    // Part 3 learning loop: log the responder's accept/decline with the pair's
+    // category breakdown, so their per-user weights can learn from real choices.
+    // Best-effort and detached — a logging hiccup never affects the response.
+    pool.query(
+      `SELECT breakdown FROM compatibility_scores
+        WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+        LIMIT 1`,
+      [req.user.id, fromUserId],
+    ).then(({ rows: cs }) =>
+      logDecision(req.user.id, fromUserId, action, cs[0]?.breakdown)
+    ).catch(() => {});
 
     // If accepted, create a conversation and notify the original sender
     if (action === 'accept') {

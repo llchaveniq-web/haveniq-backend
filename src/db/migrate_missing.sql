@@ -50,6 +50,27 @@ CREATE TABLE IF NOT EXISTS compatibility_scores (
 );
 CREATE INDEX IF NOT EXISTS idx_scores_user_a ON compatibility_scores(user_a);
 CREATE INDEX IF NOT EXISTS idx_scores_user_b ON compatibility_scores(user_b);
+-- Part 2: behavioral-validation layer exposed per row. pre_validation_pct = the
+-- headline % BEFORE the multiplier; validation_multiplier defaults to a neutral
+-- 1.0 (only ≠1 when BOTH users have a real validation_score — honesty gate).
+ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS pre_validation_pct  INTEGER;
+ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS validation_multiplier NUMERIC(4,3) DEFAULT 1.0;
+
+-- ── Part 3: the learning loop ─────────────────────────────────
+-- Every connect / accept / decline, with the per-category compatibility
+-- breakdown captured AT decision time. services/decisionLearning.js fits
+-- per-user category weights from this and personalizes feed ORDER (never the
+-- displayed score). Append-only; no fabricated rows — populated solely by real
+-- user decisions.
+CREATE TABLE IF NOT EXISTS match_decisions (
+  id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id            UUID REFERENCES users(id) ON DELETE CASCADE,
+  target_user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+  decision           TEXT NOT NULL CHECK (decision IN ('connect','accept','decline')),
+  category_breakdown JSONB,
+  created_at         TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_match_decisions_user ON match_decisions(user_id, created_at DESC);
 
 -- ── Connect requests (unblocks /users/me) ─────────────────────
 CREATE TABLE IF NOT EXISTS connect_requests (

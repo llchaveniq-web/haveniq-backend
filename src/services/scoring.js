@@ -288,13 +288,18 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     ? 1 + 0.15 * ((_vA + _vB) / 2 - 0.5)
     : 1.0;
 
-  // Calibrate (stretch around 50) so displayed scores use the full range.
-  // No shared answers (maxScore === 0) → 0: can't score strangers.
-  let finalPct = maxScore > 0
-    ? Math.min(100, Math.max(0, Math.round(calibrate(layer1Pct) * conf * validationMult)))
+  // preValidationPct = the compatibility % BEFORE the behavioral multiplier
+  // (calibrated + confidence-capped + clamped). The app renders "84% → 90%"
+  // from preValidationPct → finalPct. No shared answers (maxScore===0) → 0.
+  const preValidationPct = maxScore > 0
+    ? Math.round(Math.min(100, Math.max(0, calibrate(layer1Pct) * conf)))
     : 0;
 
-  // Dealbreaker ceiling is applied LAST — nothing scores above its cap.
+  // finalPct = round(clamp(preValidationPct * multiplier)), THEN the dealbreaker
+  // ceiling (nothing scores above its cap).
+  let finalPct = maxScore > 0
+    ? Math.round(Math.min(100, Math.max(0, preValidationPct * validationMult)))
+    : 0;
   if (maxScore > 0) finalPct = Math.min(finalPct, cap);
 
   const isSoftBlocked = cap < 100;
@@ -308,6 +313,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
 
   return {
     finalPct,
+    preValidationPct,       // headline % BEFORE the behavioral multiplier ("84% → 90%")
     confidence: conf,
     validationMultiplier: Math.round(validationMult * 100) / 100,  // step-4 behavioral lift/penalty
     isHardBlocked: false,   // v8 uses caps, not hard zeroes

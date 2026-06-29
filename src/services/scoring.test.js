@@ -208,3 +208,42 @@ test('finalPct is always clamped to 0..100', () => {
   const r = calculateCompatibility(AGREE, { ...AGREE });
   assert.ok(r.finalPct >= 0 && r.finalPct <= 100);
 });
+
+// ── Part 2: behavioral-validation layer (honesty gate) ──────────────────────
+
+test('validation: no signal → multiplier 1.0 and finalPct == preValidationPct', () => {
+  // Neither user has a validation_score → the multiplier must be a neutral 1.0
+  // and the headline must be unchanged (no invented "validated" lift).
+  const r = calculateCompatibility(AGREE, { ...AGREE });
+  assert.equal(r.validationMultiplier, 1, 'no signal must stay neutral');
+  assert.equal(r.finalPct, r.preValidationPct, 'neutral mult leaves the score untouched');
+  assert.ok(r.preValidationPct >= 0 && r.preValidationPct <= 100);
+});
+
+test('validation: one-sided signal is ignored (honesty gate) → still 1.0', () => {
+  // Only user A has a validation_score. A one-sided signal must NOT move the
+  // score — a wrong "validated" badge is trust fraud.
+  const r = calculateCompatibility(AGREE, { ...AGREE }, { validationA: 0.9 });
+  assert.equal(r.validationMultiplier, 1);
+  assert.equal(r.finalPct, r.preValidationPct);
+});
+
+test('validation: both-sided real signal moves finalPct off preValidationPct', () => {
+  // Both users validated high → multiplier > 1, finalPct lifts above the pre %
+  // (clamped to the [0.925, 1.075] band). Use a mid-range pair so neither the
+  // 100 ceiling nor a cap masks the lift.
+  const A = { 48: 0, 55: 0, 50: 1, 49: 1 };
+  const B = { 48: 1, 55: 1, 50: 1, 49: 1 };
+  const neutral = calculateCompatibility(A, B);
+  const lifted  = calculateCompatibility(A, B, { validationA: 1, validationB: 1 });
+  assert.ok(lifted.validationMultiplier > 1, 'both-high → lift');
+  assert.ok(lifted.finalPct >= neutral.finalPct, 'lift never lowers the score');
+  assert.ok(lifted.validationMultiplier <= 1.08, 'clamped to band (≈1.075, 2-dp rounded)');
+});
+
+test('validation: out-of-range scores are treated as no signal', () => {
+  // A bogus validation_score (>1, <0, NaN) must be rejected as "no signal",
+  // not clamped into a fake lift.
+  const r = calculateCompatibility(AGREE, { ...AGREE }, { validationA: 5, validationB: -2 });
+  assert.equal(r.validationMultiplier, 1);
+});
