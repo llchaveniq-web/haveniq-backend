@@ -637,6 +637,36 @@ server.listen(PORT, () => {
   };
   setTimeout(runPersonalityHeal, 90 * 1000);
   setInterval(runPersonalityHeal, 3 * 60 * 60 * 1000).unref?.();
+
+  // Deep-matching gate sweep: re-fit + re-certify the per-dimension shapes (#2/#6)
+  // and the LLM text-insight constructs (#5) from accrued pairing_outcomes, then
+  // refresh the scorer caches. DB-only and cheap — NO Anthropic calls here (LLM
+  // EXTRACTION stays on bio-change + the bot endpoint). Inert until real move-in /
+  // room-change outcomes exist (certifies nothing → scoring stays today). Best-
+  // effort, non-overlapping. Runs ~5 min after boot, then daily. Same work is at
+  // POST /bot-admin/train-dimension-models + /train-text-insights for manual runs.
+  let trainInFlight = false;
+  const runGateTraining = async () => {
+    if (trainInFlight) return;
+    trainInFlight = true;
+    try {
+      const dim = require('./services/dimensionModel');
+      const ti = require('./services/textInsight');
+      const a = await dim.trainDimensionModels().catch(e => { console.error('[gate-train] dims failed:', e.message); return []; });
+      await dim.loadCertifiedModels({ force: true }).catch(() => {});
+      const b = await ti.trainFeatures().catch(e => { console.error('[gate-train] text-insight failed:', e.message); return []; });
+      await ti.loadCertifiedModels({ force: true }).catch(() => {});
+      const certDims = a.filter(s => s && s.certified).length;
+      const certTi = b.filter(s => s && s.certified).length;
+      if (certDims || certTi) console.log(`[gate-train] certified dims=${certDims} constructs=${certTi}`);
+    } catch (err) {
+      console.error('[gate-train] sweep could not start:', err.message);
+    } finally {
+      trainInFlight = false;
+    }
+  };
+  setTimeout(runGateTraining, 5 * 60 * 1000);
+  setInterval(runGateTraining, 24 * 60 * 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };
