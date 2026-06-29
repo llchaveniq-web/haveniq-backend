@@ -13,6 +13,11 @@
 //  If the quiz changes in the app's constants/quiz.ts, mirror it here.
 // ═══════════════════════════════════════════════════════════════
 
+// Deep-matching #2: per-dimension learned shapes (basis dist/mean/min/max/prod).
+// Pure helper; cold-start (no certified shape) returns delta 0 ⇒ scoring is
+// today's diffScore, bit-for-bit. See services/dimensionBasis.js.
+const { displayDelta } = require('./dimensionBasis');
+
 // Per-question point values — must match the app's quizStore.ts QUESTION_POINTS.
 // Keep this in lockstep with the frontend, or backend-computed scores will
 // drift from anything the app shows.
@@ -145,17 +150,34 @@ const OPTION_COUNTS = { 14: 2 };  // v8: Q14 contempt is the only surviving non-
 // 4-option item. Normalizing fixes that: a full binary clash now scores 0%.
 // 4-option questions are UNCHANGED (eq === diff → identical to the old curve).
 // MUST match app stores/quizStore.ts diffScore.
-function diffScore(pts, diff, numOptions) {
+// The fraction [0,1] of a question's points earned at a given answer distance —
+// today's similarity curve, factored out so the deep-matching #2 basis layer can
+// share it as the cold-start (dist-only) shape.
+function diffFrac(diff, numOptions) {
   const maxDiff = Math.max(1, (numOptions || 4) - 1);
   const eq = (diff * 3) / maxDiff;            // distance on the 0..3 reference scale
-  let frac;                                   // piecewise-linear: 0→1, 1→.6, 2→.2, 3→0
-  if (eq <= 0)      frac = 1;
-  else if (eq <= 1) frac = 1 - 0.15 * eq;          // v9: one notch = 15% (was 40%)
-  else if (eq <= 2) frac = 0.85 - 0.35 * (eq - 1);
-  else if (eq <= 3) frac = 0.5 - 0.5 * (eq - 2);
-  else              frac = 0;
-  return Math.round(pts * frac);
+                                              // piecewise-linear: 0→1, 1→.6, 2→.2, 3→0
+  if (eq <= 0)      return 1;
+  if (eq <= 1)      return 1 - 0.15 * eq;          // v9: one notch = 15% (was 40%)
+  if (eq <= 2)      return 0.85 - 0.35 * (eq - 1);
+  if (eq <= 3)      return 0.5 - 0.5 * (eq - 2);
+  return 0;
 }
+function diffScore(pts, diff, numOptions) {
+  return Math.round(pts * diffFrac(diff, numOptions));
+}
+
+// Human label per scored question, used only for the complementarity callout in
+// whyMatched ("your chore styles balance each other"). Never shown unless a
+// dimension's shape is gate-certified complementary on real outcomes.
+const DIMENSION_LABELS = {
+  50: 'cleanliness', 49: 'sleep', 48: 'hosting', 52: 'overnight', 54: 'alcohol',
+  51: 'substance', 53: 'focus', 56: 'money', 14: 'communication', 60: 'repair',
+  63: 'repair', 62: 'boundary', 57: 'chore',
+};
+// A pair must be at least this far apart on a complementary dimension for the
+// "balance" phrasing to apply — i.e. their difference is genuinely WHY they fit.
+const COMPLEMENT_MIN_GAP = 0.5;
 
 // ── Display calibration ──────────────────────────────────────────────────
 // Raw weighted-agreement regresses toward ~50% as questions accumulate (law of
@@ -189,6 +211,15 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   const A = flatten(rawA);
   const B = flatten(rawB);
   const POINTS = opts.weights || QUESTION_POINTS;
+
+  // Deep-matching #2: per-question certified shapes. Keyed by question id;
+  // absent / uncertified ⇒ the question keeps today's diffScore curve. With no
+  // models passed (the default, incl. the test suite) scoring is unchanged,
+  // bit-for-bit. complementaryHits collects dims whose DIFFERENCE is why a pair
+  // fits (a gate-certified complementary shape + a genuinely far-apart pair).
+  const dimensionModels = (opts.dimensionModels && typeof opts.dimensionModels === 'object')
+    ? opts.dimensionModels : {};
+  const complementaryHits = [];
 
   // Build the amplified-question set from the union of both users' tags.
   // Stored as a Set<number> for O(1) lookup inside the inner loop.
@@ -224,7 +255,20 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
       maxScore += pts;
       catScores[cat].max += pts;
 
-      const earned = diffScore(pts, Math.abs(ai - bi), OPTION_COUNTS[qid]);
+      // Cold-start fraction = today's curve. A certified shape nudges it via the
+      // basis (bounded ±DISPLAY_DELTA_MAX); uncertified ⇒ delta 0 ⇒ unchanged.
+      const numOpts = OPTION_COUNTS[qid] || 4;
+      const den = Math.max(1, numOpts - 1);
+      const aN = ai / den, bN = bi / den;
+      let g = diffFrac(Math.abs(ai - bi), numOpts);
+      const shape = dimensionModels[qid];
+      if (shape && shape.certified) {
+        g = Math.min(1, Math.max(0, g + displayDelta(shape, aN, bN)));
+        if (shape.type === 'complementarity' && Math.abs(aN - bN) >= COMPLEMENT_MIN_GAP) {
+          complementaryHits.push(qid);
+        }
+      }
+      const earned = Math.round(pts * g);
       rawScore += earned;
       catScores[cat].earned += earned;
     }
@@ -311,8 +355,21 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     breakdown[cat] = s.max > 0 ? Math.round(calibrate((s.earned / s.max) * 100)) : 0;
   }
 
+  // Deep-matching #2: dimensions whose DIFFERENCE is why this pair fits (certified
+  // complementary shape + far-apart answers). Empty unless a shape is certified —
+  // so the "balance" copy is a finding, never a default. Deduped by label.
+  const complementaryDims = [];
+  const seenLabels = new Set();
+  for (const qid of complementaryHits) {
+    const label = DIMENSION_LABELS[qid] || `dimension ${qid}`;
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
+    complementaryDims.push({ qid: Number(qid), label });
+  }
+
   return {
     finalPct,
+    complementaryDims,      // [{qid,label}] — drives the "your X styles balance" phrasing
     preValidationPct,       // headline % BEFORE the behavioral multiplier ("84% → 90%")
     confidence: conf,
     validationMultiplier: Math.round(validationMult * 100) / 100,  // step-4 behavioral lift/penalty
@@ -324,8 +381,14 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   };
 }
 
-// Generate a "why you matched" blurb based on top categories
-function generateWhyMatched(breakdown, score) {
+// Generate a "why you matched" blurb based on top categories.
+// complementaryDims (optional) = [{qid,label}] from calculateCompatibility for
+// dimensions a certified complementary shape says fit BECAUSE they differ. When
+// present we LEAD with that ("your chore styles balance each other") — the app's
+// compat-report / Fit Report / matches card / AI advisor all read this string.
+// Empty/absent ⇒ today's copy verbatim (complementarity is never asserted by
+// default; it ships only once the gate certifies it on real outcomes).
+function generateWhyMatched(breakdown, score, complementaryDims = []) {
   const sorted = Object.entries(breakdown || {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 2);
@@ -345,17 +408,32 @@ function generateWhyMatched(breakdown, score) {
   const top = sorted.map(([cat]) => catLabels[cat] || cat);
   const a = top[0] || 'compatibility';
   const b = top[1] || a;
+
+  let base;
   if (score >= 95) {
     // Reserve the system-wide superlative for the genuinely rare top — the
     // calibration crowds 90+, so "strongest in our system" must mean 95+.
-    return `Exceptional alignment — your ${a} and ${b} are remarkably similar. About as compatible as our matching gets.`;
+    base = `Exceptional alignment — your ${a} and ${b} are remarkably similar. About as compatible as our matching gets.`;
   } else if (score >= 90) {
-    return `Exceptional alignment — your ${a} and ${b} line up unusually well.`;
+    base = `Exceptional alignment — your ${a} and ${b} line up unusually well.`;
   } else if (score >= 80) {
-    return `Strong compatibility in ${a} and ${b}. A few differences to discuss but nothing dealbreaking.`;
+    base = `Strong compatibility in ${a} and ${b}. A few differences to discuss but nothing dealbreaking.`;
   } else {
-    return `Meaningful overlap in ${a}. Some lifestyle differences worth talking through before committing.`;
+    base = `Meaningful overlap in ${a}. Some lifestyle differences worth talking through before committing.`;
   }
+
+  // Lead with complementarity when a certified shape says difference is the fit.
+  const comp = Array.isArray(complementaryDims) ? complementaryDims : [];
+  if (comp.length) {
+    const labels = comp.map(d => d.label);
+    const list = labels.length === 1
+      ? labels[0]
+      : labels.length === 2
+        ? `${labels[0]} and ${labels[1]}`
+        : `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
+    return `Your ${list} styles balance each other — opposites that tend to work. ${base}`;
+  }
+  return base;
 }
 
 /**

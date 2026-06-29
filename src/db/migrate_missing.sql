@@ -455,3 +455,21 @@ ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS last_served_at   TIMESTAMP
 ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS impression_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS passed_at        TIMESTAMPTZ;
 ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS declined_at      TIMESTAMPTZ;
+
+-- ── Deep-matching #2: learned per-dimension shapes ────────────────
+-- One row per scored question. `certified=false` (the default, and the only
+-- state until real outcomes accrue) means scoring.js keeps today's diffScore
+-- curve for that dimension — bit-for-bit. A row goes `certified=true` ONLY when
+-- the held-out gate (services/dimensionModel.js) proves a basis shape beats the
+-- dist-only baseline on real "did it work?" outcomes. `shape` holds the baseline
+-- + basis logistic coefficients the scorer applies. Empty table ⇒ today.
+CREATE TABLE IF NOT EXISTS dimension_models (
+  qid         INTEGER PRIMARY KEY,
+  type        TEXT NOT NULL DEFAULT 'similarity',  -- similarity | complementarity | directional
+  certified   BOOLEAN NOT NULL DEFAULT FALSE,
+  n           INTEGER,
+  auc         NUMERIC,
+  shape       JSONB,            -- { baseline:{intercept,coef}, basis:{intercept,coef} }
+  reason      TEXT,
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);

@@ -350,4 +350,30 @@ router.get('/bot-admin/weight-learning', requireBotToken, async (req, res) => {
   }
 });
 
+// ── Deep-matching #2: train per-dimension shapes from pairing_outcomes ───────
+// Fits + gates each dimension's basis (dist/mean/min/max/prod) against real
+// "did it work?" outcomes and persists certified shapes to dimension_models.
+// Until move-in / room-change outcomes accrue this certifies nothing → scoring
+// stays on today's curve, bit-for-bit. Bot-gated; safe to call repeatedly.
+// Wire to a periodic cron once outcomes start landing.
+router.post('/bot-admin/train-dimension-models', requireBotToken, async (req, res) => {
+  try {
+    const { trainDimensionModels, loadCertifiedModels } = require('../services/dimensionModel');
+    const summary = await trainDimensionModels();
+    await loadCertifiedModels({ force: true }); // refresh the scorer's cache
+    const certified = summary.filter(s => s.certified);
+    res.json({
+      trained: summary.length,
+      certified: certified.length,
+      note: certified.length === 0
+        ? 'No dimension cleared the gate — every dimension stays dist-only (today, bit-for-bit). Expected until real move-in/room-change outcomes accrue.'
+        : 'Certified shapes are live; recompute matches to apply to stored scores.',
+      summary,
+    });
+  } catch (err) {
+    console.error('[train-dimension-models] failed:', err);
+    res.status(500).json({ error: 'training failed' });
+  }
+});
+
 module.exports = router;

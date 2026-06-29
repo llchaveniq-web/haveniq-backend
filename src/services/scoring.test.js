@@ -247,3 +247,66 @@ test('validation: out-of-range scores are treated as no signal', () => {
   const r = calculateCompatibility(AGREE, { ...AGREE }, { validationA: 5, validationB: -2 });
   assert.equal(r.validationMultiplier, 1);
 });
+
+// ── Deep-matching #2: basis layer cold-start + certified shapes ──────────────
+
+test('cold-start: no dimensionModels is bit-for-bit identical to today', () => {
+  // The basis layer must change NOTHING without a certified shape. Compare a
+  // spread of pairs with no opts vs an empty/garbage model map.
+  const pairs = [
+    [AGREE, { ...AGREE }],
+    [AGREE, { 50: 3, 49: 0, 48: 2, 53: 1, 55: 3, 54: 0, 52: 1, 51: 0, 14: 1, 57: 3, 60: 2, 62: 0, 63: 3, 56: 1 }],
+    [{ 50: 0, 49: 1, 57: 2 }, { 50: 2, 49: 3, 57: 0 }],
+  ];
+  for (const [a, b] of pairs) {
+    const base = calculateCompatibility(a, b);
+    const empty = calculateCompatibility(a, b, { dimensionModels: {} });
+    const garbage = calculateCompatibility(a, b, { dimensionModels: { 57: { certified: false } } });
+    assert.equal(empty.finalPct, base.finalPct, 'empty model must not move the score');
+    assert.equal(garbage.finalPct, base.finalPct, 'uncertified model must not move the score');
+    assert.deepEqual(empty.breakdown, base.breakdown);
+    assert.deepEqual(empty.complementaryDims, []);
+  }
+});
+
+test('cold-start: complementaryDims is empty and whyMatched copy is unchanged', () => {
+  const r = calculateCompatibility(AGREE, { ...AGREE });
+  assert.deepEqual(r.complementaryDims, []);
+  const why = generateWhyMatched(r.breakdown, r.finalPct, r.complementaryDims);
+  assert.ok(!/balance each other/.test(why), 'no balance copy without a certified shape');
+});
+
+// A synthetic certified-complementary shape for Q57 (chore). β_dist > 0 so
+// far-apart answers score WELL; baseline is the fixed cold-start prior.
+const CHORE_COMPLEMENT = {
+  57: {
+    certified: true,
+    type: 'complementarity',
+    baseline: { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0 } },
+    basis:    { intercept: -1.5, coef: { dist: 3.5, mean: 0, min: 0, max: 0, prod: 0 } },
+  },
+};
+
+test('certified complementary shape lifts a far-apart pair and emits the dim', () => {
+  // Identical except Q57 is opposite (initiator + responder). Today that gap
+  // costs points; the certified shape rewards it.
+  const a = { ...AGREE, 57: 0 };
+  const b = { ...AGREE, 57: 3 };
+  const today      = calculateCompatibility(a, b);
+  const complement = calculateCompatibility(a, b, { dimensionModels: CHORE_COMPLEMENT });
+  assert.ok(complement.finalPct >= today.finalPct,
+    `complementary shape should not lower a far-apart pair (${complement.finalPct} vs ${today.finalPct})`);
+  assert.deepEqual(complement.complementaryDims, [{ qid: 57, label: 'chore' }]);
+});
+
+test('certified shape does NOT fire balance copy for a two-of-a-kind pair', () => {
+  // Same shape, but the pair AGREES on Q57 — difference isn't the reason, so no
+  // complementarity callout (the gap is below COMPLEMENT_MIN_GAP).
+  const r = calculateCompatibility({ ...AGREE, 57: 1 }, { ...AGREE, 57: 1 }, { dimensionModels: CHORE_COMPLEMENT });
+  assert.deepEqual(r.complementaryDims, []);
+});
+
+test('whyMatched leads with the balance phrase when a dim is complementary', () => {
+  const why = generateWhyMatched({ lifestyle: 90, communication: 80 }, 88, [{ qid: 57, label: 'chore' }]);
+  assert.ok(/your chore styles balance each other/i.test(why), why);
+});

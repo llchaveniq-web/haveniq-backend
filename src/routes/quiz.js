@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
+const { loadCertifiedModels } = require('../services/dimensionModel');
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch, calibratePersonality } = require('../services/personalityPairing');
 const { notDemo } = require('../lib/demoFilter');
@@ -210,10 +211,14 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
     };
     const flat = normalize(answers);
 
+    // Deep-matching #2: same certified shapes the stored scorer uses, so this
+    // preview stays in lockstep with the feed. No-op until a shape is certified.
+    const dimensionModels = await loadCertifiedModels();
+
     const scored = [];
     for (const c of candidates) {
       const otherFlat = normalize(c.answers);
-      const result = calculateCompatibility(flat, otherFlat);
+      const result = calculateCompatibility(flat, otherFlat, { dimensionModels });
       if (result.isHardBlocked) continue;
       scored.push({
         userId:    c.user_id,
@@ -368,6 +373,10 @@ async function scoreNewMatches(userId, newAnswers) {
   const myDealbreakers = Array.isArray(userRow[0].dealbreakers) ? userRow[0].dealbreakers : [];
   const myValidation   = userRow[0].validation_score != null ? Number(userRow[0].validation_score) : undefined;
 
+  // Deep-matching #2: load the gate-certified per-dimension shapes once. Empty
+  // until real outcomes certify a shape → scoring stays on today's curve.
+  const dimensionModels = await loadCertifiedModels();
+
   // Pull each candidate's quiz answers AND their dealbreakers in the same
   // query — saves an N+1 round-trip we'd otherwise pay on the per-user loop.
   const { rows: otherUsers } = await pool.query(
@@ -399,6 +408,7 @@ async function scoreNewMatches(userId, newAnswers) {
       dealbreakers: combinedDealbreakers,
       validationA:  myValidation,
       validationB:  other.validation_score != null ? Number(other.validation_score) : undefined,
+      dimensionModels,
     });
 
     // NOTE: hard-blocked pairs are NO LONGER skipped. We used to `continue`
@@ -429,7 +439,7 @@ async function scoreNewMatches(userId, newAnswers) {
       result.isSoftBlocked,
       result.shadowPenalty,
       JSON.stringify(result.breakdown),
-      generateWhyMatched(result.breakdown, finalPct),
+      generateWhyMatched(result.breakdown, finalPct, result.complementaryDims),
       // Part 2: behavioral-validation layer. validationMultiplier is an honest
       // 1.0 unless BOTH users have a real validation_score; preValidationPct is
       // the headline before that multiplier.
