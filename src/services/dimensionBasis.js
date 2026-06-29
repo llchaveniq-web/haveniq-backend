@@ -351,11 +351,72 @@ function fitProjectionGated(records, opts = {}) {
   };
 }
 
+// Log-odds of a base success rate (intercept-only model: no feature at all).
+function baseRateLogit(y) {
+  const p = y.reduce((s, v) => s + v, 0) / Math.max(1, y.length);
+  const c = Math.min(1 - 1e-6, Math.max(1e-6, p));
+  return Math.log(c / (1 - c));
+}
+
+/**
+ * Gate a candidate FEATURE (deep-matching #5 LLM constructs): does scoring the
+ * pair on this feature's basis beat the NO-FEATURE model (the base success rate)
+ * on held-out outcomes? This is the honest "beats without-it" test — a
+ * hallucinated/non-predictive feature looks fine in-sample and fails held-out,
+ * so it stays uncertified (weight 0). records carry { a, b, success } (a,b ∈ [0,1]).
+ *
+ * Differs from fitDimensionGated, whose baseline is the dist-only PRIOR — here
+ * the baseline is "no feature" so a genuinely predictive feature (even a plain
+ * similarity one) can earn its place; the prior would have hidden it.
+ */
+function fitConstructGated(records, opts = {}) {
+  const minImprovement = opts.minImprovement ?? 0.01;
+  const holdoutFraction = opts.holdoutFraction ?? 0.3;
+  const rows = [], y = [];
+  for (const r of records) {
+    if (!isFin(r.a) || !isFin(r.b)) continue;
+    rows.push(expandPair(r.a, r.b, r.conv));
+    y.push(r.success ? 1 : 0);
+  }
+  const off = {
+    certified: false, type: 'none', n: rows.length, auc: NaN, aucBaseline: NaN,
+    baseline: { intercept: 0, coef: {} }, basis: { intercept: 0, coef: {} },
+    reason: 'no signal (cold-start)',
+  };
+  const split = splitTrainHoldout(rows, y, holdoutFraction);
+  if (!split) return off;
+
+  const b0 = baseRateLogit(split.trY);              // no-feature baseline
+  const full = fitLogistic(split.tr, split.trY, { features: BASIS_FNS, l2: opts.l2 });
+  if (!full.ok) return off;
+
+  const baseHo = meanLogLoss(b0, {}, split.ho, split.hoY);
+  const fullHo = meanLogLoss(full.intercept, full.coef, split.ho, split.hoY);
+  const improvement = baseHo - fullHo;
+  if (!(Number.isFinite(improvement) && improvement >= minImprovement)) {
+    return { ...off, auc: auc(full.intercept, full.coef, rows, y),
+      reason: `feature did not beat no-feature (held-out gain ${Number.isFinite(improvement) ? improvement.toFixed(4) : 'n/a'})` };
+  }
+  const fullAll = fitLogistic(rows, y, { features: BASIS_FNS, l2: opts.l2 });
+  const finalFull = fullAll.ok ? fullAll : full;
+  return {
+    certified: true,
+    type: classifyType(finalFull.coef),
+    n: rows.length,
+    auc: auc(finalFull.intercept, finalFull.coef, rows, y),
+    aucBaseline: NaN,
+    baseline: { intercept: baseRateLogit(y), coef: {} },
+    basis: { intercept: finalFull.intercept, coef: finalFull.coef },
+    reason: `feature beat no-feature by ${improvement.toFixed(4)}`,
+  };
+}
+
 module.exports = {
   BASIS_FNS,
   expandPair,
   projectVal,
   fitProjectionGated,
+  fitConstructGated,
   fitLogistic,
   distOnlyPrior,
   classifyType,

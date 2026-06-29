@@ -54,7 +54,7 @@ function answerIndex(answers, qid) {
 // per user. When present we ALSO snapshot, per question, the normalized effective
 // velocities and the convergence rate AT SERVE TIME — the trajectory training
 // signal the #6 gate needs. Absent ⇒ only `q` is captured (today's behavior).
-function buildServeFeatures(viewerAnswers, candidateAnswers, viewerDrift = null, candidateDrift = null) {
+function buildServeFeatures(viewerAnswers, candidateAnswers, viewerDrift = null, candidateDrift = null, viewerLlm = null, candidateLlm = null) {
   const { effectiveVelocity, convergence } = require('./trajectory');
   const q = {}, vel = {}, conv = {};
   for (const qid of SCORED_QIDS) {
@@ -75,8 +75,18 @@ function buildServeFeatures(viewerAnswers, candidateAnswers, viewerDrift = null,
       }
     }
   }
+  // Deep-matching #5: snapshot the two users' LLM text-insight constructs (both
+  // present) at serve time, so the gate has [cA, cB] pairs to certify against.
+  const llm = {};
+  if (viewerLlm && candidateLlm && typeof viewerLlm === 'object' && typeof candidateLlm === 'object') {
+    for (const k of Object.keys(viewerLlm)) {
+      const cA = Number(viewerLlm[k]), cB = Number(candidateLlm[k]);
+      if (Number.isFinite(cA) && Number.isFinite(cB)) llm[k] = [Math.round(cA * 1000) / 1000, Math.round(cB * 1000) / 1000];
+    }
+  }
   const out = { q };
   if (Object.keys(vel).length) { out.vel = vel; out.conv = conv; }
+  if (Object.keys(llm).length) out.llm = llm;
   return out;
 }
 

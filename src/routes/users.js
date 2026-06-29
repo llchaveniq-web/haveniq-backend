@@ -157,6 +157,21 @@ router.get('/leaderboard', requireAuth, async (req, res) => {
 // looks wrong ("a sign-in from 192.168.x.x via Edge on Windows when I
 // only ever use Safari on iPhone"), the user knows their email's been
 // compromised even before the attacker takes any visible action.
+// ── GET /users/me/text-insight ────────────────────────────────────────────
+// Deep-matching #5: show the consenting student what we read from THEIR OWN
+// writing — the living-habits construct vector + one-line rationales. Returns
+// { constructs, rationales, modelVersion, computedAt } or null when the user
+// hasn't consented or nothing has been extracted yet. Numbers only; never text.
+router.get('/me/text-insight', requireAuth, async (req, res) => {
+  try {
+    const insight = await require('../services/textInsight').getOwnInsight(req.user.id);
+    res.json({ insight: insight || null });
+  } catch (err) {
+    console.error('[users/me/text-insight] failed:', err.message);
+    res.status(500).json({ error: 'failed to load text insight' });
+  }
+});
+
 router.get('/me/sign-in-events', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -389,6 +404,13 @@ router.patch('/me', requireAuth, async (req, res) => {
     // Audit which fields changed (names only, never values — keeps PII
     // out of the audit log).
     audit(req, 'profile.patch', { fields: changed }).catch(() => {});
+
+    // Deep-matching #5: if the bio (a text source) changed, re-extract the
+    // text-insight vector — best-effort, detached, and consent-gated inside
+    // extractForUser (no consent ⇒ it no-ops and purges).
+    if (Array.isArray(changed) && changed.includes('bio')) {
+      require('../services/textInsight').extractForUser(req.user.id).catch(() => {});
+    }
 
     res.json({ success: true, user: rows[0] });
   } catch (err) {

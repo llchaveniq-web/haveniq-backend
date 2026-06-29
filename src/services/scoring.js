@@ -189,6 +189,24 @@ const CONV_COEF_MIN = 0.3;       // shape meaningfully rewards convergence
 const CONV_MIN = 0.05;           // this pair is genuinely closing the gap
 const PROJ_MATERIAL_GAP = 0.5;   // projection shrank the gap by ≥ half an option (index units)
 
+// Deep-matching #5 (LLM text-insight) tuning. Each certified construct nudges the
+// percentage by displayDelta×SCALE, the total bounded by MAX. A pair note fires
+// only when the construct is clearly positive AND the two read SIMILAR.
+const LLM_DELTA_SCALE = 16;     // displayDelta ∈[-0.5,0.5] → ±8pp per construct
+const LLM_DELTA_MAX = 15;       // total LLM adjustment is bounded to ±15pp
+const TEXT_INSIGHT_NOTE_MIN = 0.05;
+const TEXT_INSIGHT_SIM_MAX = 0.34;
+// Plain-language PAIR notes per construct (deep-matching #5). Never raw scores.
+const TEXT_INSIGHT_PAIR_NOTES = {
+  directness: 'you both write like direct, upfront communicators',
+  warmth: 'you both come across as warm and easy to live with',
+  planfulness: 'you both read as organized planners',
+  conflict_approach: 'you both address friction head-on rather than letting it simmer',
+  tidiness_orientation: 'you both signal you care about a tidy shared space',
+  social_energy: 'you both come across as social and host-friendly',
+  adaptability: 'you both read as flexible, adaptable roommates',
+};
+
 // Plain-language convergence notes per question (deep-matching #6). Fallback is
 // derived from DIMENSION_LABELS. Never exposes raw slopes.
 const CONVERGENCE_NOTES = {
@@ -380,11 +398,31 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     ? 1 + 0.15 * ((_vA + _vB) / 2 - 0.5)
     : 1.0;
 
+  // Deep-matching #5: certified LLM text-insight constructs. Each certified
+  // construct adds a bounded ± nudge (the gate-fit shape's lift over the base
+  // rate for this pair), the total clamped to ±LLM_DELTA_MAX. No certified
+  // constructs / no features (the default) ⇒ llmDelta 0 ⇒ scoring is today,
+  // bit-for-bit. textInsightHits drive the plain-language whyMatched note.
+  const llmModels = (opts.llmModels && typeof opts.llmModels === 'object') ? opts.llmModels : {};
+  const llmA = (opts.llmFeaturesA && typeof opts.llmFeaturesA === 'object') ? opts.llmFeaturesA : {};
+  const llmB = (opts.llmFeaturesB && typeof opts.llmFeaturesB === 'object') ? opts.llmFeaturesB : {};
+  let llmDelta = 0;
+  const textInsightHits = [];
+  for (const [construct, shape] of Object.entries(llmModels)) {
+    if (!shape || !shape.certified) continue;
+    const cA = Number(llmA[construct]), cB = Number(llmB[construct]);
+    if (!Number.isFinite(cA) || !Number.isFinite(cB)) continue;
+    const d = displayDelta(shape, cA, cB, 0);   // [-0.5, 0.5]
+    llmDelta += d * LLM_DELTA_SCALE;
+    if (d >= TEXT_INSIGHT_NOTE_MIN && Math.abs(cA - cB) <= TEXT_INSIGHT_SIM_MAX) textInsightHits.push(construct);
+  }
+  llmDelta = Math.max(-LLM_DELTA_MAX, Math.min(LLM_DELTA_MAX, llmDelta));
+
   // preValidationPct = the compatibility % BEFORE the behavioral multiplier
-  // (calibrated + confidence-capped + clamped). The app renders "84% → 90%"
-  // from preValidationPct → finalPct. No shared answers (maxScore===0) → 0.
+  // (calibrated + confidence-capped + LLM-adjusted + clamped). The app renders
+  // "84% → 90%" from preValidationPct → finalPct. No shared answers ⇒ 0.
   const preValidationPct = maxScore > 0
-    ? Math.round(Math.min(100, Math.max(0, calibrate(layer1Pct) * conf)))
+    ? Math.round(Math.min(100, Math.max(0, calibrate(layer1Pct) * conf + llmDelta)))
     : 0;
 
   // finalPct = round(clamp(preValidationPct * multiplier)), THEN the dealbreaker
@@ -427,10 +465,20 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     convergingDims.push({ qid: Number(qid), label, note: CONVERGENCE_NOTES[qid] || `your ${label} styles are converging` });
   }
 
+  // Deep-matching #5: certified text-insight constructs that read SIMILAR and
+  // positive for this pair. Empty unless a construct is certified on outcomes —
+  // a finding from their own writing, never a default.
+  const textInsightDims = [];
+  for (const construct of textInsightHits) {
+    const note = TEXT_INSIGHT_PAIR_NOTES[construct];
+    if (note) textInsightDims.push({ construct, note });
+  }
+
   return {
     finalPct,
     complementaryDims,      // [{qid,label}] — drives the "your X styles balance" phrasing
     convergingDims,         // [{qid,label,note}] — deep-matching #6 trajectory note
+    textInsightDims,        // [{construct,note}] — deep-matching #5 LLM-read note
     preValidationPct,       // headline % BEFORE the behavioral multiplier ("84% → 90%")
     confidence: conf,
     validationMultiplier: Math.round(validationMult * 100) / 100,  // step-4 behavioral lift/penalty
@@ -449,7 +497,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
 // compat-report / Fit Report / matches card / AI advisor all read this string.
 // Empty/absent ⇒ today's copy verbatim (complementarity is never asserted by
 // default; it ships only once the gate certifies it on real outcomes).
-function generateWhyMatched(breakdown, score, complementaryDims = [], convergingDims = []) {
+function generateWhyMatched(breakdown, score, complementaryDims = [], convergingDims = [], textInsightDims = []) {
   const sorted = Object.entries(breakdown || {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 2);
@@ -498,6 +546,16 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
     trajectory = `You're trending toward each other on ${list}. `;
   }
 
+  // Deep-matching #5: a plain-language note from what a certified LLM construct
+  // read in BOTH users' own writing (never raw scores). One note, after the
+  // trajectory note, before the base.
+  const ti = Array.isArray(textInsightDims) ? textInsightDims : [];
+  let insight = '';
+  if (ti.length) {
+    const n = ti[0].note;
+    insight = `${n.charAt(0).toUpperCase()}${n.slice(1)}. `;
+  }
+
   // Lead with complementarity when a certified shape says difference is the fit.
   const comp = Array.isArray(complementaryDims) ? complementaryDims : [];
   if (comp.length) {
@@ -507,9 +565,9 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
       : labels.length === 2
         ? `${labels[0]} and ${labels[1]}`
         : `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
-    return `Your ${list} styles balance each other — opposites that tend to work. ${trajectory}${base}`;
+    return `Your ${list} styles balance each other — opposites that tend to work. ${trajectory}${insight}${base}`;
   }
-  return trajectory ? `${trajectory}${base}` : base;
+  return (trajectory || insight) ? `${trajectory}${insight}${base}` : base;
 }
 
 // Plain-language friction topic per question (deep-matching #4 suites). The

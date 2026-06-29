@@ -376,4 +376,54 @@ router.post('/bot-admin/train-dimension-models', requireBotToken, async (req, re
   }
 });
 
+// ── Deep-matching #5: extract text-insight vectors for consenting users ──────
+// Reads each opted-in user's own free text and banks the derived construct
+// vector (never the text). Idempotent: unchanged text is skipped via source_hash.
+// Run on a cron once users opt in; bot-gated.
+router.post('/bot-admin/extract-text-insights', requireBotToken, async (req, res) => {
+  try {
+    const textInsight = require('../services/textInsight');
+    // Current consent = latest row per user for the textInsight category.
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (user_id) user_id, allowed
+         FROM consent_log WHERE category = $1
+        ORDER BY user_id, created_at DESC`,
+      [textInsight.TEXT_INSIGHT_CONSENT],
+    );
+    const consenting = rows.filter(r => r.allowed === true).map(r => r.user_id);
+    const counts = {};
+    for (const uid of consenting) {
+      const status = await textInsight.extractForUser(uid);
+      counts[status] = (counts[status] || 0) + 1;
+    }
+    res.json({ consenting: consenting.length, results: counts });
+  } catch (err) {
+    console.error('[extract-text-insights] failed:', err);
+    res.status(500).json({ error: 'extraction failed' });
+  }
+});
+
+// Fit + gate each LLM construct against held-out pairing_outcomes; persist
+// certified shapes to text_insight_models. Nothing certifies until real outcomes
+// accrue ⇒ every construct weight stays 0 ⇒ scoring is today, bit-for-bit.
+router.post('/bot-admin/train-text-insights', requireBotToken, async (req, res) => {
+  try {
+    const textInsight = require('../services/textInsight');
+    const summary = await textInsight.trainFeatures();
+    await textInsight.loadCertifiedModels({ force: true });
+    const certified = summary.filter(s => s.certified);
+    res.json({
+      trained: summary.length,
+      certified: certified.length,
+      note: certified.length === 0
+        ? 'No construct beat the no-feature model on held-out outcomes — every construct stays weight 0 (today). Expected until outcomes accrue.'
+        : 'Certified constructs are live; recompute matches to apply.',
+      summary,
+    });
+  } catch (err) {
+    console.error('[train-text-insights] failed:', err);
+    res.status(500).json({ error: 'training failed' });
+  }
+});
+
 module.exports = router;

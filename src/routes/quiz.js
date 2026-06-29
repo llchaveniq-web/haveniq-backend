@@ -5,6 +5,7 @@ const { calculateCompatibility, generateWhyMatched } = require('../services/scor
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { loadDrift } = require('../services/pulseDrift');
 const { horizonFromMoveIn } = require('../services/trajectory');
+const textInsight = require('../services/textInsight');
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch, calibratePersonality } = require('../services/personalityPairing');
 const { notDemo } = require('../lib/demoFilter');
@@ -399,6 +400,13 @@ async function scoreNewMatches(userId, newAnswers) {
   const myDrift = driftMap[String(userId)] || {};
   const horizonDays = horizonFromMoveIn(userRow[0].move_in_timeline);
 
+  // Deep-matching #5: certified LLM text-insight shapes + the consenting users'
+  // derived construct vectors. Empty until a construct certifies / users opt in
+  // → llmDelta 0 → scoring unchanged, bit-for-bit.
+  const llmModels = await textInsight.loadCertifiedModels();
+  const llmFeatures = await textInsight.loadFeatures([userId, ...otherUsers.map(o => o.user_id)]);
+  const myLlm = llmFeatures[String(userId)] || {};
+
   // v8: the abstract MBTI/DISC/OCEAN personality blend was removed from matching,
   // so the personality_profiles fetch (incl. a per-submit full-table scan) that
   // used to live here is gone. Behavioral validation_score (above) is the only
@@ -422,6 +430,9 @@ async function scoreNewMatches(userId, newAnswers) {
       driftA:       myDrift,
       driftB:       driftMap[String(other.user_id)] || {},
       horizonDays,
+      llmModels,
+      llmFeaturesA: myLlm,
+      llmFeaturesB: llmFeatures[String(other.user_id)] || {},
     });
 
     // NOTE: hard-blocked pairs are NO LONGER skipped. We used to `continue`
@@ -452,7 +463,7 @@ async function scoreNewMatches(userId, newAnswers) {
       result.isSoftBlocked,
       result.shadowPenalty,
       JSON.stringify(result.breakdown),
-      generateWhyMatched(result.breakdown, finalPct, result.complementaryDims, result.convergingDims),
+      generateWhyMatched(result.breakdown, finalPct, result.complementaryDims, result.convergingDims, result.textInsightDims),
       // Part 2: behavioral-validation layer. validationMultiplier is an honest
       // 1.0 unless BOTH users have a real validation_score; preValidationPct is
       // the headline before that multiplier.

@@ -11,6 +11,7 @@ const {
   displayDelta,
   fitProjectionGated,
   projectVal,
+  fitConstructGated,
 } = require('./dimensionBasis');
 
 test('expandPair computes dist/mean/min/max/prod', () => {
@@ -150,6 +151,31 @@ test('projection gate: turns ON when projected values predict outcomes the snaps
   const g = fitProjectionGated(recs, { minImprovement: 0.01 });
   assert.equal(g.project, true, g.reason);
   assert.ok(g.improvement >= 0.01);
+});
+
+test('construct gate (#5): a non-predictive feature stays uncertified (weight 0)', () => {
+  // Labels independent of the construct → it can not beat the no-feature model.
+  const recs = [];
+  for (let i = 0; i < 200; i++) {
+    const a = ((i * 41) % 100) / 100;
+    const b = ((i * 73 + 13) % 100) / 100;
+    recs.push({ a, b, success: i % 2 === 0 }); // label has nothing to do with a,b
+  }
+  const shape = fitConstructGated(recs);
+  assert.equal(shape.certified, false, shape.reason);
+});
+
+test('construct gate (#5): a genuinely predictive feature certifies', () => {
+  // Success when the two read SIMILAR on the construct → the basis beats the
+  // base rate on held-out, so it earns its place.
+  const recs = [];
+  for (let i = 0; i < 200; i++) {
+    const a = ((i * 41) % 100) / 100;
+    const b = ((i * 73 + 13) % 100) / 100;
+    recs.push({ a, b, success: Math.abs(a - b) < 0.25 });
+  }
+  const shape = fitConstructGated(recs, { minImprovement: 0.01 });
+  assert.equal(shape.certified, true, shape.reason);
 });
 
 test('certified complementary shape lifts a far-apart pair above two-of-a-kind', () => {

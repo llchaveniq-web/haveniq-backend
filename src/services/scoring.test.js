@@ -325,6 +325,58 @@ test('topFrictionTopic is null when the pair shares no scored answers / agrees',
   assert.equal(topFrictionTopic({}, {}), null);                     // nothing shared
 });
 
+// ── Deep-matching #5: LLM text-insight constructs ────────────────────────────
+
+// A certified construct where reading SIMILAR predicts success (positive basis).
+const DIRECT_SHAPE = {
+  directness: {
+    certified: true,
+    baseline: { intercept: -0.5, coef: {} },
+    basis: { intercept: 2, coef: { dist: -4, mean: 0, min: 0, max: 0, prod: 0, conv: 0 } },
+  },
+};
+
+test('cold-start: LLM features present but no certified models is bit-for-bit today', () => {
+  const today = calculateCompatibility(AGREE, { ...AGREE });
+  const withFeatures = calculateCompatibility(AGREE, { ...AGREE }, {
+    llmFeaturesA: { directness: 0.9 }, llmFeaturesB: { directness: 0.85 },
+  });
+  assert.equal(withFeatures.finalPct, today.finalPct);
+  assert.deepEqual(withFeatures.textInsightDims, []);
+});
+
+test('uncertified LLM model does not move the score', () => {
+  const today = calculateCompatibility(AGREE, { ...AGREE });
+  const r = calculateCompatibility(AGREE, { ...AGREE }, {
+    llmModels: { directness: { certified: false, basis: { coef: {} }, baseline: { coef: {} } } },
+    llmFeaturesA: { directness: 0.9 }, llmFeaturesB: { directness: 0.85 },
+  });
+  assert.equal(r.finalPct, today.finalPct);
+});
+
+test('a certified construct on a similar pair adds a bounded lift + emits the note', () => {
+  const a = { 48: 0, 55: 0, 50: 1, 49: 1 }, b = { 48: 1, 55: 1, 50: 1, 49: 1 };
+  const base = calculateCompatibility(a, b);
+  const lifted = calculateCompatibility(a, b, {
+    llmModels: DIRECT_SHAPE,
+    llmFeaturesA: { directness: 0.9 }, llmFeaturesB: { directness: 0.85 }, // similar + high
+  });
+  assert.ok(lifted.finalPct >= base.finalPct, `${lifted.finalPct} vs ${base.finalPct}`);
+  assert.ok(lifted.finalPct - base.finalPct <= 15, 'LLM adjustment is bounded to ±15pp');
+  assert.deepEqual(lifted.textInsightDims, [{ construct: 'directness', note: 'you both write like direct, upfront communicators' }]);
+  const why = generateWhyMatched(lifted.breakdown, lifted.finalPct, lifted.complementaryDims, lifted.convergingDims, lifted.textInsightDims);
+  assert.ok(/direct, upfront communicators/i.test(why), why);
+});
+
+test('a certified construct needs BOTH users\' features (one-sided → no effect)', () => {
+  const today = calculateCompatibility(AGREE, { ...AGREE });
+  const r = calculateCompatibility(AGREE, { ...AGREE }, {
+    llmModels: DIRECT_SHAPE, llmFeaturesA: { directness: 0.9 }, // B missing
+  });
+  assert.equal(r.finalPct, today.finalPct);
+  assert.deepEqual(r.textInsightDims, []);
+});
+
 // ── Deep-matching #6: trajectory (projection + convergence) ──────────────────
 
 const RELIABLE = (velocity) => ({ velocity, trend: 'changed', sampleSize: 10 });

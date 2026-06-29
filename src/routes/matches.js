@@ -13,6 +13,7 @@ const { loadDrift } = require('../services/pulseDrift');
 const { calculateCompatibility, topFrictionTopic } = require('../services/scoring');
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { buildSuites } = require('../services/suiteOptimizer');
+const { loadFeatures: loadTextInsightFeatures } = require('../services/textInsight');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -356,10 +357,17 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       try {
         const driftMap = await loadDrift([userId, ...rows.map(r => r.id)]);
         const myDrift = driftMap[String(userId)] || {};
+        // Deep-matching #5: snapshot LLM constructs too (consenting users only —
+        // loadFeatures returns nothing for users without a stored vector).
+        const llmMap = await loadTextInsightFeatures([userId, ...rows.map(r => r.id)]);
+        const myLlm = llmMap[String(userId)] || null;
         const impressions = rows.map(r => ({
           candidateId: r.id,
           score:       parseFloat(r.score),
-          features:    buildServeFeatures(myAnswers, r.candidate_answers, myDrift, driftMap[String(r.id)] || {}),
+          features:    buildServeFeatures(
+            myAnswers, r.candidate_answers,
+            myDrift, driftMap[String(r.id)] || {},
+            myLlm, llmMap[String(r.id)] || null),
           school:      req.user.school ?? school ?? null,
         }));
         await recordFeedImpressions(userId, impressions);

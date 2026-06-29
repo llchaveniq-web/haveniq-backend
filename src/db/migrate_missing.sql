@@ -521,3 +521,29 @@ CREATE TABLE IF NOT EXISTS pulse_drift_history (
   recorded_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_pulse_drift_hist_user ON pulse_drift_history (user_id, question_id, computed_at DESC);
+
+-- ── Deep-matching #5: LLM grounded text-insight features ──────
+-- DERIVED-ONLY: the numeric living-habits construct vector + one-line rationales
+-- an LLM read from a CONSENTING student's own free text. The raw text is NEVER
+-- stored (source_hash detects changes to trigger re-extraction). Extracted only
+-- for users whose latest `textInsight` consent is true; purged on withdrawal.
+CREATE TABLE IF NOT EXISTS text_insight_features (
+  user_id       UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  vector        JSONB,            -- { "<construct>": 0..1, ... }
+  rationales    JSONB,            -- { "<construct>": "one-line reason", ... }
+  model_version TEXT,
+  source_hash   TEXT,             -- hash of the input text (NOT the text itself)
+  computed_at   TIMESTAMPTZ DEFAULT NOW()
+);
+-- Per-construct learned shapes (gated like #2). certified=false (default, and the
+-- only state until outcomes accrue) ⇒ the construct's weight is 0 ⇒ today.
+CREATE TABLE IF NOT EXISTS text_insight_models (
+  construct   TEXT PRIMARY KEY,
+  certified   BOOLEAN NOT NULL DEFAULT FALSE,
+  type        TEXT,
+  n           INTEGER,
+  auc         NUMERIC,
+  shape       JSONB,              -- { baseline:{intercept,coef}, basis:{intercept,coef} }
+  reason      TEXT,
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);

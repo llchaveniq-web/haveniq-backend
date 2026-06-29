@@ -200,6 +200,12 @@ router.post('/consent', requireAuth, async (req, res) => {
       'INSERT INTO consent_log (user_id, category, allowed) VALUES ($1, $2, $3)',
       [userId, category, allowed]
     );
+    // Deep-matching #5: on textInsight WITHDRAWAL, purge the user's derived
+    // construct vector immediately (we stop using it the moment consent drops).
+    const textInsight = require('../services/textInsight');
+    if (category === textInsight.TEXT_INSIGHT_CONSENT && allowed === false) {
+      textInsight.purge(userId).catch(() => {});
+    }
     res.json({ recorded: true });
   } catch (err) {
     console.error('Consent log failed:', err);
