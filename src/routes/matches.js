@@ -10,6 +10,9 @@ const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 const { loadDrift } = require('../services/pulseDrift');
+const { calculateCompatibility, topFrictionTopic } = require('../services/scoring');
+const { loadCertifiedModels } = require('../services/dimensionModel');
+const { buildSuites } = require('../services/suiteOptimizer');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -369,6 +372,105 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch matches' });
+  }
+});
+
+// ── GET /matches/suites ─────────────────────────────────────────────────────
+// Deep-matching #4: the best apartment-sized suites at the requester's school,
+// each scored by its WEAKEST internal pair (maximin), with the weakest pair
+// named. ?size=N = how many suites to return (the card uses 1 and takes
+// suites[0]; the full screen uses 3) — NOT the apartment size. Returns
+// { suites: [] } whenever the eligible pool can't form even one valid group.
+const SUITE_POOL_CAP = 80;
+router.get('/suites', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const count = Math.min(10, Math.max(1, parseInt(req.query.size, 10) || 1));
+
+    const { rows: meRows } = await pool.query('SELECT school FROM users WHERE id = $1', [userId]);
+    const school = meRows[0]?.school;
+    if (!school) return res.json({ suites: [] });
+
+    const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
+    const demoFilter = includeDemos ? '' : `AND ${notDemo('u.email')}`;
+
+    // Eligible pool: same school, quiz done, active, and OPTED IN to matching.
+    // (There is no dedicated suite opt-in flag yet — roommate_status is the
+    // honest proxy: students who found a roommate are excluded.)
+    const { rows: poolRows } = await pool.query(
+      `SELECT u.id, u.first_name, u.last_name, u.photo_url, u.school_year,
+              u.gender, u.looking_for, u.dealbreakers, qa.answers
+         FROM users u
+         JOIN quiz_answers qa ON qa.user_id = u.id
+        WHERE u.school = $1
+          AND qa.completed = TRUE
+          AND u.is_paused = FALSE
+          AND u.is_banned = FALSE
+          AND COALESCE(u.roommate_status, 'actively_looking') IN ('actively_looking', 'open_to_offers')
+          ${demoFilter}
+        ORDER BY u.id
+        LIMIT ${SUITE_POOL_CAP}`,
+      [school],
+    );
+    if (poolRows.length < 2) return res.json({ suites: [] });
+
+    const ids = poolRows.map(r => r.id);
+    // Blocks among the pool — either direction makes that pair invalid.
+    const { rows: blockRows } = await pool.query(
+      `SELECT blocker_id, blocked_id FROM user_blocks
+        WHERE blocker_id = ANY($1::uuid[]) AND blocked_id = ANY($1::uuid[])`,
+      [ids],
+    );
+    const blocked = new Set();
+    for (const b of blockRows) {
+      blocked.add(`${b.blocker_id}|${b.blocked_id}`);
+      blocked.add(`${b.blocked_id}|${b.blocker_id}`);
+    }
+
+    // Suites compose on top of the existing pairwise score (#2 + #6 when
+    // certified) — load the same models/drift the feed uses, no re-derivation.
+    const dimensionModels = await loadCertifiedModels();
+    const driftMap = await loadDrift(ids);
+
+    const members = poolRows.map(r => ({
+      userId: r.id,
+      firstName: r.first_name || '',
+      lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
+      photoUrl: r.photo_url || undefined,
+      schoolYear: r.school_year || undefined,
+    }));
+
+    const passesPref = (pref, gender) =>
+      !Array.isArray(pref) || pref.length === 0 || !gender || gender === 'Prefer not to say' || pref.includes(gender);
+    const genderOk = (x, y) => passesPref(x.looking_for, y.gender) && passesPref(y.looking_for, x.gender);
+
+    // Injected pairwise scorer/validator (i < j). A block, a mutual-gender-pref
+    // violation, a hard block, or the smoke-free dealbreaker cap (non-smoker ×
+    // smoker) makes the pair INVALID → its suite is dropped. Soft caps just make
+    // the pair weak, and maximin surfaces that honestly.
+    const pairEval = (i, j) => {
+      const x = poolRows[i], y = poolRows[j];
+      if (blocked.has(`${x.id}|${y.id}`)) return { score: 0, valid: false };
+      if (!genderOk(x, y)) return { score: 0, valid: false };
+      const dealbreakers = [...new Set([
+        ...(Array.isArray(x.dealbreakers) ? x.dealbreakers : []),
+        ...(Array.isArray(y.dealbreakers) ? y.dealbreakers : []),
+      ])];
+      const r = calculateCompatibility(x.answers, y.answers, {
+        dealbreakers,
+        dimensionModels,
+        driftA: driftMap[String(x.id)] || {},
+        driftB: driftMap[String(y.id)] || {},
+      });
+      const valid = !r.isHardBlocked && r.capReason !== 'smoking';
+      return { score: r.finalPct, valid, topFrictionTopic: topFrictionTopic(x.answers, y.answers) };
+    };
+
+    const suites = buildSuites(members, { pairEval, sizes: [3, 4], count });
+    res.json({ suites });
+  } catch (err) {
+    console.error('[matches/suites] failed:', err);
+    res.status(500).json({ error: 'Failed to build suites' });
   }
 });
 

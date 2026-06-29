@@ -14,6 +14,7 @@ const {
   calculateCompatibility,
   generateWhyMatched,
   calculateGroupCompatibility,
+  topFrictionTopic,
   diffScore,
 } = require('./scoring');
 
@@ -309,6 +310,19 @@ test('certified shape does NOT fire balance copy for a two-of-a-kind pair', () =
 test('whyMatched leads with the balance phrase when a dim is complementary', () => {
   const why = generateWhyMatched({ lifestyle: 90, communication: 80 }, 88, [{ qid: 57, label: 'chore' }]);
   assert.ok(/your chore styles balance each other/i.test(why), why);
+});
+
+// ── Deep-matching #4: topFrictionTopic (suites) ──────────────────────────────
+
+test('topFrictionTopic picks the largest weighted-gap dimension', () => {
+  // Q49 (sleep, 35pts) opposite ends vs a small Q50 (cleanliness) gap → sleep.
+  const topic = topFrictionTopic({ 49: 0, 50: 0 }, { 49: 3, 50: 1 });
+  assert.equal(topic, 'sleep schedules');
+});
+
+test('topFrictionTopic is null when the pair shares no scored answers / agrees', () => {
+  assert.equal(topFrictionTopic({ ...AGREE }, { ...AGREE }), null); // identical → no gap
+  assert.equal(topFrictionTopic({}, {}), null);                     // nothing shared
 });
 
 // ── Deep-matching #6: trajectory (projection + convergence) ──────────────────

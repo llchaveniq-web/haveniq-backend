@@ -512,6 +512,37 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
   return trajectory ? `${trajectory}${base}` : base;
 }
 
+// Plain-language friction topic per question (deep-matching #4 suites). The
+// single largest weighted answer-gap between two users → the dimension most
+// likely to strain that pairing. Reuses the scored set + option counts.
+const FRICTION_TOPICS = {
+  49: 'sleep schedules', 50: 'cleanliness', 51: 'substances at home',
+  48: 'guests & hosting', 52: 'overnight guests', 54: 'alcohol',
+  53: 'study environment', 55: 'food & kitchen', 56: 'money & spending',
+  14: 'communication', 57: 'chores', 60: 'conflict repair',
+  62: 'boundaries', 63: 'conflict repair',
+};
+
+/**
+ * The single dimension most likely to cause friction between two answer sets:
+ * the scored question with the largest option-normalized gap, weighted by its
+ * points. Returns a plain-language topic ('sleep schedules', 'cleanliness') or
+ * null when the pair shares no scored answers (nothing to compare → no claim).
+ */
+function topFrictionTopic(rawA, rawB) {
+  const A = flatten(rawA), B = flatten(rawB);
+  let bestQ = null, bestGap = 0;
+  for (const qid of Object.keys(QUESTION_POINTS)) {
+    const ai = A[qid], bi = B[qid];
+    if (typeof ai !== 'number' || typeof bi !== 'number') continue;
+    const den = Math.max(1, (OPTION_COUNTS[qid] || 4) - 1);
+    const gap = (Math.abs(ai - bi) / den) * (QUESTION_POINTS[qid] || 0);
+    if (gap > bestGap) { bestGap = gap; bestQ = qid; }
+  }
+  if (bestQ === null || bestGap <= 0) return null;
+  return FRICTION_TOPICS[bestQ] || null;
+}
+
 /**
  * Squad-to-squad compatibility — averages the pairwise score across every
  * cross-group member pair. If any pairwise score is a hard block, the
@@ -552,6 +583,7 @@ module.exports = {
   calculateCompatibility,
   generateWhyMatched,
   calculateGroupCompatibility,
+  topFrictionTopic, // deep-matching #4 — friction topic for a pair (suites)
   diffScore,        // exported for direct unit tests of the option-count normalization
   OPTION_COUNTS,
   QUESTION_POINTS,  // exported for the engine-analysis script (weight audit)
