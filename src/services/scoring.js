@@ -278,8 +278,15 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   // self-report is behaviorally corroborated gets a small lift; contradicted, a
   // small penalty. Both unknown → mult 1.0 → no change (so callers that don't
   // pass it, incl. the test suite, are unaffected).
-  const v01 = (v) => (typeof v === 'number' && v >= 0 && v <= 1 ? v : 0.5);
-  const validationMult = 1 + 0.15 * ((v01(opts.validationA) + v01(opts.validationB)) / 2 - 0.5);
+  // HONESTY GATE: the multiplier may only be ≠1.0 when BOTH users have a REAL
+  // behavioral validation_score. If either is missing, it stays neutral (1.0) —
+  // a one-sided signal must never move the score (a wrong "validated" badge is
+  // trust fraud). Range is naturally clamped to [0.925, 1.075].
+  const realVal = (v) => (typeof v === 'number' && v >= 0 && v <= 1 ? v : null);
+  const _vA = realVal(opts.validationA), _vB = realVal(opts.validationB);
+  const validationMult = (_vA !== null && _vB !== null)
+    ? 1 + 0.15 * ((_vA + _vB) / 2 - 0.5)
+    : 1.0;
 
   // Calibrate (stretch around 50) so displayed scores use the full range.
   // No shared answers (maxScore === 0) → 0: can't score strangers.

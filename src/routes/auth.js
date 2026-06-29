@@ -60,6 +60,18 @@ const sendLimitEmail = rateLimit({
     (req.body?.email || '').toString().toLowerCase().trim() || ipKeyGenerator(req),
 });
 
+// Short-burst limiter — ~1 send / 30s PER EMAIL (the contract's anti-spam burst
+// cap). Deliberately NOT per-IP: a campus-launch crowd shares one WiFi egress,
+// so a 30s/IP cap would let one student's resend block the whole room. Stacked
+// in front of the existing per-email (5/15min) and per-IP (20/hr) buckets.
+const sendBurstLimit = rateLimit({
+  windowMs: 30 * 1000,
+  max: 1,
+  message: { error: 'Please wait 30 seconds before requesting another code.' },
+  keyGenerator: (req) =>
+    (req.body?.email || '').toString().toLowerCase().trim() || ipKeyGenerator(req),
+});
+
 // Per-IP signup limiter — caps total signup attempts from one egress,
 // regardless of how many email addresses are tried. Without this an
 // attacker can rotate emails forever and the per-email limiter never
@@ -93,7 +105,7 @@ const refreshLimitIp = rateLimit({
 
 // ── POST /auth/send-code ──────────────────────────────────────────────────
 // Validates .edu email, generates OTP, sends via SendGrid
-router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
+router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (req, res) => {
   try {
     // Guard against `req.body === undefined` (request with no Content-Type
     // and no body would otherwise throw on destructuring and bubble up to
@@ -127,10 +139,19 @@ router.post('/send-code', sendLimitIp, sendLimitEmail, async (req, res) => {
     );
     const existingUser = existingRows[0];
 
-    if (!existingUser && (!school || !schoolDomain)) {
-      return res.status(400).json({
-        error: 'school and schoolDomain are required for new signups',
-      });
+    if (!existingUser) {
+      // Signin mode = email only (no school params). Don't leak whether an
+      // account exists: respond 200 as if a code was sent, but send nothing.
+      // (A real account continues past this and gets emailed below.)
+      if (!school && !schoolDomain) {
+        return res.status(200).json({ ok: true });
+      }
+      // Signup with incomplete school info.
+      if (!school || !schoolDomain) {
+        return res.status(400).json({
+          error: 'school and schoolDomain are required for new signups',
+        });
+      }
     }
 
     // Accept academic email addresses worldwide, not just US .edu. The
