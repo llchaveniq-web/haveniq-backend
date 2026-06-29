@@ -445,13 +445,16 @@ async function scoreNewMatches(userId, newAnswers) {
       // the headline before that multiplier.
       result.preValidationPct,
       result.validationMultiplier,
+      // Deep-matching #2: structured complementarity so the app can lead with
+      // the "balance" phrasing. Empty array unless a shape is certified.
+      JSON.stringify(result.complementaryDims || []),
     ]);
   }
 
   if (rows.length === 0) return;
 
-  // Flatten into a single $1...$N param list. 10 columns per row.
-  const COLS = 10;
+  // Flatten into a single $1...$N param list. 11 columns per row.
+  const COLS = 11;
   const valuePlaceholders = rows
     .map((_, rowIdx) => {
       const base = rowIdx * COLS;
@@ -463,7 +466,7 @@ async function scoreNewMatches(userId, newAnswers) {
 
   await pool.query(
     `INSERT INTO compatibility_scores
-       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier)
+       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims)
      VALUES ${valuePlaceholders}
      ON CONFLICT (user_a, user_b) DO UPDATE
      SET score          = EXCLUDED.score,
@@ -474,6 +477,7 @@ async function scoreNewMatches(userId, newAnswers) {
          why_matched     = EXCLUDED.why_matched,
          pre_validation_pct    = EXCLUDED.pre_validation_pct,
          validation_multiplier = EXCLUDED.validation_multiplier,
+         complementary_dims    = EXCLUDED.complementary_dims,
          calculated_at   = NOW()`,
     params,
   );

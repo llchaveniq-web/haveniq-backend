@@ -177,6 +177,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          cs.why_matched,
          cs.pre_validation_pct,
          cs.validation_multiplier,
+         cs.complementary_dims,
          dq.answers AS candidate_answers,
          u.id,
          u.first_name,
@@ -270,6 +271,11 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       const validationFields = (vMult !== 1 && r.pre_validation_pct != null)
         ? { validationMultiplier: vMult, preValidationPct: r.pre_validation_pct }
         : {};
+      // Deep-matching #2: surface complementarity only when present (a certified
+      // shape made this pair fit BECAUSE they differ). Omitted otherwise so the
+      // app shows nothing — "balance" is a finding, never a default.
+      const compDims = Array.isArray(r.complementary_dims) ? r.complementary_dims : [];
+      const complementaryFields = compDims.length ? { complementaryDims: compDims } : {};
       return ({
       userId:        r.id,
       firstName:     r.first_name,
@@ -311,6 +317,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       connectStatus: r.connect_status || null,
       requestId:     r.connect_request_id || null,
       ...validationFields,
+      ...complementaryFields,
     });
     });
 

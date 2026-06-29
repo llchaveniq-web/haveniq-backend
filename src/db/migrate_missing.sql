@@ -55,6 +55,11 @@ CREATE INDEX IF NOT EXISTS idx_scores_user_b ON compatibility_scores(user_b);
 -- 1.0 (only ≠1 when BOTH users have a real validation_score — honesty gate).
 ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS pre_validation_pct  INTEGER;
 ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS validation_multiplier NUMERIC(4,3) DEFAULT 1.0;
+-- Deep-matching #2: dimensions whose DIFFERENCE is why a pair fits (a certified
+-- complementary shape + a genuinely far-apart pair). Structured so the app can
+-- LEAD with "your <dim> styles balance each other" instead of relying on the
+-- baked why_matched string. Empty/null until a shape is certified on outcomes.
+ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS complementary_dims JSONB;
 
 -- ── Part 3: the learning loop ─────────────────────────────────
 -- Every connect / accept / decline, with the per-category compatibility
