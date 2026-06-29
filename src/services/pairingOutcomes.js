@@ -50,17 +50,34 @@ function answerIndex(answers, qid) {
   if (n === null && v && typeof v === 'object') { n = num(v.index); if (n === null) n = num(v.value); }
   return n;
 }
-function buildServeFeatures(viewerAnswers, candidateAnswers) {
-  const q = {};
+// Optional drift maps (deep-matching #6): { "<qid>": { velocity, trend, sampleSize } }
+// per user. When present we ALSO snapshot, per question, the normalized effective
+// velocities and the convergence rate AT SERVE TIME — the trajectory training
+// signal the #6 gate needs. Absent ⇒ only `q` is captured (today's behavior).
+function buildServeFeatures(viewerAnswers, candidateAnswers, viewerDrift = null, candidateDrift = null) {
+  const { effectiveVelocity, convergence } = require('./trajectory');
+  const q = {}, vel = {}, conv = {};
   for (const qid of SCORED_QIDS) {
     const a = answerIndex(viewerAnswers, qid);
     const b = answerIndex(candidateAnswers, qid);
     if (a === null || b === null) continue;          // only questions both answered
     const den = Math.max(1, (OPTION_COUNTS[qid] || 4) - 1);
-    const r3 = (x) => Math.round((x / den) * 1000) / 1000;
-    q[qid] = [r3(a), r3(b)];
+    const r3 = (x) => Math.round(x * 1000) / 1000;
+    q[qid] = [r3(a / den), r3(b / den)];
+
+    const dA = viewerDrift && viewerDrift[qid];
+    const dB = candidateDrift && candidateDrift[qid];
+    if (dA || dB) {
+      const veA = effectiveVelocity(dA), veB = effectiveVelocity(dB);
+      if (veA !== 0 || veB !== 0) {
+        vel[qid] = [r3(veA / den), r3(veB / den)];     // normalized effective velocity / 30d
+        conv[qid] = r3(convergence(a, b, dA, dB, den)); // +closing / −widening / 0
+      }
+    }
   }
-  return { q };
+  const out = { q };
+  if (Object.keys(vel).length) { out.vel = vel; out.conv = conv; }
+  return out;
 }
 
 /**

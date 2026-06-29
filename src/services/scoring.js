@@ -17,6 +17,9 @@
 // Pure helper; cold-start (no certified shape) returns delta 0 ⇒ scoring is
 // today's diffScore, bit-for-bit. See services/dimensionBasis.js.
 const { displayDelta } = require('./dimensionBasis');
+// Deep-matching #6: trajectory projection + convergence. Pure; no-op without
+// reliable drift, so cold-start scoring stays bit-for-bit today.
+const { projectIndex, convergence, HORIZON_DEFAULT_DAYS } = require('./trajectory');
 
 // Per-question point values — must match the app's quizStore.ts QUESTION_POINTS.
 // Keep this in lockstep with the frontend, or backend-computed scores will
@@ -179,6 +182,26 @@ const DIMENSION_LABELS = {
 // "balance" phrasing to apply — i.e. their difference is genuinely WHY they fit.
 const COMPLEMENT_MIN_GAP = 0.5;
 
+// Deep-matching #6 thresholds for surfacing a trajectory ("converging") note:
+// the certified shape must weight convergence at least this much AND this pair
+// must actually be closing — OR projection must have materially shrunk the gap.
+const CONV_COEF_MIN = 0.3;       // shape meaningfully rewards convergence
+const CONV_MIN = 0.05;           // this pair is genuinely closing the gap
+const PROJ_MATERIAL_GAP = 0.5;   // projection shrank the gap by ≥ half an option (index units)
+
+// Plain-language convergence notes per question (deep-matching #6). Fallback is
+// derived from DIMENSION_LABELS. Never exposes raw slopes.
+const CONVERGENCE_NOTES = {
+  49: 'your sleep schedules are converging',
+  53: 'your focus and study routines are converging',
+  50: 'your cleanliness habits are converging',
+  48: 'your hosting rhythms are converging',
+  54: 'your alcohol comfort levels are converging',
+  56: 'your money habits are converging',
+  57: 'your chore routines are converging',
+  62: 'your boundary styles are converging',
+};
+
 // ── Display calibration ──────────────────────────────────────────────────
 // Raw weighted-agreement regresses toward ~50% as questions accumulate (law of
 // large numbers), so unscaled scores compress into a narrow ~45-65 band —
@@ -221,6 +244,15 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     ? opts.dimensionModels : {};
   const complementaryHits = [];
 
+  // Deep-matching #6: trajectory. driftA/driftB are per-question drift snapshots
+  // { velocity, trend, sampleSize } for each user; horizonDays projects forward.
+  // All absent (the default) ⇒ effective velocity 0 ⇒ projection == current and
+  // convergence == 0 ⇒ scoring is exactly today, bit-for-bit.
+  const driftA = (opts.driftA && typeof opts.driftA === 'object') ? opts.driftA : {};
+  const driftB = (opts.driftB && typeof opts.driftB === 'object') ? opts.driftB : {};
+  const horizonDays = Number.isFinite(opts.horizonDays) ? opts.horizonDays : HORIZON_DEFAULT_DAYS;
+  const convergingHits = [];
+
   // Build the amplified-question set from the union of both users' tags.
   // Stored as a Set<number> for O(1) lookup inside the inner loop.
   const amplifiedQids = new Set();
@@ -259,14 +291,30 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
       // basis (bounded ±DISPLAY_DELTA_MAX); uncertified ⇒ delta 0 ⇒ unchanged.
       const numOpts = OPTION_COUNTS[qid] || 4;
       const den = Math.max(1, numOpts - 1);
-      const aN = ai / den, bN = bi / den;
-      let g = diffFrac(Math.abs(ai - bi), numOpts);
       const shape = dimensionModels[qid];
+
+      // Deep-matching #6 trajectory for this question. convergence is 0 without
+      // reliable drift on BOTH sides; projection only applies when the dimension
+      // earned it (shape.project) — otherwise the snapshot index is used.
+      const dA = driftA[qid], dB = driftB[qid];
+      const conv = convergence(ai, bi, dA, dB, den);
+      const project = !!(shape && shape.certified && shape.project);
+      const aIdx = project ? projectIndex(ai, dA, horizonDays, den) : ai;
+      const bIdx = project ? projectIndex(bi, dB, horizonDays, den) : bi;
+      const aN = aIdx / den, bN = bIdx / den;
+
+      let g = diffFrac(Math.abs(aIdx - bIdx), numOpts);
       if (shape && shape.certified) {
-        g = Math.min(1, Math.max(0, g + displayDelta(shape, aN, bN)));
+        g = Math.min(1, Math.max(0, g + displayDelta(shape, aN, bN, conv)));
         if (shape.type === 'complementarity' && Math.abs(aN - bN) >= COMPLEMENT_MIN_GAP) {
           complementaryHits.push(qid);
         }
+        // Trajectory "converging" note: the shape rewards convergence AND this
+        // pair is closing, OR projection materially shrank the gap. Earned only.
+        const convCoef = shape.basis && shape.basis.coef ? Number(shape.basis.coef.conv) : NaN;
+        const rewardsConv = Number.isFinite(convCoef) && convCoef > CONV_COEF_MIN && conv >= CONV_MIN;
+        const projClosed = project && (Math.abs(ai - bi) - Math.abs(aIdx - bIdx)) >= PROJ_MATERIAL_GAP;
+        if (rewardsConv || projClosed) convergingHits.push(qid);
       }
       const earned = Math.round(pts * g);
       rawScore += earned;
@@ -367,9 +415,22 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     complementaryDims.push({ qid: Number(qid), label });
   }
 
+  // Deep-matching #6: dimensions where the two trajectories are materially
+  // closing (a certified shape rewards convergence, or projection shrank the
+  // gap). Empty unless earned — a finding, never a default. Deduped by label.
+  const convergingDims = [];
+  const seenConv = new Set();
+  for (const qid of convergingHits) {
+    const label = DIMENSION_LABELS[qid] || `dimension ${qid}`;
+    if (seenConv.has(label)) continue;
+    seenConv.add(label);
+    convergingDims.push({ qid: Number(qid), label, note: CONVERGENCE_NOTES[qid] || `your ${label} styles are converging` });
+  }
+
   return {
     finalPct,
     complementaryDims,      // [{qid,label}] — drives the "your X styles balance" phrasing
+    convergingDims,         // [{qid,label,note}] — deep-matching #6 trajectory note
     preValidationPct,       // headline % BEFORE the behavioral multiplier ("84% → 90%")
     confidence: conf,
     validationMultiplier: Math.round(validationMult * 100) / 100,  // step-4 behavioral lift/penalty
@@ -388,7 +449,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
 // compat-report / Fit Report / matches card / AI advisor all read this string.
 // Empty/absent ⇒ today's copy verbatim (complementarity is never asserted by
 // default; it ships only once the gate certifies it on real outcomes).
-function generateWhyMatched(breakdown, score, complementaryDims = []) {
+function generateWhyMatched(breakdown, score, complementaryDims = [], convergingDims = []) {
   const sorted = Object.entries(breakdown || {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 2);
@@ -422,6 +483,21 @@ function generateWhyMatched(breakdown, score, complementaryDims = []) {
     base = `Meaningful overlap in ${a}. Some lifestyle differences worth talking through before committing.`;
   }
 
+  // Deep-matching #6: a plain-language trajectory note when habits are closing
+  // (earned + material). Comes after any complementarity lead, before the base.
+  const conv = Array.isArray(convergingDims) ? convergingDims : [];
+  let trajectory = '';
+  if (conv.length === 1) {
+    const n = conv[0].note;
+    trajectory = `${n.charAt(0).toUpperCase()}${n.slice(1)}. `;
+  } else if (conv.length > 1) {
+    const labels = conv.map(d => d.label);
+    const list = labels.length === 2
+      ? `${labels[0]} and ${labels[1]}`
+      : `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
+    trajectory = `You're trending toward each other on ${list}. `;
+  }
+
   // Lead with complementarity when a certified shape says difference is the fit.
   const comp = Array.isArray(complementaryDims) ? complementaryDims : [];
   if (comp.length) {
@@ -431,9 +507,9 @@ function generateWhyMatched(breakdown, score, complementaryDims = []) {
       : labels.length === 2
         ? `${labels[0]} and ${labels[1]}`
         : `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
-    return `Your ${list} styles balance each other — opposites that tend to work. ${base}`;
+    return `Your ${list} styles balance each other — opposites that tend to work. ${trajectory}${base}`;
   }
-  return base;
+  return trajectory ? `${trajectory}${base}` : base;
 }
 
 /**

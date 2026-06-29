@@ -3,6 +3,8 @@ const pool   = require('../db/pool');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
 const { loadCertifiedModels } = require('../services/dimensionModel');
+const { loadDrift } = require('../services/pulseDrift');
+const { horizonFromMoveIn } = require('../services/trajectory');
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch, calibratePersonality } = require('../services/personalityPairing');
 const { notDemo } = require('../lib/demoFilter');
@@ -366,7 +368,7 @@ async function scoreNewMatches(userId, newAnswers) {
   // dealbreakers and passed into calculateCompatibility so flagged
   // categories carry amplified weight in the pair's score.
   const { rows: userRow } = await pool.query(
-    'SELECT school, dealbreakers, validation_score FROM users WHERE id = $1',
+    'SELECT school, dealbreakers, validation_score, move_in_timeline FROM users WHERE id = $1',
     [userId]
   );
   if (!userRow[0]) return;
@@ -389,6 +391,14 @@ async function scoreNewMatches(userId, newAnswers) {
     [userId]
   );
 
+  // Deep-matching #6: load the latest pulse_drift for the submitter + every
+  // candidate once, and resolve the projection horizon from the submitter's
+  // move-in timeline (else a fixed 90 days). Empty drift ⇒ projection/convergence
+  // are no-ops ⇒ scoring stays exactly today.
+  const driftMap = await loadDrift([userId, ...otherUsers.map(o => o.user_id)]);
+  const myDrift = driftMap[String(userId)] || {};
+  const horizonDays = horizonFromMoveIn(userRow[0].move_in_timeline);
+
   // v8: the abstract MBTI/DISC/OCEAN personality blend was removed from matching,
   // so the personality_profiles fetch (incl. a per-submit full-table scan) that
   // used to live here is gone. Behavioral validation_score (above) is the only
@@ -409,6 +419,9 @@ async function scoreNewMatches(userId, newAnswers) {
       validationA:  myValidation,
       validationB:  other.validation_score != null ? Number(other.validation_score) : undefined,
       dimensionModels,
+      driftA:       myDrift,
+      driftB:       driftMap[String(other.user_id)] || {},
+      horizonDays,
     });
 
     // NOTE: hard-blocked pairs are NO LONGER skipped. We used to `continue`
@@ -439,7 +452,7 @@ async function scoreNewMatches(userId, newAnswers) {
       result.isSoftBlocked,
       result.shadowPenalty,
       JSON.stringify(result.breakdown),
-      generateWhyMatched(result.breakdown, finalPct, result.complementaryDims),
+      generateWhyMatched(result.breakdown, finalPct, result.complementaryDims, result.convergingDims),
       // Part 2: behavioral-validation layer. validationMultiplier is an honest
       // 1.0 unless BOTH users have a real validation_score; preValidationPct is
       // the headline before that multiplier.
@@ -448,13 +461,16 @@ async function scoreNewMatches(userId, newAnswers) {
       // Deep-matching #2: structured complementarity so the app can lead with
       // the "balance" phrasing. Empty array unless a shape is certified.
       JSON.stringify(result.complementaryDims || []),
+      // Deep-matching #6: structured trajectory ("converging") dims. Empty unless
+      // projection/convergence is earned and materially closing this pair.
+      JSON.stringify(result.convergingDims || []),
     ]);
   }
 
   if (rows.length === 0) return;
 
-  // Flatten into a single $1...$N param list. 11 columns per row.
-  const COLS = 11;
+  // Flatten into a single $1...$N param list. 12 columns per row.
+  const COLS = 12;
   const valuePlaceholders = rows
     .map((_, rowIdx) => {
       const base = rowIdx * COLS;
@@ -466,7 +482,7 @@ async function scoreNewMatches(userId, newAnswers) {
 
   await pool.query(
     `INSERT INTO compatibility_scores
-       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims)
+       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims, converging_dims)
      VALUES ${valuePlaceholders}
      ON CONFLICT (user_a, user_b) DO UPDATE
      SET score          = EXCLUDED.score,
@@ -478,6 +494,7 @@ async function scoreNewMatches(userId, newAnswers) {
          pre_validation_pct    = EXCLUDED.pre_validation_pct,
          validation_multiplier = EXCLUDED.validation_multiplier,
          complementary_dims    = EXCLUDED.complementary_dims,
+         converging_dims       = EXCLUDED.converging_dims,
          calculated_at   = NOW()`,
     params,
   );

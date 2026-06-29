@@ -33,8 +33,9 @@ test('buildDimensionRecords: only labeled rows, only known dims, only finite pai
   ];
   const perDim = buildDimensionRecords(rows);
   assert.equal(perDim[57].length, 2, 'two labeled, finite Q57 pairs');
-  assert.deepEqual(perDim[57][0], { a: 0, b: 1, success: true });
-  assert.deepEqual(perDim[57][1], { a: 0.5, b: 0.5, success: false });
+  // Records now carry the #6 trajectory fields (0 when no drift was snapshotted).
+  assert.deepEqual(perDim[57][0], { a: 0, b: 1, success: true, conv: 0, vA: 0, vB: 0 });
+  assert.deepEqual(perDim[57][1], { a: 0.5, b: 0.5, success: false, conv: 0, vA: 0, vB: 0 });
   assert.equal(perDim[50].length, 1);
   assert.ok(!('999' in perDim), 'unknown dimension is never tracked');
 });

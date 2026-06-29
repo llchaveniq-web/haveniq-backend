@@ -16,7 +16,7 @@
 // pool is lazy-required inside the DB functions so the pure helpers
 // (labelOutcome / buildDimensionRecords / PRIOR_DIRECTIONS) import without `pg`.
 
-const { fitDimensionGated } = require('./dimensionBasis');
+const { fitDimensionGated, fitProjectionGated } = require('./dimensionBasis');
 
 // Per-dimension priors. `allowedTypes` is the set of NON-similarity shapes the
 // gate may certify for that question — everything is similarity (dist-only) by
@@ -76,7 +76,15 @@ function buildDimensionRecords(rows) {
       if (!Array.isArray(pair) || pair.length < 2) continue;
       const a = Number(pair[0]), b = Number(pair[1]);
       if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-      perDim[qid].push({ a, b, success: label });
+      // Deep-matching #6: trajectory snapshot captured at serve time, if present.
+      // features.conv[qid] = convergence rate; features.vel[qid] = [vAnorm, vBnorm]
+      // (normalized effective velocity / 30d). Absent ⇒ 0 ⇒ no trajectory signal.
+      const cm = row.features.conv && row.features.conv[qid];
+      const conv = Number.isFinite(Number(cm)) ? Number(cm) : 0;
+      const vel = row.features.vel && Array.isArray(row.features.vel[qid]) ? row.features.vel[qid] : null;
+      const vA = vel && Number.isFinite(Number(vel[0])) ? Number(vel[0]) : 0;
+      const vB = vel && Number.isFinite(Number(vel[1])) ? Number(vel[1]) : 0;
+      perDim[qid].push({ a, b, success: label, conv, vA, vB });
     }
   }
   return perDim;
@@ -103,25 +111,34 @@ async function trainDimensionModels() {
       importance: cfg.importance,
       allowedTypes: cfg.allowedTypes,
     });
+    // Deep-matching #6 projection gate: a dimension scores on velocity-projected
+    // values ONLY if that beats the snapshot on held-out outcomes. Projection
+    // only matters once the dimension's shape is certified (otherwise scoring is
+    // dist-only anyway), so gate it there. Off by default ⇒ snapshot-only today.
+    let project = false, projReason = 'projection not evaluated (shape uncertified)';
+    if (shape.certified) {
+      const pg = fitProjectionGated(records, { importance: cfg.importance });
+      project = pg.project; projReason = pg.reason;
+    }
     const stored = shape.certified
       ? { baseline: shape.baseline, basis: shape.basis }
       : null;
     try {
       await pool.query(
-        `INSERT INTO dimension_models (qid, type, certified, n, auc, shape, reason, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        `INSERT INTO dimension_models (qid, type, certified, project, n, auc, shape, reason, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
          ON CONFLICT (qid) DO UPDATE
-           SET type = EXCLUDED.type, certified = EXCLUDED.certified, n = EXCLUDED.n,
-               auc = EXCLUDED.auc, shape = EXCLUDED.shape, reason = EXCLUDED.reason,
+           SET type = EXCLUDED.type, certified = EXCLUDED.certified, project = EXCLUDED.project,
+               n = EXCLUDED.n, auc = EXCLUDED.auc, shape = EXCLUDED.shape, reason = EXCLUDED.reason,
                updated_at = NOW()`,
-        [Number(qid), shape.type, shape.certified, shape.n,
+        [Number(qid), shape.type, shape.certified, project, shape.n,
          Number.isFinite(shape.auc) ? shape.auc : null,
-         stored ? JSON.stringify(stored) : null, shape.reason],
+         stored ? JSON.stringify(stored) : null, `${shape.reason}; ${projReason}`],
       );
     } catch (e) {
       console.error(`[dimensionModel] persist qid=${qid} failed:`, e.message);
     }
-    summary.push({ qid: Number(qid), type: shape.type, certified: shape.certified, n: shape.n, auc: shape.auc });
+    summary.push({ qid: Number(qid), type: shape.type, certified: shape.certified, project, n: shape.n, auc: shape.auc });
   }
   return summary;
 }
@@ -143,11 +160,11 @@ async function loadCertifiedModels({ force = false } = {}) {
   try {
     const pool = require('../db/pool');
     const { rows } = await pool.query(
-      `SELECT qid, type, shape FROM dimension_models WHERE certified = TRUE AND shape IS NOT NULL`,
+      `SELECT qid, type, project, shape FROM dimension_models WHERE certified = TRUE AND shape IS NOT NULL`,
     );
     for (const r of rows) {
       if (!r.shape || !r.shape.baseline || !r.shape.basis) continue;
-      out[r.qid] = { certified: true, type: r.type, baseline: r.shape.baseline, basis: r.shape.basis };
+      out[r.qid] = { certified: true, type: r.type, project: !!r.project, baseline: r.shape.baseline, basis: r.shape.basis };
     }
   } catch (e) {
     console.error('[dimensionModel] load failed:', e.message);

@@ -85,6 +85,55 @@ router.post('/batch', requireAuth, async (req, res) => {
     console.error('[telemetry] validation_score persist failed:', e.message);
   }
 
+  // Deep-matching #6: persist pulse_drift (trajectory/velocity) into dedicated
+  // tables. pulse_drift is NOT in ALLOWED_TYPES (so it never enters the generic
+  // telemetry_events CHECK) — we pull it straight from the raw batch. We TRUST
+  // the app's velocity (it owns the baseline anchor + answer→value scaling);
+  // never recompute it here. Latest per (user, question) drives scoring; history
+  // lets the trainer reconstruct velocity at a pairing's serve time. Best-effort
+  // so a drift hiccup never fails the telemetry batch.
+  try {
+    const driftEvents = (Array.isArray(events) ? events : []).filter(
+      e => e && e.type === 'pulse_drift' && e.payload && Array.isArray(e.payload.byQuestion),
+    );
+    if (driftEvents.length) {
+      // One snapshot per batch is normal; if several, the newest wins per question.
+      const latest = driftEvents.reduce((a, b) =>
+        ((b.payload.computedAt || b.timestamp || 0) > (a.payload.computedAt || a.timestamp || 0) ? b : a));
+      const computedAt = Number.isFinite(Date.parse(latest.payload.computedAt))
+        ? new Date(latest.payload.computedAt).toISOString() : null;
+      const snapshotId = typeof latest.payload.snapshotId === 'string' ? latest.payload.snapshotId : null;
+      const num = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+      const int = (x) => (Number.isInteger(x) ? x : null);
+
+      for (const bq of latest.payload.byQuestion) {
+        const qid = int(bq && bq.questionId);
+        if (qid === null) continue;
+        const v = num(bq.velocity), cur = num(bq.current), base = num(bq.baseline),
+              del = num(bq.delta), ss = int(bq.sampleSize);
+        const trend = ['stable', 'shifting', 'changed'].includes(bq.trend) ? bq.trend : null;
+        await pool.query(
+          `INSERT INTO pulse_drift
+             (user_id, question_id, velocity, baseline, current, delta, trend, sample_size, snapshot_id, computed_at, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW())
+           ON CONFLICT (user_id, question_id) DO UPDATE
+             SET velocity=EXCLUDED.velocity, baseline=EXCLUDED.baseline, current=EXCLUDED.current,
+                 delta=EXCLUDED.delta, trend=EXCLUDED.trend, sample_size=EXCLUDED.sample_size,
+                 snapshot_id=EXCLUDED.snapshot_id, computed_at=EXCLUDED.computed_at, updated_at=NOW()`,
+          [userId, qid, v, base, cur, del, trend, ss, snapshotId, computedAt],
+        );
+        await pool.query(
+          `INSERT INTO pulse_drift_history
+             (user_id, question_id, velocity, current, trend, sample_size, snapshot_id, computed_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [userId, qid, v, cur, trend, ss, snapshotId, computedAt],
+        );
+      }
+    }
+  } catch (e) {
+    console.error('[telemetry] pulse_drift persist failed:', e.message);
+  }
+
   res.json({ accepted: valid.length, dropped: events.length - valid.length });
 });
 

@@ -60,6 +60,10 @@ ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS validation_multiplier 
 -- LEAD with "your <dim> styles balance each other" instead of relying on the
 -- baked why_matched string. Empty/null until a shape is certified on outcomes.
 ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS complementary_dims JSONB;
+-- Deep-matching #6: dimensions where the pair's trajectories are materially
+-- closing (projection/convergence earned). [{qid,label,note}]. Null/empty until
+-- a shape + projection certify on outcomes. The app renders the note as a reason.
+ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS converging_dims JSONB;
 
 -- ── Part 3: the learning loop ─────────────────────────────────
 -- Every connect / accept / decline, with the per-category compatibility
@@ -478,3 +482,42 @@ CREATE TABLE IF NOT EXISTS dimension_models (
   reason      TEXT,
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
+-- Deep-matching #6: per-dimension PROJECTION gate. When a dimension's certified
+-- shape also earns trajectory projection on held-out outcomes, project = TRUE
+-- and the scorer scores that dimension on the velocity-projected value instead
+-- of the stale snapshot. FALSE (default) ⇒ snapshot-only, bit-for-bit today.
+ALTER TABLE dimension_models ADD COLUMN IF NOT EXISTS project BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ── Deep-matching #6: trajectory / velocity ───────────────────
+-- The app posts pulse_drift telemetry (per-question least-squares velocity in
+-- answer-units / 30 days, with baseline/current/trend/sampleSize). We persist
+-- the LATEST per (user, question) for scoring, and keep full history so the
+-- trainer can reconstruct velocity at a pairing's serve time. We DO NOT recompute
+-- velocity — the app owns the baseline anchor + answer→value normalization.
+CREATE TABLE IF NOT EXISTS pulse_drift (
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  question_id  INTEGER NOT NULL,
+  velocity     NUMERIC,          -- slope in answer-units per 30 days
+  baseline     NUMERIC,
+  current      NUMERIC,
+  delta        NUMERIC,
+  trend        TEXT,             -- 'stable' | 'shifting' | 'changed'
+  sample_size  INTEGER,
+  snapshot_id  TEXT,
+  computed_at  TIMESTAMPTZ,
+  updated_at   TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, question_id)
+);
+CREATE TABLE IF NOT EXISTS pulse_drift_history (
+  id           BIGSERIAL PRIMARY KEY,
+  user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  question_id  INTEGER NOT NULL,
+  velocity     NUMERIC,
+  current      NUMERIC,
+  trend        TEXT,
+  sample_size  INTEGER,
+  snapshot_id  TEXT,
+  computed_at  TIMESTAMPTZ,
+  recorded_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pulse_drift_hist_user ON pulse_drift_history (user_id, question_id, computed_at DESC);

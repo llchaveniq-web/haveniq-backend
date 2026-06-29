@@ -26,20 +26,29 @@
 //
 // Pure, deterministic, dependency-free.
 
-const BASIS_FNS = ['dist', 'mean', 'min', 'max', 'prod'];
+// 'conv' (deep-matching #6) is the trajectory CONVERGENCE rate: + when the two
+// users' habits are closing the gap on this dimension, − when widening, 0 when
+// neither is moving (cold-start). It composes as just one more basis column the
+// #2 gate can weight or zero.
+const BASIS_FNS = ['dist', 'mean', 'min', 'max', 'prod', 'conv'];
 const EPS = 1e-12;
 const isFin = (x) => typeof x === 'number' && Number.isFinite(x);
 const sigmoid = (z) => 1 / (1 + Math.exp(-z));
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 
-/** The 5 basis features from a normalized answer pair a,b ∈ [0,1]. */
-function expandPair(a, b) {
+/**
+ * The basis features from a normalized answer pair a,b ∈ [0,1], plus the
+ * trajectory convergence rate `conv` (deep-matching #6; default 0 ⇒ no drift /
+ * cold-start, so every existing caller is unchanged bit-for-bit).
+ */
+function expandPair(a, b, conv = 0) {
   return {
     dist: Math.abs(a - b),
     mean: (a + b) / 2,
     min: Math.min(a, b),
     max: Math.max(a, b),
     prod: a * b,
+    conv: Number.isFinite(conv) ? conv : 0,
   };
 }
 
@@ -155,7 +164,7 @@ function auc(intercept, coef, rows, y) {
 
 /** Cold-start dist-only prior: closeness ⇒ success ⇒ negative weight on dist. */
 function distOnlyPrior(importance = 1) {
-  return { intercept: 0, coef: { dist: -Math.abs(importance), mean: 0, min: 0, max: 0, prod: 0 } };
+  return { intercept: 0, coef: { dist: -Math.abs(importance), mean: 0, min: 0, max: 0, prod: 0, conv: 0 } };
 }
 
 /** Name the shape from coefficient signs. */
@@ -205,7 +214,7 @@ function fitDimensionGated(records, opts = {}) {
   const rows = [], y = [];
   for (const r of records) {
     if (!isFin(r.a) || !isFin(r.b)) continue;
-    rows.push(expandPair(r.a, r.b));
+    rows.push(expandPair(r.a, r.b, r.conv));
     y.push(r.success ? 1 : 0);
   }
 
@@ -278,17 +287,75 @@ const DISPLAY_DELTA_MAX = 0.5;
  * complementary dim lifts far-apart pairs and trims two-of-a-kind, bounded to
  * ±DISPLAY_DELTA_MAX. Returns 0 for an uncertified shape (⇒ scorer = today).
  */
-function displayDelta(shape, a, b) {
+function displayDelta(shape, a, b, conv = 0) {
   if (!shape || !shape.certified || !isFin(a) || !isFin(b)) return 0;
-  const f = expandPair(a, b);
+  const f = expandPair(a, b, conv);
   const pSpec = sigmoid(shapeLogit(shape.basis.intercept, shape.basis.coef, f));
   const pBase = sigmoid(shapeLogit(shape.baseline.intercept, shape.baseline.coef, f));
   return clamp(pSpec - pBase, -DISPLAY_DELTA_MAX, DISPLAY_DELTA_MAX);
 }
 
+// Project a NORMALIZED value v ∈ [0,1] forward by a normalized velocity (per 30d)
+// to horizon H, clamped to [0,1]. Zero/non-finite velocity ⇒ unchanged.
+function projectVal(v, vel, horizonDays) {
+  const ve = Number(vel);
+  if (!Number.isFinite(ve) || ve === 0) return v;
+  const H = Number.isFinite(horizonDays) && horizonDays > 0 ? horizonDays : 90;
+  return Math.min(1, Math.max(0, v + ve * (H / 30)));
+}
+
+/**
+ * Gate trajectory PROJECTION for a dimension: does scoring it on velocity-
+ * projected values beat the snapshot on held-out outcomes? records carry
+ * { a, b, success, conv, vA, vB } (normalized). Returns { project, improvement, n }.
+ * project=false on thin data ⇒ the dimension keeps snapshot-only scoring (today).
+ */
+function fitProjectionGated(records, opts = {}) {
+  const minImprovement = opts.minImprovement ?? 0.01;
+  const horizonDays = opts.horizonDays ?? 90;
+  const importance = opts.importance ?? 1;
+  const holdoutFraction = opts.holdoutFraction ?? 0.3;
+  const prior = distOnlyPrior(importance);
+  const fitOpts = { priorCoef: prior.coef, priorIntercept: prior.intercept };
+
+  const cur = [], prj = [], y = [];
+  for (const r of records) {
+    if (!isFin(r.a) || !isFin(r.b)) continue;
+    cur.push(expandPair(r.a, r.b, r.conv));
+    prj.push(expandPair(projectVal(r.a, r.vA, horizonDays), projectVal(r.b, r.vB, horizonDays), r.conv));
+    y.push(r.success ? 1 : 0);
+  }
+  const n = cur.length;
+  if (n < 8) return { project: false, improvement: 0, n, reason: 'insufficient data' };
+
+  const stride = Math.max(2, Math.round(1 / Math.min(0.5, Math.max(0.1, holdoutFraction))));
+  const idxTr = [], idxHo = [];
+  for (let i = 0; i < n; i++) (i % stride === 0 ? idxHo : idxTr).push(i);
+  const both = (idx) => idx.some(i => y[i] === 1) && idx.some(i => y[i] === 0);
+  if (idxHo.length < 3 || idxTr.length < 4 || !both(idxTr) || !both(idxHo)) {
+    return { project: false, improvement: 0, n, reason: 'split too small / single-class' };
+  }
+  const pick = (arr, idx) => idx.map(i => arr[i]);
+  const trY = idxTr.map(i => y[i]), hoY = idxHo.map(i => y[i]);
+  const curFit = fitLogistic(pick(cur, idxTr), trY, { ...fitOpts, features: BASIS_FNS });
+  const prjFit = fitLogistic(pick(prj, idxTr), trY, { ...fitOpts, features: BASIS_FNS });
+  if (!curFit.ok || !prjFit.ok) return { project: false, improvement: 0, n, reason: 'fit failed' };
+  const curHo = meanLogLoss(curFit.intercept, curFit.coef, pick(cur, idxHo), hoY);
+  const prjHo = meanLogLoss(prjFit.intercept, prjFit.coef, pick(prj, idxHo), hoY);
+  const improvement = curHo - prjHo;
+  return {
+    project: Number.isFinite(improvement) && improvement >= minImprovement,
+    improvement: Number.isFinite(improvement) ? improvement : 0,
+    n,
+    reason: `projection held-out gain ${Number.isFinite(improvement) ? improvement.toFixed(4) : 'n/a'}`,
+  };
+}
+
 module.exports = {
   BASIS_FNS,
   expandPair,
+  projectVal,
+  fitProjectionGated,
   fitLogistic,
   distOnlyPrior,
   classifyType,

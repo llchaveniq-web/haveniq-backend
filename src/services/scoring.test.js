@@ -310,3 +310,89 @@ test('whyMatched leads with the balance phrase when a dim is complementary', () 
   const why = generateWhyMatched({ lifestyle: 90, communication: 80 }, 88, [{ qid: 57, label: 'chore' }]);
   assert.ok(/your chore styles balance each other/i.test(why), why);
 });
+
+// ── Deep-matching #6: trajectory (projection + convergence) ──────────────────
+
+const RELIABLE = (velocity) => ({ velocity, trend: 'changed', sampleSize: 10 });
+
+test('cold-start: drift present but no models is bit-for-bit identical to today', () => {
+  // Even with strong drift, without a certified shape projection can't apply and
+  // convergence is unused → scoring must equal the no-drift score exactly.
+  const a = { ...AGREE, 49: 0 };
+  const b = { ...AGREE, 49: 3 };
+  const today = calculateCompatibility(a, b);
+  const withDrift = calculateCompatibility(a, b, {
+    driftA: { 49: RELIABLE(-1) }, driftB: { 49: RELIABLE(1) }, horizonDays: 90,
+  });
+  assert.equal(withDrift.finalPct, today.finalPct);
+  assert.deepEqual(withDrift.convergingDims, []);
+});
+
+test('cold-start: a stable/low-sample trend never projects (no-op)', () => {
+  const a = { ...AGREE, 49: 0 }, b = { ...AGREE, 49: 3 };
+  const proj = {
+    49: { certified: true, type: 'similarity', project: true,
+          baseline: { intercept: 0, coef: { dist: -1 } },
+          basis: { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0, conv: 0 } } },
+  };
+  const stable = calculateCompatibility(a, b, {
+    dimensionModels: proj, driftA: { 49: { velocity: 5, trend: 'stable', sampleSize: 10 } }, horizonDays: 90,
+  });
+  const none = calculateCompatibility(a, b, { dimensionModels: proj });
+  assert.equal(stable.finalPct, none.finalPct); // unreliable drift ⇒ no projection
+});
+
+test('projection: a certified project shape moves a far pair toward agreement, clamped & in range', () => {
+  // A and B are 3 apart on Q49; both trending toward the middle. Projection
+  // should raise the pair's score, and finalPct stays a valid 0..100.
+  const a = { ...AGREE, 49: 0 }, b = { ...AGREE, 49: 3 };
+  const proj = {
+    49: { certified: true, type: 'similarity', project: true,
+          baseline: { intercept: 0, coef: { dist: -1 } },
+          basis: { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0, conv: 0 } } },
+  };
+  const snapshot = calculateCompatibility(a, b, { dimensionModels: proj });
+  const projected = calculateCompatibility(a, b, {
+    dimensionModels: proj,
+    driftA: { 49: RELIABLE(1) },   // 0 → trending up toward 3
+    driftB: { 49: RELIABLE(-1) },  // 3 → trending down toward 0
+    horizonDays: 90,
+  });
+  assert.ok(projected.finalPct >= snapshot.finalPct, `${projected.finalPct} vs ${snapshot.finalPct}`);
+  assert.ok(projected.finalPct >= 0 && projected.finalPct <= 100);
+});
+
+test('convergence: a shape that rewards conv + a closing pair emits convergingDims', () => {
+  const a = { ...AGREE, 49: 0 }, b = { ...AGREE, 49: 3 };
+  const convShape = {
+    49: { certified: true, type: 'similarity', project: false,
+          baseline: { intercept: 0, coef: { dist: -1 } },
+          // conv weighted strongly positive → closing pairs score better.
+          basis: { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0, conv: 2 } } },
+  };
+  const closing = calculateCompatibility(a, b, {
+    dimensionModels: convShape,
+    driftA: { 49: RELIABLE(1) },   // 0 climbing toward 3
+    driftB: { 49: RELIABLE(-1) },  // 3 falling toward 0  → gap closing
+    horizonDays: 90,
+  });
+  assert.deepEqual(closing.convergingDims, [{ qid: 49, label: 'sleep', note: 'your sleep schedules are converging' }]);
+  const why = generateWhyMatched(closing.breakdown, closing.finalPct, closing.complementaryDims, closing.convergingDims);
+  assert.ok(/sleep schedules are converging/i.test(why), why);
+});
+
+test('convergence: a widening pair does NOT emit convergingDims', () => {
+  const a = { ...AGREE, 49: 0 }, b = { ...AGREE, 49: 3 };
+  const convShape = {
+    49: { certified: true, type: 'similarity', project: false,
+          baseline: { intercept: 0, coef: { dist: -1 } },
+          basis: { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0, conv: 2 } } },
+  };
+  const widening = calculateCompatibility(a, b, {
+    dimensionModels: convShape,
+    driftA: { 49: RELIABLE(-1) },  // 0 dropping below
+    driftB: { 49: RELIABLE(1) },   // 3 rising further → widening
+    horizonDays: 90,
+  });
+  assert.deepEqual(widening.convergingDims, []);
+});

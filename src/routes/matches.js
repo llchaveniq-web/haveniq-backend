@@ -9,6 +9,7 @@ const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
+const { loadDrift } = require('../services/pulseDrift');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -178,6 +179,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          cs.pre_validation_pct,
          cs.validation_multiplier,
          cs.complementary_dims,
+         cs.converging_dims,
          dq.answers AS candidate_answers,
          u.id,
          u.first_name,
@@ -276,6 +278,9 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // app shows nothing — "balance" is a finding, never a default.
       const compDims = Array.isArray(r.complementary_dims) ? r.complementary_dims : [];
       const complementaryFields = compDims.length ? { complementaryDims: compDims } : {};
+      // Deep-matching #6: surface trajectory ("converging") dims only when present.
+      const convDims = Array.isArray(r.converging_dims) ? r.converging_dims : [];
+      const convergingFields = convDims.length ? { convergingDims: convDims } : {};
       return ({
       userId:        r.id,
       firstName:     r.first_name,
@@ -318,6 +323,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       requestId:     r.connect_request_id || null,
       ...validationFields,
       ...complementaryFields,
+      ...convergingFields,
     });
     });
 
@@ -338,21 +344,26 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       console.error('[matches/feed] personalize failed:', e.message);
     }
 
-    // Log this serve into pairing_outcomes (features + score), fire-and-forget
-    // so it never delays or fails the feed response. Pure logging — the training
-    // set the interaction model needs later. We snapshot the feature vector NOW
-    // because answers can change; the model must train on what was shown.
-    try {
-      const impressions = rows.map(r => ({
-        candidateId: r.id,
-        score:       parseFloat(r.score),
-        features:    buildServeFeatures(myAnswers, r.candidate_answers),
-        school:      req.user.school ?? school ?? null,
-      }));
-      recordFeedImpressions(userId, impressions).catch(() => {});
-    } catch (e) {
-      console.error('[matches/feed] impression log build failed:', e.message);
-    }
+    // Log this serve into pairing_outcomes (features + score), fully DETACHED so
+    // it never delays or fails the feed response. Loads pulse_drift for the
+    // viewer + candidates to snapshot the #6 trajectory signal (effective
+    // velocity + convergence) alongside the answer pairs. We snapshot NOW because
+    // answers and drift change; the model must train on what was actually shown.
+    (async () => {
+      try {
+        const driftMap = await loadDrift([userId, ...rows.map(r => r.id)]);
+        const myDrift = driftMap[String(userId)] || {};
+        const impressions = rows.map(r => ({
+          candidateId: r.id,
+          score:       parseFloat(r.score),
+          features:    buildServeFeatures(myAnswers, r.candidate_answers, myDrift, driftMap[String(r.id)] || {}),
+          school:      req.user.school ?? school ?? null,
+        }));
+        await recordFeedImpressions(userId, impressions);
+      } catch (e) {
+        console.error('[matches/feed] impression log failed:', e.message);
+      }
+    })();
 
     res.json(matches);
   } catch (err) {

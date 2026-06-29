@@ -9,6 +9,8 @@ const {
   classifyType,
   fitDimensionGated,
   displayDelta,
+  fitProjectionGated,
+  projectVal,
 } = require('./dimensionBasis');
 
 test('expandPair computes dist/mean/min/max/prod', () => {
@@ -109,6 +111,45 @@ test('a similarity-configured dimension (allowedTypes []) never flips, whatever 
     assert.equal(shape.certified, false, `allowedTypes [] must never certify (rule failed)`);
     assert.equal(displayDelta(shape, 0.1, 0.9), 0);
   }
+});
+
+test('conv is a back-compatible 6th basis feature (defaults 0)', () => {
+  const f = expandPair(0.8, 0.2);
+  assert.equal(f.conv, 0);                          // default when not supplied
+  assert.equal(expandPair(0.8, 0.2, 0.5).conv, 0.5);
+  assert.equal(distOnlyPrior(1).coef.conv, 0);      // prior never weights conv
+});
+
+test('projectVal clamps a normalized value to [0,1] and no-ops on zero velocity', () => {
+  assert.equal(projectVal(0.5, 0, 90), 0.5);
+  assert.equal(projectVal(0.5, 0.1, 30), 0.6);      // +0.1/30d × 1 month
+  assert.equal(projectVal(0.9, 0.1, 90), 1);        // clamps up
+  assert.equal(projectVal(0.1, -0.1, 90), 0);       // clamps down
+});
+
+test('projection gate: thin data keeps projection OFF', () => {
+  const recs = [{ a: 0.2, b: 0.8, success: true, vA: 0.1, vB: -0.1 }];
+  assert.equal(fitProjectionGated(recs).project, false);
+});
+
+test('projection gate: turns ON when projected values predict outcomes the snapshot can not', () => {
+  // Outcome is driven by where the pair is HEADING. Crucially the velocities are
+  // INDEPENDENT of the snapshot answers, so the current gap can't predict the
+  // outcome (two pairs with the same |a−b| but different drift land differently);
+  // only the projected gap can. The gate must turn projection on.
+  const recs = [];
+  for (let i = 0; i < 200; i++) {
+    const a = ((i * 41) % 100) / 100;
+    const b = ((i * 73 + 13) % 100) / 100;
+    const vA = (((i * 29 + 5) % 21) - 10) / 100;   // −0.10..0.10, independent of a,b
+    const vB = (((i * 17 + 3) % 21) - 10) / 100;
+    const aProj = projectVal(a, vA, 90), bProj = projectVal(b, vB, 90); // +3×velocity
+    const success = Math.abs(aProj - bProj) < 0.3;  // labeled by the PROJECTED gap
+    recs.push({ a, b, success, conv: 0, vA, vB });
+  }
+  const g = fitProjectionGated(recs, { minImprovement: 0.01 });
+  assert.equal(g.project, true, g.reason);
+  assert.ok(g.improvement >= 0.01);
 });
 
 test('certified complementary shape lifts a far-apart pair above two-of-a-kind', () => {
