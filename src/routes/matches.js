@@ -8,7 +8,7 @@ const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
-const { recordPairingEvent } = require('../services/pairingOutcomes');
+const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -151,6 +151,15 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     );
     const myGender     = meUserRows[0]?.gender ?? null;
     const myLookingFor = Array.isArray(meUserRows[0]?.looking_for) ? meUserRows[0].looking_for : [];
+
+    // Viewer's own quiz answers — snapshotted into each served impression's
+    // feature vector (pairing_outcomes logging). Does NOT touch scoring or the
+    // response; best-effort, so a missing row just yields empty features.
+    const { rows: meAnsRows } = await pool.query(
+      'SELECT answers FROM quiz_answers WHERE user_id = $1',
+      [userId],
+    );
+    const myAnswers = meAnsRows[0]?.answers || null;
     // v8 deal-breaker hard-filter (1d). Only the TRUE-hard, data-backed breaker
     // is hard-excluded (smoke-free, from Q51) so a cold-start deck never empties
     // on the soft ones. No-op until the viewer sets it (the app's deal-breaker
@@ -168,6 +177,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          cs.why_matched,
          cs.pre_validation_pct,
          cs.validation_multiplier,
+         dq.answers AS candidate_answers,
          u.id,
          u.first_name,
          u.last_name,
@@ -319,6 +329,22 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       }
     } catch (e) {
       console.error('[matches/feed] personalize failed:', e.message);
+    }
+
+    // Log this serve into pairing_outcomes (features + score), fire-and-forget
+    // so it never delays or fails the feed response. Pure logging — the training
+    // set the interaction model needs later. We snapshot the feature vector NOW
+    // because answers can change; the model must train on what was shown.
+    try {
+      const impressions = rows.map(r => ({
+        candidateId: r.id,
+        score:       parseFloat(r.score),
+        features:    buildServeFeatures(myAnswers, r.candidate_answers),
+        school:      req.user.school ?? school ?? null,
+      }));
+      recordFeedImpressions(userId, impressions).catch(() => {});
+    } catch (e) {
+      console.error('[matches/feed] impression log build failed:', e.message);
     }
 
     res.json(matches);
@@ -538,6 +564,12 @@ router.post('/respond', requireAuth, refuseBanned, async (req, res) => {
       // may be offline and — on web, with no push token — otherwise never
       // learns they matched.
       maybeEmailMatch(fromUserId, req.user.id).catch(() => {});
+    }
+
+    // Funnel: a decline is a real decision event — stamp it on pairing_outcomes
+    // (accept is stamped as 'match' above). Best-effort, non-blocking.
+    if (action === 'decline') {
+      recordPairingEvent(req.user.id, fromUserId, 'decline').catch(() => {});
     }
 
     res.json({ success: true, status: newStatus });

@@ -440,3 +440,18 @@ CREATE TABLE IF NOT EXISTS pairing_outcomes (
   CHECK (user_a < user_b)
 );
 CREATE INDEX IF NOT EXISTS idx_pairing_outcomes_school ON pairing_outcomes (school);
+-- Impression logging (the FRONT of the funnel): a row is written/refreshed the
+-- moment a pair is surfaced in a feed, snapshotting the model features + the
+-- score we showed. The funnel timestamps above stamp the decision/outcome
+-- events as they arrive. `features` is captured AT SERVE TIME (answers change;
+-- the training set must reflect what was actually shown). This is pure logging —
+-- it changes NO score. The interaction model trains off it later (λ=0 until it
+-- beats the linear baseline on held-out data), so every served day is signal
+-- banked now, not lost.
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS features         JSONB;
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS score_at_serve   INTEGER;
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS first_served_at  TIMESTAMPTZ;
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS last_served_at   TIMESTAMPTZ;
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS impression_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS passed_at        TIMESTAMPTZ;
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS declined_at      TIMESTAMPTZ;

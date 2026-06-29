@@ -10,7 +10,9 @@
 // Best-effort and NON-BLOCKING by contract: every call is fire-and-forget with
 // its own try/catch, so an outcome-logging failure can never break the user
 // path (connect/message/accept must always succeed regardless).
-const pool = require('../db/pool');
+// pool is lazy-required inside the DB functions only, so the pure helper
+// (buildServeFeatures) is importable — and unit-testable — without `pg`.
+const { QUESTION_POINTS, OPTION_COUNTS } = require('./scoring');
 
 // event name → the timestamp column it stamps. Whitelist — the value is
 // interpolated into SQL, so it must never come from user input.
@@ -23,7 +25,43 @@ const EVENT_COLUMN = {
   room_change: 'room_change_at',
   block:       'blocked_at',
   ghost:       'ghosted_at',
+  pass:        'passed_at',      // viewer skipped the card (no connect)
+  decline:     'declined_at',    // recipient rejected a connect request
 };
+
+// ── Serve-time feature snapshot ─────────────────────────────────────────────
+// Build the per-question normalized value pairs for a viewer×candidate at the
+// moment a feed is served. Each scored question becomes [viewerNorm, candNorm]
+// in [0,1] (option index / (optionCount-1)). This is the raw, model-agnostic
+// signal the interaction model trains on (it can derive dist/mean/min/max/prod
+// from these pairs). Only questions BOTH answered are included. Captured at
+// serve time on purpose — answers can change later; the training set must
+// reflect what was actually shown. Returns { q: { "<qid>": [a, b], … } }.
+const SCORED_QIDS = Object.keys(QUESTION_POINTS);
+function answerIndex(answers, qid) {
+  if (!answers || typeof answers !== 'object') return null;
+  const v = answers[qid];
+  const num = (x) => {
+    if (typeof x === 'number' && Number.isFinite(x)) return x;
+    if (typeof x === 'string' && x.trim() !== '' && Number.isFinite(Number(x))) return Number(x);
+    return null;
+  };
+  let n = num(v);
+  if (n === null && v && typeof v === 'object') { n = num(v.index); if (n === null) n = num(v.value); }
+  return n;
+}
+function buildServeFeatures(viewerAnswers, candidateAnswers) {
+  const q = {};
+  for (const qid of SCORED_QIDS) {
+    const a = answerIndex(viewerAnswers, qid);
+    const b = answerIndex(candidateAnswers, qid);
+    if (a === null || b === null) continue;          // only questions both answered
+    const den = Math.max(1, (OPTION_COUNTS[qid] || 4) - 1);
+    const r3 = (x) => Math.round((x / den) * 1000) / 1000;
+    q[qid] = [r3(a), r3(b)];
+  }
+  return { q };
+}
 
 /**
  * Stamp a funnel event for a pair (idempotent per stage — first occurrence
@@ -40,6 +78,7 @@ async function recordPairingEvent(u1, u2, event, meta = {}) {
   const school = meta.school ?? null;
   const score  = Number.isFinite(meta.score) ? Math.round(meta.score) : null;
   try {
+    const pool = require('../db/pool');
     await pool.query(
       `INSERT INTO pairing_outcomes (user_a, user_b, school, score_at_match, ${col}, updated_at)
        VALUES ($1, $2, $3, $4, NOW(), NOW())
@@ -55,4 +94,55 @@ async function recordPairingEvent(u1, u2, event, meta = {}) {
   }
 }
 
-module.exports = { recordPairingEvent };
+/**
+ * Log feed impressions for one serve: upsert one pairing_outcomes row per
+ * surfaced candidate, snapshotting the score shown + the serve-time features.
+ * Re-serving a pair refreshes the snapshot and bumps impression_count; it never
+ * overwrites first_served_at or any decision/outcome timestamp. Pure logging —
+ * changes no score. Best-effort / non-blocking by contract.
+ *
+ * @param {string} viewerId — the user whose feed this is
+ * @param {Array<{candidateId:string, score:number, features:object, school?:string}>} items
+ */
+async function recordFeedImpressions(viewerId, items) {
+  if (!viewerId || !Array.isArray(items) || items.length === 0) return;
+  const rows = [];
+  for (const it of items) {
+    const cand = it && it.candidateId;
+    if (!cand || String(cand) === String(viewerId)) continue;
+    const [a, b] = String(viewerId) < String(cand) ? [viewerId, cand] : [cand, viewerId];
+    const score = Number.isFinite(it.score) ? Math.round(it.score) : null;
+    rows.push([a, b, it.school ?? null, score, it.features ? JSON.stringify(it.features) : null]);
+  }
+  if (rows.length === 0) return;
+
+  // 5 params per row; first/last_served_at + impression_count are SQL literals.
+  const COLS = 5;
+  const values = rows
+    .map((_, i) => {
+      const o = i * COLS;
+      return `($${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5}::jsonb, NOW(), NOW(), 1)`;
+    })
+    .join(', ');
+  try {
+    const pool = require('../db/pool');
+    await pool.query(
+      `INSERT INTO pairing_outcomes
+         (user_a, user_b, school, score_at_serve, features, first_served_at, last_served_at, impression_count)
+       VALUES ${values}
+       ON CONFLICT (user_a, user_b) DO UPDATE
+         SET impression_count = pairing_outcomes.impression_count + 1,
+             last_served_at   = NOW(),
+             score_at_serve   = EXCLUDED.score_at_serve,
+             features         = EXCLUDED.features,
+             first_served_at  = COALESCE(pairing_outcomes.first_served_at, NOW()),
+             school           = COALESCE(pairing_outcomes.school, EXCLUDED.school),
+             updated_at       = NOW()`,
+      rows.flat(),
+    );
+  } catch (err) {
+    console.error('[pairing_outcomes] impression log failed:', err.message);
+  }
+}
+
+module.exports = { recordPairingEvent, recordFeedImpressions, buildServeFeatures };
