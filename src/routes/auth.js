@@ -26,17 +26,9 @@ function logSignIn(pool, userId, method, req) {
   ).catch(err => console.error('[auth] logSignIn failed:', err.message));
 }
 
-// Hash an OTP for at-rest storage. We never want the cleartext code on
-// disk — a DB dump or backup leak would expose every in-flight code
-// otherwise. The pepper is mixed in so a stolen DB without the JWT
-// secret can't be brute-forced offline (1M codes is trivial without
-// the pepper).
-function hashOtp(code) {
-  return crypto
-    .createHash('sha256')
-    .update(`${code}:${process.env.JWT_SECRET}`)
-    .digest('hex');
-}
+// OTP hash + attempt cap are shared with the founder support endpoints
+// (routes/admin.js resend/unlock) via lib/otp so they can never drift.
+const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { signToken, requireAuth } = require('../middleware/auth');
 const { signChallengeToken } = require('./twoFactor');
 const analytics = require('../services/analytics');
@@ -311,12 +303,11 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
 // ── POST /auth/verify-code ────────────────────────────────────────────────
 // Verifies OTP, creates/finds user, returns JWT.
 //
-// Attempt cap is 3 — must stay in sync with verify.tsx's MAX_ATTEMPTS.
-// Was 5, but the frontend locks the user out at 3 wrong codes, so a
-// scripted client that bypasses the React lockout was getting 5
-// guesses per code instead of the advertised 3. Either both sides
-// agree or the limit isn't a limit.
-const MAX_OTP_ATTEMPTS = 3;
+// Attempt cap (MAX_OTP_ATTEMPTS, from lib/otp) is 3 — must stay in sync with
+// verify.tsx's MAX_ATTEMPTS. Was 5, but the frontend locks the user out at 3
+// wrong codes, so a scripted client that bypasses the React lockout was getting
+// 5 guesses per code instead of the advertised 3. Either both sides agree or the
+// limit isn't a limit.
 router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) => {
   try {
     const { email, code, school, schoolDomain } = req.body || {};

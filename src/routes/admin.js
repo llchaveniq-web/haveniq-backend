@@ -1,14 +1,9 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-const { isFounder } = require('../utils/founders');
-
-function requireFounder(req, res, next) {
-  if (!isFounder(req.user.id)) {
-    return res.status(403).json({ error: 'Founders only' });
-  }
-  next();
-}
+const { requireFounder } = require('../middleware/requireFounder');
+const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
+const { generateOTP, sendOTPEmail } = require('../services/email');
 
 // ── Founder review queue ─────────────────────────────────────────────────
 //
@@ -439,6 +434,91 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
   } catch (err) {
     console.error('[admin/seed-demos] failed:', err);
     res.status(500).json({ error: 'Seed failed', detail: err.message });
+  }
+});
+
+// ── Founder account support ──────────────────────────────────────────────
+// Lets the founder unstick a user who's locked out of the OTP flow (failed too
+// many codes) without hand-editing the DB. Same isFounder gate + 403 as every
+// other route here. Mutations address the user by ID and use their STORED email
+// — never an email from the request body (a body email would let a caller act on
+// an address they don't own).
+//
+// `locked_until`: the OTP lockout the /verify-code flow enforces lives in
+// otp_codes — after MAX_OTP_ATTEMPTS wrong guesses the code is burned. We surface
+// it as the expiry of the most recent code that hit the attempt cap and is still
+// inside its 10-min window; null once it expires or is cleared. resend/unlock
+// delete those rows so the user can try again immediately.
+
+// GET /admin/users/lookup?email=<exact email>
+router.get('/users/lookup', requireAuth, requireFounder, async (req, res) => {
+  const email = typeof req.query.email === 'string' ? req.query.email.trim().toLowerCase() : '';
+  if (!email) return res.status(400).json({ error: 'email query param required' });
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, first_name, last_name, email, school, is_verified,
+              COALESCE(is_banned, FALSE) AS is_banned, ban_reason,
+              quiz_completed, created_at, last_active_at
+         FROM users WHERE LOWER(email) = $1 LIMIT 1`,
+      [email],
+    );
+    if (!rows[0]) return res.json({ user: null });
+    const u = rows[0];
+    const { rows: lock } = await pool.query(
+      `SELECT MAX(expires_at) AS locked_until FROM otp_codes
+        WHERE email = $1 AND expires_at > NOW() AND attempts >= $2`,
+      [String(u.email).toLowerCase(), MAX_OTP_ATTEMPTS],
+    );
+    res.json({ user: {
+      ...u,
+      locked_until: lock[0] && lock[0].locked_until ? new Date(lock[0].locked_until).toISOString() : null,
+    } });
+  } catch (err) {
+    console.error('[admin/users/lookup] failed:', err);
+    res.status(500).json({ error: 'lookup failed' });
+  }
+});
+
+// POST /admin/users/:id/resend-otp — re-trigger the /auth/send-code flow for the
+// user's own email (clears any burned codes, issues + emails a fresh one).
+router.post('/users/:id/resend-otp', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT email FROM users WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'user not found' });
+    const email = String(rows[0].email).toLowerCase();
+
+    // Clear any pending/burned codes, then issue a fresh one (mirrors send-code:
+    // hashed at rest, 10-min expiry). Deleting clears the lockout in one step.
+    await pool.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+    const code = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await pool.query(
+      'INSERT INTO otp_codes (email, code, expires_at) VALUES ($1, $2, $3)',
+      [email, hashOtp(code), expiresAt],
+    );
+    try {
+      await sendOTPEmail(email, code);
+    } catch (e) {
+      console.error('[admin/resend-otp] email send failed:', e.message);
+    }
+    res.json({ sent: true });
+  } catch (err) {
+    console.error('[admin/users/:id/resend-otp] failed:', err);
+    res.status(500).json({ error: 'resend failed' });
+  }
+});
+
+// POST /admin/users/:id/unlock — clear the OTP lockout/cooldown (the attempts
+// lockout the verify-code flow enforces) so the user can try again.
+router.post('/users/:id/unlock', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT id, email FROM users WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'user not found' });
+    await pool.query('DELETE FROM otp_codes WHERE email = $1', [String(rows[0].email).toLowerCase()]);
+    res.json({ user: { id: rows[0].id, email: rows[0].email, locked_until: null } });
+  } catch (err) {
+    console.error('[admin/users/:id/unlock] failed:', err);
+    res.status(500).json({ error: 'unlock failed' });
   }
 });
 
