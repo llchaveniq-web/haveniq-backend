@@ -178,14 +178,22 @@ router.get('/timing', async (req, res) => {
   try {
     const metro  = typeof req.query.metro  === 'string' ? req.query.metro.trim()  : '';
     const school = typeof req.query.school === 'string' ? req.query.school.trim() : '';
-    if (!metro && !school) return res.status(400).json({ error: 'metro or school query param required' });
+    const domain = typeof req.query.domain === 'string' ? req.query.domain.trim() : '';
+    if (!metro && !school && !domain) {
+      return res.status(400).json({ error: 'metro, school, or domain query param required' });
+    }
 
     let regionKey = null;
     if (metro) {
       regionKey = ht.normalizeRegionKey(metro);
     } else {
-      const names = await ht.listTimingRegionNames();
-      const resolved = ht.resolveSchoolToMetro(school, names);
+      // National crosswalk first (domain → metro, then name); fall back to the
+      // legacy substring/curated resolver for any name it doesn't carry.
+      let resolved = ht.resolveViaCrosswalk({ school, domain });
+      if (!resolved && school) {
+        const names = await ht.listTimingRegionNames();
+        resolved = ht.resolveSchoolToMetro(school, names);
+      }
       if (resolved) regionKey = ht.normalizeRegionKey(resolved);
     }
     if (!regionKey) return res.status(404).json({ error: 'no housing-timing data for that area' });

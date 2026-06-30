@@ -6,6 +6,7 @@ const assert = require('node:assert');
 const {
   parseCsvLine, parseZoriCsv, computeSeasonality,
   normalizeRegionKey, resolveSchoolToMetro, SOURCE,
+  normalizeSchoolName, domainCandidates, resolveViaCrosswalk,
 } = require('./housingTiming');
 
 test('parseCsvLine handles quoted fields with embedded commas', () => {
@@ -76,4 +77,27 @@ test('resolveSchoolToMetro: curated override, substring city, and honest null', 
   // No data / unknown → null (endpoint 404s; app degrades to reasoned guidance).
   assert.equal(resolveSchoolToMetro('University of Nowhere', have), null);
   assert.equal(resolveSchoolToMetro('San Diego State University', []), null); // no regions held
+});
+
+test('normalizeSchoolName mirrors the offline crosswalk key normalizer', () => {
+  assert.equal(normalizeSchoolName('Ohio State University-Main Campus'), 'ohio state university main campus');
+  assert.equal(normalizeSchoolName('Texas A&M'), 'texas a and m');
+});
+
+test('domainCandidates reduces a host to registrable-domain fallbacks', () => {
+  assert.deepEqual(domainCandidates('jdoe@mail.law.osu.edu'), ['mail.law.osu.edu', 'law.osu.edu', 'osu.edu']);
+  assert.deepEqual(domainCandidates('umich.edu'), ['umich.edu']);
+  assert.deepEqual(domainCandidates(''), []);
+});
+
+test('resolveViaCrosswalk maps schools nationwide via the bundled crosswalk', () => {
+  // Domain first — flagships that aren't named after their metro.
+  assert.equal(resolveViaCrosswalk({ domain: 'umich.edu' }), 'Ann Arbor, MI');
+  assert.equal(resolveViaCrosswalk({ domain: 'osu.edu' }), 'Columbus, OH');
+  // Sub-domained student email still resolves to the registrable domain.
+  assert.equal(resolveViaCrosswalk({ domain: 'student.umich.edu' }), 'Ann Arbor, MI');
+  // Name fallback when no domain is supplied.
+  assert.equal(resolveViaCrosswalk({ school: 'Ohio State University-Main Campus' }), 'Columbus, OH');
+  // Unknown → null (endpoint 404s; app degrades to reasoned guidance).
+  assert.equal(resolveViaCrosswalk({ domain: 'nope.example', school: 'Nowhere College' }), null);
 });

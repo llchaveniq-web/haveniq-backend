@@ -212,6 +212,59 @@ function resolveSchoolToMetro(school, regionNames = []) {
   return best ? best.region : null;
 }
 
+// ── National school→metro crosswalk ──────────────────────────────────────────
+// A prebuilt map of every US college (IPEDS) → its ZORI metro ("City, ST"),
+// derived offline from public data (IPEDS HD school coords/ZIP × Zillow ZORI
+// metro geography): exact ZIP→CBSA where the ZIP is a ZORI ZIP, else the
+// nearest ZORI-metro centroid within 75 miles. ~97% of the 4,852-school app
+// list resolves; the rest (US territories, remote tribal/rural campuses with no
+// metro rental market) fall through to 404 → reasoned guidance. Keyed by both
+// school domain (most reliable) and normalized school name.
+let _crosswalk = null;
+function loadCrosswalk() {
+  if (_crosswalk) return _crosswalk;
+  try { _crosswalk = require('../data/schoolMetro.json'); }
+  catch { _crosswalk = { byDomain: {}, byName: {} }; }
+  return _crosswalk;
+}
+
+// Mirror the offline name normalizer exactly (lowercase, & → and, strip
+// punctuation to spaces, collapse) so app-supplied names hit the byName keys.
+function normalizeSchoolName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Reduce a host to candidate registrable domains, most specific first, so a
+// student email like "jdoe@mail.law.osu.edu" still falls back to "osu.edu".
+function domainCandidates(domain) {
+  const host = String(domain || '').toLowerCase().trim().replace(/^.*@/, '');
+  if (!host) return [];
+  const labels = host.split('.').filter(Boolean);
+  const out = [];
+  for (let i = 0; i < labels.length - 1; i++) out.push(labels.slice(i).join('.'));
+  return out; // [full, …, registrable]
+}
+
+/**
+ * Resolve a school to its ZORI metro NAME ("City, ST") via the national
+ * crosswalk: domain first (exact, then registrable-domain fallback), then
+ * normalized school name. Returns null when the school isn't in the crosswalk.
+ */
+function resolveViaCrosswalk({ school, domain } = {}) {
+  const cw = loadCrosswalk();
+  for (const d of domainCandidates(domain)) {
+    if (cw.byDomain[d]) return cw.byDomain[d];
+  }
+  const name = normalizeSchoolName(school);
+  if (name && cw.byName[name]) return cw.byName[name];
+  return null;
+}
+
 // ── DB / network (lazy pool) ─────────────────────────────────────────────────
 // Keep at most this many recent months per region — enough years for robust
 // seasonality without storing the full multi-decade history.
@@ -320,5 +373,6 @@ module.exports = {
   SOURCE, DEFAULT_ZORI_URL,
   parseCsvLine, parseZoriCsv, computeSeasonality,
   normalizeRegionKey, resolveSchoolToMetro, CURATED_SCHOOL_METRO,
+  normalizeSchoolName, resolveViaCrosswalk, domainCandidates,
   ingestZori, computeAndStoreTiming, getTimingByKey, listTimingRegionNames,
 };
