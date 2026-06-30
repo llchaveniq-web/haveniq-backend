@@ -522,6 +522,43 @@ router.post('/users/:id/unlock', requireAuth, requireFounder, async (req, res) =
   }
 });
 
+// ── GET /admin/users/:id/subscription ────────────────────────────────────
+// Founder view of a user's premium subscription. Forward-compatible: until the
+// premium product ships the subscriptions table is empty, so every (existing)
+// user returns the {status:'none', …} default — safe to deploy now. Once Stripe
+// is wired and writes rows, the same query populates the real fields. 404 if the
+// user doesn't exist.
+const NONE_SUBSCRIPTION = {
+  status: 'none', plan: null, priceLabel: null,
+  currentPeriodEnd: null, cancelAtPeriodEnd: false, since: null,
+};
+router.get('/users/:id/subscription', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows: u } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    if (!u[0]) return res.status(404).json({ error: 'user not found' });
+
+    const { rows } = await pool.query(
+      `SELECT status, plan, price_label, current_period_end, cancel_at_period_end, created_at
+         FROM subscriptions WHERE user_id = $1 LIMIT 1`,
+      [req.params.id],
+    );
+    const s = rows[0];
+    const subscription = s ? {
+      status:            s.status || 'none',
+      plan:              s.plan ?? null,
+      priceLabel:        s.price_label ?? null,
+      currentPeriodEnd:  s.current_period_end ? new Date(s.current_period_end).toISOString() : null,
+      cancelAtPeriodEnd: s.cancel_at_period_end === true,
+      since:             s.created_at ? new Date(s.created_at).toISOString() : null,
+    } : { ...NONE_SUBSCRIPTION };
+
+    res.json({ subscription });
+  } catch (err) {
+    console.error('[admin/users/:id/subscription] failed:', err);
+    res.status(500).json({ error: 'subscription lookup failed' });
+  }
+});
+
 // ── GET /admin/metrics ────────────────────────────────────────────────────
 // Founder dashboard counts (same gate + 403). All single COUNT / GROUP BY
 // queries, run in parallel, cached ~60s so a dashboard refresh loop is cheap.

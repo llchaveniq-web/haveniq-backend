@@ -10,6 +10,13 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 ALTER TABLE users ADD COLUMN IF NOT EXISTS age              INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods    TEXT[];
 ALTER TABLE users ADD COLUMN IF NOT EXISTS roommate_status  TEXT;
+
+-- Subscription data model: the populated GET /admin/users/:id/subscription shape
+-- needs these two beyond the base table. Nullable/defaulted, so the endpoint
+-- returns the {status:'none', …} default for everyone until Stripe is wired and
+-- starts writing rows. (CREATE TABLE subscriptions lives in schema.sql.)
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN DEFAULT FALSE;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS price_label          TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_email     TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_notified  BOOLEAN DEFAULT FALSE;
 -- v8 (1d): hard/soft match deal-breakers the app saves via PATCH /users/me.

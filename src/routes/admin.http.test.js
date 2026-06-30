@@ -45,6 +45,21 @@ const fakePool = {
       if (params[0] === 'missing') return { rows: [] };
       return { rows: [{ id: params[0], email: 'found@school.edu' }] };
     }
+    // subscription: user-exists check
+    if (sql.startsWith('SELECT id FROM users WHERE id')) {
+      return params[0] === 'missing' ? { rows: [] } : { rows: [{ id: params[0] }] };
+    }
+    // subscription row (empty until Stripe ships; 'sub-active' = a populated row)
+    if (sql.includes('FROM subscriptions WHERE user_id')) {
+      if (params[0] === 'sub-active') {
+        return { rows: [{
+          status: 'active', plan: 'haveniq_plus', price_label: '$9.99/mo',
+          current_period_end: new Date('2026-07-29T00:00:00.000Z'),
+          cancel_at_period_end: true, created_at: new Date('2026-06-01T00:00:00.000Z'),
+        }] };
+      }
+      return { rows: [] };
+    }
     if (sql.startsWith('DELETE FROM otp_codes')) return { rows: [], rowCount: 1 };
     if (sql.startsWith('INSERT INTO otp_codes')) return { rows: [] };
     // ── /admin/metrics queries ──
@@ -110,6 +125,7 @@ test('non-founder gets 403 on each account-support route', async () => {
     () => asStranger(request(app).post('/admin/users/u-1/resend-otp')),
     () => asStranger(request(app).post('/admin/users/u-1/unlock')),
     () => asStranger(request(app).get('/admin/metrics')),
+    () => asStranger(request(app).get('/admin/users/u-1/subscription')),
   ];
   for (const mk of cases) {
     const res = await mk();
@@ -180,6 +196,31 @@ test('unlock: clears the lockout and returns locked_until null', async () => {
 test('unlock: unknown user → 404', async () => {
   const res = await asFounder(request(app).post('/admin/users/missing/unlock'));
   assert.equal(res.status, 404);
+});
+
+// ── subscription ─────────────────────────────────────────────────────────────
+test('subscription: existing user with no row → the none default', async () => {
+  const res = await asFounder(request(app).get('/admin/users/u-1/subscription'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { subscription: {
+    status: 'none', plan: null, priceLabel: null,
+    currentPeriodEnd: null, cancelAtPeriodEnd: false, since: null,
+  } });
+});
+
+test('subscription: unknown user → 404', async () => {
+  const res = await asFounder(request(app).get('/admin/users/missing/subscription'));
+  assert.equal(res.status, 404);
+});
+
+test('subscription: a populated row maps to the full shape (forward-compat)', async () => {
+  const res = await asFounder(request(app).get('/admin/users/sub-active/subscription'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.subscription, {
+    status: 'active', plan: 'haveniq_plus', priceLabel: '$9.99/mo',
+    currentPeriodEnd: '2026-07-29T00:00:00.000Z', cancelAtPeriodEnd: true,
+    since: '2026-06-01T00:00:00.000Z',
+  });
 });
 
 // ── metrics ──────────────────────────────────────────────────────────────────
