@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
 -- Supports the future verify path: lookup by hash among live keys.
 CREATE INDEX IF NOT EXISTS idx_api_keys_live ON api_keys (key_hash) WHERE revoked = FALSE;
 
+-- Premium (Stripe): the user's Stripe Customer id lives on the user row (per the
+-- premium contract). Source of truth for customer lookup + the webhook matches
+-- subscription.* events (which carry `customer` but no userId) back to a user via
+-- this column. Subscription STATE (status/plan/period) lives in `subscriptions`.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
+
 -- Ensure newer columns on users exist
 ALTER TABLE users ADD COLUMN IF NOT EXISTS age              INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods    TEXT[];

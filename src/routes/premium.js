@@ -4,107 +4,231 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const stripeUtil = require('../utils/stripe');
 
-// ── GET /premium/status ──────────────────────────────────────────────────
-// Returns the caller's current subscription state. Always works regardless
-// of whether Stripe is configured — falls back to `{ isPremium: false }`
-// when there's no row in subscriptions.
-router.get('/status', requireAuth, async (req, res) => {
+// ── Plan / cadence → Stripe Price mapping (server-side only) ─────────────────
+// The client sends only { plan, billing }. We NEVER trust a price from the
+// client — we map plan+cadence to a Price id created in the Stripe dashboard.
+// Price AMOUNTS live in Stripe:
+//   plus   + monthly  → $6.99/mo   (STRIPE_PRICE_PLUS_MONTHLY)
+//   plus   + annual   → $49.99/yr  (STRIPE_PRICE_PLUS_ANNUAL)
+//   parent + monthly  → $4.99/mo   (STRIPE_PRICE_PARENT_MONTHLY)
+//   parent + annual   → NOT OFFERED (no env entry; rejected in checkout)
+const PRICE_ENV = {
+  'plus:monthly':   'STRIPE_PRICE_PLUS_MONTHLY',
+  'plus:annual':    'STRIPE_PRICE_PLUS_ANNUAL',
+  'parent:monthly': 'STRIPE_PRICE_PARENT_MONTHLY',
+};
+const PLANS = ['plus', 'parent'];
+const BILLINGS = ['monthly', 'annual'];
+const PREMIUM_STATUSES = ['active', 'trialing']; // what counts as "has access"
+
+/** The configured Stripe Price id for a plan+cadence, or null if unmapped/unset. */
+function priceIdFor(plan, billing) {
+  const envName = PRICE_ENV[`${plan}:${billing}`];
+  const id = envName ? process.env[envName] : null;
+  return id || null;
+}
+
+/** Reverse map: a configured Price id → its logical plan ('plus'|'parent'). Lets
+ *  the webhook label a subscription by plan independent of metadata. */
+function planFromPriceId(priceId) {
+  if (!priceId) return null;
+  for (const [key, envName] of Object.entries(PRICE_ENV)) {
+    if (process.env[envName] && process.env[envName] === priceId) return key.split(':')[0];
+  }
+  return null;
+}
+
+/** Period-end unix ts. Stripe moved period fields onto subscription ITEMS in
+ *  recent API versions (basil); read the item first, fall back to the legacy
+ *  top-level field so we work across versions. */
+function periodEndUnix(sub) {
+  const v = sub && (sub.items?.data?.[0]?.current_period_end ?? sub.current_period_end);
+  return Number.isFinite(v) ? v : null;
+}
+
+/** Upsert the subscription row + sync the user's is_premium flag (the rest of the
+ *  app gates on users.is_premium). Idempotent; safe for out-of-order webhooks. */
+async function applySubscriptionState({ userId, customerId, subscriptionId, status, plan, periodEnd }) {
+  await pool.query(
+    `INSERT INTO subscriptions
+       (user_id, stripe_customer_id, stripe_subscription_id, status, plan, current_period_end, updated_at)
+     VALUES ($1, $2, $3, $4, $5, CASE WHEN $6::bigint IS NULL THEN NULL ELSE to_timestamp($6) END, NOW())
+     ON CONFLICT (user_id) DO UPDATE
+       SET stripe_customer_id     = COALESCE(EXCLUDED.stripe_customer_id, subscriptions.stripe_customer_id),
+           stripe_subscription_id = COALESCE(EXCLUDED.stripe_subscription_id, subscriptions.stripe_subscription_id),
+           status                 = EXCLUDED.status,
+           plan                   = COALESCE(EXCLUDED.plan, subscriptions.plan),
+           current_period_end     = COALESCE(EXCLUDED.current_period_end, subscriptions.current_period_end),
+           updated_at             = NOW()`,
+    [userId, customerId, subscriptionId, status, plan, periodEnd],
+  );
+  await pool.query(
+    'UPDATE users SET is_premium = $1 WHERE id = $2',
+    [PREMIUM_STATUSES.includes(status), userId],
+  );
+}
+
+function clientBase() {
+  return (process.env.CLIENT_URL || '').split(',')[0].trim() || 'https://app.haveniq.org';
+}
+
+// ── POST /premium/checkout-session ───────────────────────────────────────────
+router.post('/checkout-session', requireAuth, async (req, res) => {
+  const { plan, billing } = req.body || {};
+  if (!PLANS.includes(plan) || !BILLINGS.includes(billing)) {
+    return res.status(400).json({ error: 'Invalid plan or billing cadence.' });
+  }
+  // parent has no annual price (not offered in the UI). Reject rather than
+  // silently bill a different cadence than the user asked for.
+  if (plan === 'parent' && billing === 'annual') {
+    return res.status(400).json({ error: 'Annual billing is not available for the parent plan.' });
+  }
+
+  const stripe = stripeUtil.tryInit();
+  const priceId = priceIdFor(plan, billing);
+  // Honest 503 when payments aren't wired (missing keys or unmapped price) — the
+  // app shows "checkout isn't available yet"; never a fake/empty url.
+  if (!stripe || !priceId) {
+    return res.status(503).json({ error: 'Premium checkout is not available yet.' });
+  }
+
   try {
     const { rows } = await pool.query(
-      `SELECT status, plan, current_period_end
-       FROM subscriptions WHERE user_id = $1`,
-      [req.user.id],
+      'SELECT email, stripe_customer_id FROM users WHERE id = $1', [req.user.id],
     );
-    if (!rows[0]) return res.json({ isPremium: false });
-    const r = rows[0];
-    const isPremium = ['active', 'trialing'].includes(r.status);
-    res.json({
-      isPremium,
-      plan:               r.plan,
-      status:             r.status,
-      currentPeriodEnd:   r.current_period_end,
-    });
-  } catch (err) {
-    console.error('premium status failed:', err);
-    res.status(500).json({ error: 'Failed to load subscription status' });
-  }
-});
+    if (!rows[0]) return res.status(404).json({ error: 'User not found' });
 
-// ── POST /premium/checkout-session ───────────────────────────────────────
-// Creates a Stripe Checkout Session and returns the URL the client
-// should redirect the user to. Idempotently creates / reuses a Stripe
-// customer keyed by the user's email. 503 when Stripe isn't configured.
-router.post('/checkout-session', requireAuth, async (req, res) => {
-  const stripe = stripeUtil.tryInit();
-  if (!stripe) {
-    return res.status(503).json({
-      error: 'Premium tier is coming soon — payments not yet enabled.',
-    });
-  }
-
-  const priceId = process.env.STRIPE_PRICE_ID;
-  if (!priceId) {
-    return res.status(503).json({ error: 'STRIPE_PRICE_ID not configured.' });
-  }
-
-  try {
-    const { rows: userRows } = await pool.query(
-      'SELECT email FROM users WHERE id = $1',
-      [req.user.id],
-    );
-    const email = userRows[0]?.email;
-    if (!email) return res.status(404).json({ error: 'User not found' });
-
-    // Reuse the existing Stripe customer if we have one stashed.
-    let customerId = null;
-    const { rows: subRows } = await pool.query(
-      'SELECT stripe_customer_id FROM subscriptions WHERE user_id = $1',
-      [req.user.id],
-    );
-    customerId = subRows[0]?.stripe_customer_id ?? null;
-
+    let customerId = rows[0].stripe_customer_id;
     if (!customerId) {
       const customer = await stripe.customers.create({
-        email,
+        email: rows[0].email || undefined,
         metadata: { haveniq_user_id: req.user.id },
       });
       customerId = customer.id;
-      // Pre-insert with status='pending' so the webhook can find us later.
-      await pool.query(
-        `INSERT INTO subscriptions (user_id, stripe_customer_id, status)
-         VALUES ($1, $2, 'pending')
-         ON CONFLICT (user_id) DO UPDATE SET stripe_customer_id = $2`,
-        [req.user.id, customerId],
-      );
+      await pool.query('UPDATE users SET stripe_customer_id = $1 WHERE id = $2', [customerId, req.user.id]);
     }
 
+    const base = clientBase();
     const session = await stripe.checkout.sessions.create({
-      customer:  customerId,
-      mode:      'subscription',
+      mode: 'subscription',
+      customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${process.env.CLIENT_URL || 'https://app.haveniq.org'}/premium?success=1`,
-      cancel_url:  `${process.env.CLIENT_URL || 'https://app.haveniq.org'}/premium?cancelled=1`,
+      client_reference_id: req.user.id,
+      metadata: { userId: req.user.id, plan, billing },
+      // Stamp the subscription too, so customer.subscription.* webhooks (which
+      // carry no client_reference_id) can identify the user + plan directly.
+      subscription_data: { metadata: { userId: req.user.id, plan, billing } },
+      success_url: `${base}/premium?status=success`,
+      cancel_url:  `${base}/premium?status=cancelled`,
     });
-
     res.json({ url: session.url });
   } catch (err) {
-    console.error('checkout session failed:', err);
+    console.error('[premium/checkout-session] failed:', err);
     res.status(500).json({ error: 'Failed to create checkout session' });
   }
 });
 
-// ── POST /premium/cancel ─────────────────────────────────────────────────
-// Sets cancel_at_period_end on the user's active subscription. The user
-// keeps premium until current_period_end, then Stripe fires a
-// subscription.deleted webhook and we flip status to 'canceled'.
-router.post('/cancel', requireAuth, async (req, res) => {
+// ── POST /premium/webhook ────────────────────────────────────────────────────
+// The ONLY thing that grants/revokes premium — the client never self-reports.
+// Raw body (signature verification) — global JSON parser skips this path (server.js).
+router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const stripe = stripeUtil.tryInit();
-  if (!stripe) return res.status(503).json({ error: 'Premium tier not yet enabled.' });
+  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!stripe || !secret) return res.status(503).end(); // Stripe retries; no-op meanwhile.
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], secret);
+  } catch (err) {
+    console.error('[premium/webhook] signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
 
   try {
+    const obj = event.data.object;
+
+    if (event.type === 'checkout.session.completed') {
+      // Grant. The session carries client_reference_id (= userId) + our metadata.
+      const userId = obj.client_reference_id || obj.metadata?.userId || null;
+      const customerId = obj.customer || null;
+      let status = 'active';
+      let periodEnd = null;
+      let plan = obj.metadata?.plan || null;
+      const subscriptionId = obj.subscription || null;
+      if (subscriptionId) {
+        try {
+          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+          status = sub.status || 'active';
+          periodEnd = periodEndUnix(sub);
+          plan = plan || sub.metadata?.plan || planFromPriceId(sub.items?.data?.[0]?.price?.id);
+        } catch (e) {
+          console.error('[premium/webhook] subscription retrieve failed:', e.message);
+        }
+      }
+      if (userId) await applySubscriptionState({ userId, customerId, subscriptionId, status, plan, periodEnd });
+      else console.error('[premium/webhook] checkout.session.completed with no userId');
+
+    } else if (
+      event.type === 'customer.subscription.created' ||
+      event.type === 'customer.subscription.updated' ||
+      event.type === 'customer.subscription.deleted'
+    ) {
+      // Keep status + period in sync; deleted → revoke (back to free).
+      const sub = obj;
+      const customerId = sub.customer || null;
+      const status = event.type === 'customer.subscription.deleted' ? 'canceled' : (sub.status || 'canceled');
+      const plan = sub.metadata?.plan || planFromPriceId(sub.items?.data?.[0]?.price?.id) || null;
+      const periodEnd = periodEndUnix(sub);
+
+      // Identify the user: subscription metadata first, else by customer id.
+      let userId = sub.metadata?.userId || null;
+      if (!userId && customerId) {
+        const { rows } = await pool.query('SELECT id FROM users WHERE stripe_customer_id = $1', [customerId]);
+        userId = rows[0]?.id || null;
+      }
+      if (userId) await applySubscriptionState({ userId, customerId, subscriptionId: sub.id, status, plan, periodEnd });
+      else console.error('[premium/webhook] subscription event for unknown customer', customerId);
+    }
+
+    res.json({ received: true });
+  } catch (err) {
+    console.error('[premium/webhook] handler failed:', err);
+    res.status(500).json({ error: 'Webhook processing failed' });
+  }
+});
+
+// ── GET /premium/status ──────────────────────────────────────────────────────
+// Driven off the LIVE subscription row — a canceled sub loses access.
+router.get('/status', requireAuth, async (req, res) => {
+  try {
     const { rows } = await pool.query(
-      'SELECT stripe_subscription_id FROM subscriptions WHERE user_id = $1',
+      'SELECT status, plan, current_period_end FROM subscriptions WHERE user_id = $1',
       [req.user.id],
+    );
+    if (!rows[0]) {
+      return res.json({ isPremium: false, plan: null, status: null, currentPeriodEnd: null });
+    }
+    const r = rows[0];
+    res.json({
+      isPremium:        PREMIUM_STATUSES.includes(r.status),
+      plan:             r.plan ?? null,
+      status:           r.status ?? null,
+      currentPeriodEnd: r.current_period_end ? new Date(r.current_period_end).toISOString() : null,
+    });
+  } catch (err) {
+    console.error('[premium/status] failed:', err);
+    res.status(500).json({ error: 'Failed to load subscription status' });
+  }
+});
+
+// ── POST /premium/cancel ─────────────────────────────────────────────────────
+// Cancel at period end; the webhook flips status when Stripe finalizes it.
+router.post('/cancel', requireAuth, async (req, res) => {
+  const stripe = stripeUtil.tryInit();
+  if (!stripe) return res.status(503).json({ error: 'Premium is not available yet.' });
+  try {
+    const { rows } = await pool.query(
+      'SELECT stripe_subscription_id FROM subscriptions WHERE user_id = $1', [req.user.id],
     );
     const subId = rows[0]?.stripe_subscription_id;
     if (!subId) return res.status(404).json({ error: 'No active subscription' });
@@ -112,63 +236,11 @@ router.post('/cancel', requireAuth, async (req, res) => {
     await stripe.subscriptions.update(subId, { cancel_at_period_end: true });
     res.json({ success: true });
   } catch (err) {
-    console.error('cancel subscription failed:', err);
+    console.error('[premium/cancel] failed:', err);
     res.status(500).json({ error: 'Failed to cancel subscription' });
   }
 });
 
-// ── POST /premium/webhook ────────────────────────────────────────────────
-// Stripe → us. MUST consume the raw body (not the JSON-parsed one) so
-// signature verification works. Mounted with express.raw() instead of
-// the global JSON parser (see server.js).
-router.post(
-  '/webhook',
-  express.raw({ type: 'application/json' }),
-  async (req, res) => {
-    const stripe = stripeUtil.tryInit();
-    const secret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!stripe || !secret) {
-      return res.status(503).end(); // Stripe will retry; meanwhile, no-op.
-    }
-
-    let event;
-    try {
-      event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], secret);
-    } catch (err) {
-      console.error('webhook signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    try {
-      if (
-        event.type === 'customer.subscription.created' ||
-        event.type === 'customer.subscription.updated' ||
-        event.type === 'customer.subscription.deleted'
-      ) {
-        const sub = event.data.object;
-        await pool.query(
-          `UPDATE subscriptions
-             SET stripe_subscription_id = $1,
-                 status                 = $2,
-                 plan                   = $3,
-                 current_period_end     = to_timestamp($4),
-                 updated_at             = NOW()
-           WHERE stripe_customer_id = $5`,
-          [
-            sub.id,
-            sub.status,
-            sub.items?.data?.[0]?.price?.id ?? null,
-            sub.current_period_end,
-            sub.customer,
-          ],
-        );
-      }
-      res.json({ received: true });
-    } catch (err) {
-      console.error('webhook handler failed:', err);
-      res.status(500).json({ error: 'Webhook processing failed' });
-    }
-  },
-);
-
 module.exports = router;
+// Exposed for unit tests (router is a function; attaching props is harmless).
+module.exports._helpers = { priceIdFor, planFromPriceId, periodEndUnix, PRICE_ENV, PLANS, BILLINGS };
