@@ -128,5 +128,91 @@ console.log(`  identical twins score ~100        : ${twin}  (${twin >= 95 ? 'PAS
 console.log(`  monk vs party animal is low       : ${opp}  (${opp <= 40 ? 'PASS' : 'CHECK'})`);
 console.log(`  non-smoker × smoker capped (≤35)   : ${smoke.score} cap=${smoke._capReason}  (${smoke.score <= 35 ? 'PASS' : 'CHECK'})`);
 console.log(`  twins beat opposites              : ${twin > opp ? 'PASS' : 'CHECK'}`);
-console.log('\nNote: complementaryDims / convergingDims are [] here by design — no');
-console.log('certified shapes exist offline (cold-start), so the engine emits none.\n');
+console.log('\nNote: the matrix/detail above is COLD-START — no opts passed, so');
+console.log('complementaryDims / convergingDims are [] (the deep-matching layers');
+console.log('are inert without certified shapes). The probes below force them on.\n');
+
+// ── PROBES ───────────────────────────────────────────────────────────────────
+// Inject the same opts production passes, to make the GATED deep-matching layers
+// (#2 complementarity, #6 trajectory, dealbreaker amp, validation multiplier)
+// visible on readable profiles. The shapes/drift here are SYNTHETIC — exactly
+// what the gate WOULD certify from real outcomes. In production these only exist
+// AFTER real move-in/room-change data certifies them; this just shows the wiring
+// fires end-to-end, it does not certify anything.
+console.log('=== PROBES (synthetic certified shapes — what the gate would emit) ===\n');
+
+const sc = (a, b, opts) => calculateCompatibility(toAnswers(a), toAnswers(b), opts);
+
+// One MID-COMPATIBILITY pair (differ on ~6 dims → score sits in the 50s-60s, so
+// there's real headroom for a probe to move it — an identical pair pins at the
+// 99 ceiling and hides the effect). No cap triggers (51 both 0, 54 both 1,
+// Q50/Q49 gaps stay < the cap thresholds), answer spread ≥3 (conf 1.0). The pair
+// differs on Q57 (0 vs 3), Q49 (0 vs 3) and Q50 (0 vs 2) — the dims each probe acts on.
+const PX = { 50:0, 49:0, 48:0, 53:0, 55:0, 54:1, 52:1, 51:0, 14:1, 57:0, 60:0, 63:0, 62:0, 56:2 };
+const PY = { 50:2, 49:3, 48:2, 53:2, 55:2, 54:1, 52:1, 51:0, 14:1, 57:3, 60:0, 63:0, 62:0, 56:2 };
+
+// (1) #2 COMPLEMENTARITY on chores (Q57). A far-apart chore pair is penalized
+// today; a certified complementary shape REWARDS the difference.
+const choreLo = PX, choreHi = PY;
+const CHORE_COMPLEMENT = { 57: {
+  certified: true, type: 'complementarity',
+  baseline: { intercept: 0,    coef: { dist: -1 } },
+  basis:    { intercept: -1.5, coef: { dist: 3.5, mean: 0, min: 0, max: 0, prod: 0, conv: 0 } },
+} };
+const c0 = sc(choreLo, choreHi);
+const c1 = sc(choreLo, choreHi, { dimensionModels: CHORE_COMPLEMENT });
+console.log('(1) #2 complementarity — chore styles opposite (Q57: 0 vs 3):');
+console.log(`    cold-start         score=${pad(c0.finalPct, 3)} complementaryDims=${JSON.stringify(c0.complementaryDims)}`);
+console.log(`    + certified shape  score=${pad(c1.finalPct, 3)} complementaryDims=${JSON.stringify(c1.complementaryDims)}`);
+console.log(`    → difference is now REWARDED (${c0.finalPct} → ${c1.finalPct})\n`);
+
+// (2) #6 TRAJECTORY / projection — bedtimes far apart (Q49: 0 vs 3) but both
+// trending toward the middle. A certified project shape scores the FUTURE value.
+const bedLo = PX, bedHi = PY;
+// Gentle, converging velocities: over the 90-day horizon each moves ~1.5 option
+// steps, so they MEET near the middle (gap 3 → ~0) instead of overshooting.
+const driftA = { 49: { velocity:  0.5, trend: 'changed', sampleSize: 10 } }; // 0 climbing toward middle
+const driftB = { 49: { velocity: -0.5, trend: 'changed', sampleSize: 10 } }; // 3 falling toward middle
+const PROJECT_49 = { 49: {
+  certified: true, type: 'similarity', project: true,
+  baseline: { intercept: 0, coef: { dist: -1 } },
+  basis:    { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0, conv: 0 } },
+} };
+const p0 = sc(bedLo, bedHi);
+const p1 = sc(bedLo, bedHi, { dimensionModels: PROJECT_49, driftA, driftB, horizonDays: 90 });
+console.log('(2) #6 trajectory/projection — bedtimes opposite (Q49: 0 vs 3) but converging:');
+console.log(`    cold-start (snapshot)  score=${pad(p0.finalPct, 3)} convergingDims=${JSON.stringify(p0.convergingDims)}`);
+console.log(`    + project shape+drift  score=${pad(p1.finalPct, 3)} convergingDims=${JSON.stringify(p1.convergingDims)}`);
+console.log(`    → scored on where they're HEADING (${p0.finalPct} → ${p1.finalPct})\n`);
+
+// (2b) #6 CONVERGENCE term — a conv-weighted shape rewards the closing gap.
+const CONV_49 = { 49: {
+  certified: true, type: 'similarity', project: false,
+  baseline: { intercept: 0, coef: { dist: -1 } },
+  basis:    { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0, conv: 2 } },
+} };
+const v1 = sc(bedLo, bedHi, { dimensionModels: CONV_49, driftA, driftB });
+console.log('(2b) #6 convergence term — same drift, conv-weighted shape:');
+console.log(`     score=${pad(v1.finalPct, 3)} convergingDims=${JSON.stringify(v1.convergingDims)}\n`);
+
+// (3) DEALBREAKER amplification (×1.75) — a full sleep mismatch (Q49: 0 vs 3)
+// hits harder when either roommate flags 'sleep' as what-matters-most.
+const slpLo = PX, slpHi = PY;
+const d0 = sc(slpLo, slpHi);
+const d1 = sc(slpLo, slpHi, { dealbreakers: ['sleep'] });
+console.log('(3) dealbreaker amplification — sleep mismatch (Q49: 0 vs 3):');
+console.log(`    no flag             score=${pad(d0.finalPct, 3)}`);
+console.log(`    + dealbreaker flag  score=${pad(d1.finalPct, 3)} (${d1.finalPct < d0.finalPct ? 'mismatch hits harder ✓' : 'no change'})\n`);
+
+// (4) VALIDATION multiplier (±7.5%) with the HONESTY GATE — only moves when BOTH
+// users have a real validation_score; a one-sided signal does nothing.
+const m0    = sc(PX, PY);
+const mBoth = sc(PX, PY, { validationA: 0.9, validationB: 0.9 });
+const mOne  = sc(PX, PY, { validationA: 0.9 });
+console.log('(4) behavioral validation multiplier (honesty-gated):');
+console.log(`    neutral             score=${pad(m0.finalPct, 3)} mult=${m0.validationMultiplier}`);
+console.log(`    both validated 0.9  score=${pad(mBoth.finalPct, 3)} mult=${mBoth.validationMultiplier} (lifts ✓)`);
+console.log(`    one-sided (A only)  score=${pad(mOne.finalPct, 3)} mult=${mOne.validationMultiplier} (no change — honesty gate ✓)\n`);
+
+console.log('Probes are SYNTHETIC: hand-built certified shapes/drift show the wiring');
+console.log('fires. In production nothing here is certified until real outcomes earn it.\n');
