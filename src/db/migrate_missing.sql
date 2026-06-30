@@ -31,6 +31,31 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_live ON api_keys (key_hash) WHERE revoke
 ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
 
+-- ── Housing timing (LEGAL: public Zillow Research ZORI data, no scraping) ─────
+-- Normalized monthly rent per metro from the public ZORI CSVs, plus a computed
+-- per-metro "best time to lock in" seasonal summary. Populated by the weekly
+-- ingest job / POST /bot-admin/ingest-housing. Empty until then — the endpoint
+-- 404s and the app degrades to reasoned guidance.
+CREATE TABLE IF NOT EXISTS housing_rent_index (
+  region_key   TEXT NOT NULL,        -- normalized "city-st"
+  region_name  TEXT NOT NULL,        -- "Riverside, CA"
+  region_type  TEXT NOT NULL DEFAULT 'metro',
+  state        TEXT,
+  period       DATE NOT NULL,        -- month (first of month)
+  rent         NUMERIC,              -- ZORI rent index
+  source       TEXT DEFAULT 'Zillow Research (ZORI)',
+  ingested_at  TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (region_key, region_type, period)
+);
+CREATE TABLE IF NOT EXISTS housing_timing (
+  region_key   TEXT PRIMARY KEY,
+  region_name  TEXT NOT NULL,
+  region_type  TEXT,
+  state        TEXT,
+  timing       JSONB,                -- {bestMonthsToSearch,expectedSeasonalSwing,leadTimeWeeks,asOf,source}
+  computed_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Ensure newer columns on users exist
 ALTER TABLE users ADD COLUMN IF NOT EXISTS age              INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods    TEXT[];

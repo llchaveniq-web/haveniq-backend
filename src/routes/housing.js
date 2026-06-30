@@ -2,6 +2,24 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
+const ht = require('../services/housingTiming');
+
+// Bot-token gate for the manual ingest trigger (same pattern as matchOutcomes).
+const { requireBotToken } = (() => {
+  try { return require('../middleware/botAuth'); }
+  catch {
+    return {
+      requireBotToken: (req, res, next) => {
+        const tok = process.env.ADMIN_BOT_TOKEN;
+        if (!tok) return res.status(503).json({ error: 'bot auth disabled' });
+        const auth = req.headers.authorization || '';
+        const got = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+        if (got !== tok) return res.status(401).json({ error: 'Invalid bot token.' });
+        next();
+      },
+    };
+  }
+})();
 
 // ── GET /housing/listings ──────────────────────────────────────────────────
 // Active listings near the caller's school, optionally filtered by max
@@ -147,6 +165,54 @@ router.delete('/listings/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('listing delete failed:', err);
     res.status(500).json({ error: 'Failed to delete listing' });
+  }
+});
+
+// ── GET /housing/timing?metro=... | ?school=... ──────────────────────────────
+// "Best time to lock in" for a metro, computed from PUBLIC Zillow Research ZORI
+// rent data (no scraping). ?metro is normalized directly; ?school is best-effort
+// resolved to a metro we hold data for. 404 when we have no data for that area —
+// the app degrades to reasoned guidance. Public (no auth): aggregate stats only,
+// no listings or PII. Honest source attribution is carried in the payload.
+router.get('/timing', async (req, res) => {
+  try {
+    const metro  = typeof req.query.metro  === 'string' ? req.query.metro.trim()  : '';
+    const school = typeof req.query.school === 'string' ? req.query.school.trim() : '';
+    if (!metro && !school) return res.status(400).json({ error: 'metro or school query param required' });
+
+    let regionKey = null;
+    if (metro) {
+      regionKey = ht.normalizeRegionKey(metro);
+    } else {
+      const names = await ht.listTimingRegionNames();
+      const resolved = ht.resolveSchoolToMetro(school, names);
+      if (resolved) regionKey = ht.normalizeRegionKey(resolved);
+    }
+    if (!regionKey) return res.status(404).json({ error: 'no housing-timing data for that area' });
+
+    const row = await ht.getTimingByKey(regionKey);
+    if (!row || !row.timing) return res.status(404).json({ error: 'no housing-timing data for that area' });
+
+    // timing carries { bestMonthsToSearch, expectedSeasonalSwing, leadTimeWeeks,
+    // asOf, source: 'Zillow Research (ZORI)' }. Surface the resolved metro too.
+    res.json({ metro: row.region_name, ...row.timing });
+  } catch (err) {
+    console.error('[housing/timing] failed:', err);
+    res.status(500).json({ error: 'housing timing lookup failed' });
+  }
+});
+
+// ── POST /housing/ingest-timing (bot-gated) ──────────────────────────────────
+// Manual trigger for the ZORI ingest + recompute. The weekly in-process job
+// (server.js) is the primary mechanism; this is for on-demand backfills. Optional
+// body { url } overrides the source CSV (if Zillow moves the path).
+router.post('/ingest-timing', requireBotToken, async (req, res) => {
+  try {
+    const result = await ht.ingestZori({ url: typeof req.body?.url === 'string' ? req.body.url : undefined });
+    res.status(result.ok ? 200 : 502).json(result);
+  } catch (err) {
+    console.error('[housing ingest] failed:', err);
+    res.status(500).json({ error: 'ingest failed' });
   }
 });
 

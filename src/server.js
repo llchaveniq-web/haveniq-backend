@@ -667,6 +667,27 @@ server.listen(PORT, () => {
   };
   setTimeout(runGateTraining, 5 * 60 * 1000);
   setInterval(runGateTraining, 24 * 60 * 60 * 1000).unref?.();
+
+  // Housing-timing ingest: download the PUBLIC Zillow Research ZORI rent CSV and
+  // recompute each metro's seasonal "best time to lock in". LEGAL (published
+  // aggregate data, never a listing-page scrape). Best-effort, non-overlapping;
+  // a download/parse failure just leaves the last good data in place. Runs ~10
+  // min after boot, then weekly. Manual trigger: POST /housing/ingest-timing.
+  let housingInFlight = false;
+  const runHousingIngest = async () => {
+    if (housingInFlight) return;
+    housingInFlight = true;
+    try {
+      const r = await require('./services/housingTiming').ingestZori();
+      console.log('[housing-ingest]', JSON.stringify(r));
+    } catch (err) {
+      console.error('[housing-ingest] could not start:', err.message);
+    } finally {
+      housingInFlight = false;
+    }
+  };
+  setTimeout(runHousingIngest, 10 * 60 * 1000);
+  setInterval(runHousingIngest, 7 * 24 * 60 * 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };
