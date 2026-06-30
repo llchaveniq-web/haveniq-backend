@@ -94,6 +94,22 @@ test('no VALID group can be formed → [] (every group has a blocked pair)', () 
   assert.deepEqual(buildSuites(three, { pairEval: pe, sizes: [3], count: 1 }), []);
 });
 
+test('anchored: every returned suite includes the requester', () => {
+  // C is the requester. The globally-best suite would be {A,B,D} (excluding C),
+  // but anchored mode must only ever return suites containing C.
+  const scores = { AB: 99, AD: 99, BD: 99, AC: 70, BC: 70, CD: 70, AE: 60, BE: 60, CE: 60, DE: 60 };
+  const suites = buildSuites(members, { pairEval: evalFrom(scores), sizes: [3], count: 5, anchorUserId: 'C' });
+  assert.ok(suites.length > 0, 'should still find anchored suites');
+  for (const s of suites) {
+    assert.ok(s.members.map(m => m.userId).includes('C'), 'every suite must contain the requester');
+  }
+});
+
+test('anchored: requester not in the pool → [] (never a suite they are not in)', () => {
+  const suites = buildSuites(members, { pairEval: evalFrom({}), sizes: [3], count: 3, anchorUserId: 'NOT_IN_POOL' });
+  assert.deepEqual(suites, []);
+});
+
 test('results are deterministic — same input, same output', () => {
   const scores = { AB: 88, AC: 77, BC: 66, AD: 90, BD: 55, CD: 91, AE: 60, BE: 70, CE: 80, DE: 84 };
   const run = () => buildSuites(members, { pairEval: evalFrom(scores), sizes: [3, 4], count: 3 });

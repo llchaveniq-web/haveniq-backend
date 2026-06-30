@@ -474,7 +474,9 @@ router.get('/suites', requireAuth, async (req, res) => {
       return { score: r.finalPct, valid, topFrictionTopic: topFrictionTopic(x.answers, y.answers) };
     };
 
-    const suites = buildSuites(members, { pairEval, sizes: [3, 4], count });
+    // Requester-anchored: every returned suite includes the requesting user
+    // ("Your best apartment"). Empty if the requester isn't in the eligible pool.
+    const suites = buildSuites(members, { pairEval, sizes: [3, 4], count, anchorUserId: userId });
     res.json({ suites });
   } catch (err) {
     console.error('[matches/suites] failed:', err);

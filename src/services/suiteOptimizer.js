@@ -174,6 +174,15 @@ function buildSuites(members, opts = {}) {
     .sort((a, b) => a - b);
   if (typeof pairEval !== 'function' || n < 2 || sizes.length === 0) return [];
 
+  // Requester-anchored mode (deep-matching #4): every returned suite MUST
+  // include the requester ("Your best apartment" can't be a suite they're not
+  // in). If the requester isn't in the eligible pool, there's no valid anchored
+  // suite → [].
+  const anchorIdx = opts.anchorUserId != null
+    ? members.findIndex(m => m.userId === opts.anchorUserId)
+    : -1;
+  if (opts.anchorUserId != null && anchorIdx < 0) return [];
+
   // Memoized symmetric pair lookup.
   const cache = new Map();
   const P = (i, j) => {
@@ -198,6 +207,8 @@ function buildSuites(members, opts = {}) {
   } else {
     candidates = greedyCandidates(n, sizes, P, count);
   }
+
+  if (anchorIdx >= 0) candidates = candidates.filter(c => c.idxs.includes(anchorIdx));
 
   candidates.sort(cmpSuite);
   const out = [];
