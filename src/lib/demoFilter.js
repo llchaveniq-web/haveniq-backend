@@ -15,15 +15,18 @@
 //
 // Pass the column reference (e.g. 'email' or 'u.email'). Returns a SQL
 // boolean fragment — caller supplies the surrounding AND/WHERE.
+// ILIKE (case-insensitive) so a mixed-case demo address can't slip past the
+// filter; no real .edu is ever @haveniq-demo.edu / @demo.haveniq.app, so this
+// can't false-exclude a genuine user.
 function notDemo(col = 'email') {
-  return `${col} NOT LIKE '%@haveniq-demo.edu' AND ${col} NOT LIKE '%@demo.haveniq.app'`;
+  return `${col} NOT ILIKE '%@haveniq-demo.edu' AND ${col} NOT ILIKE '%@demo.haveniq.app'`;
 }
 
 // Positive form of the same rule — "this column IS a demo/test account".
 // Use inside EXISTS / NOT EXISTS sub-selects where you're matching demo rows
 // rather than excluding them. Keep this in lock-step with notDemo().
 function isDemo(col = 'email') {
-  return `(${col} LIKE '%@haveniq-demo.edu' OR ${col} LIKE '%@demo.haveniq.app')`;
+  return `(${col} ILIKE '%@haveniq-demo.edu' OR ${col} ILIKE '%@demo.haveniq.app')`;
 }
 
 // JS-side equivalent for code paths that test an email in JavaScript rather

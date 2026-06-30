@@ -20,6 +20,16 @@ function inject(relPath, exportsObj) {
 let dbCalls = [];
 let emailCalls = [];
 
+// Seeded "users" for the metrics behavioral test: one REAL student + one DEMO
+// (seed-domain) account. The fake pool below actually APPLIES the demo-exclusion
+// WHERE clause to these, so the demo user is only counted if the filter is missing.
+const SEED_USERS = [
+  { email: 'real1@berkeley.edu',       is_verified: true, quiz_completed: true,  school: 'UC Berkeley' },
+  { email: 'demo001@haveniq-demo.edu', is_verified: true, quiz_completed: true,  school: 'Demo University' },
+];
+const isDemoEmail = (e) => /@(haveniq-demo\.edu|demo\.haveniq\.app)$/i.test(e);
+const sqlExcludesDemo = (sql) => /haveniq-demo\.edu/i.test(sql); // the WHERE references the demo domain
+
 // Fake pool: pattern-match the SQL our three endpoints issue.
 const fakePool = {
   query: async (sql, params = []) => {
@@ -62,23 +72,24 @@ const fakePool = {
     }
     if (sql.startsWith('DELETE FROM otp_codes')) return { rows: [], rowCount: 1 };
     if (sql.startsWith('INSERT INTO otp_codes')) return { rows: [] };
-    // ── /admin/metrics queries ──
+    // ── /admin/metrics queries ── (apply the WHERE exclusion to the seed set)
     if (sql.includes('AS total') && sql.includes('FROM users')) {
-      // Differentiate on the demo filter: WITHOUT it the counts are inflated by
-      // seed accounts, so a dropped filter fails the happy-path assertions.
-      const filtered = sql.includes("NOT LIKE '%@haveniq-demo.edu'") && sql.includes("NOT LIKE '%@demo.haveniq.app'");
-      return { rows: [ filtered
-        ? { total: 42, verified: 30, quiz_completed: 25 }
-        : { total: 242, verified: 230, quiz_completed: 225 } ] };
+      const pool_ = sqlExcludesDemo(sql) ? SEED_USERS.filter(u => !isDemoEmail(u.email)) : SEED_USERS;
+      return { rows: [{
+        total: pool_.length,
+        verified: pool_.filter(u => u.is_verified).length,
+        quiz_completed: pool_.filter(u => u.quiz_completed).length,
+      }] };
     }
     if (sql.includes('GROUP BY school')) {
-      const filtered = sql.includes("NOT LIKE '%@haveniq-demo.edu'") && sql.includes("NOT LIKE '%@demo.haveniq.app'");
-      const real = [
-        { school: 'Test U', users: 30, verified: 22, quiz_completed: 18 },
-        { school: 'Other U', users: 12, verified: 8, quiz_completed: 7 },
-      ];
-      // Unfiltered would surface the seeded demo cohort's school.
-      return { rows: filtered ? real : [{ school: 'Demo High', users: 200, verified: 200, quiz_completed: 200 }, ...real] };
+      const pool_ = sqlExcludesDemo(sql) ? SEED_USERS.filter(u => !isDemoEmail(u.email)) : SEED_USERS;
+      const by = new Map();
+      for (const u of pool_) {
+        const s = by.get(u.school) || { school: u.school, users: 0, verified: 0, quiz_completed: 0 };
+        s.users += 1; if (u.is_verified) s.verified += 1; if (u.quiz_completed) s.quiz_completed += 1;
+        by.set(u.school, s);
+      }
+      return { rows: [...by.values()].sort((a, b) => b.users - a.users) };
     }
     if (sql.includes('FROM pairing_outcomes')) return { rows: [{ n: 7 }] };
     if (sql.includes('FROM dimension_models WHERE certified')) {
@@ -232,35 +243,28 @@ test('subscription: a populated row maps to the full shape (forward-compat)', as
 });
 
 // ── metrics ──────────────────────────────────────────────────────────────────
-test('metrics: founder gets the full AdminMetrics shape', async () => {
+test('metrics: full shape, and the seeded DEMO user is NOT counted in users/schools', async () => {
+  // Single request (the endpoint caches ~60s, so one compute), asserting the
+  // shape AND the demo exclusion. Seed = 1 real (UC Berkeley) + 1 demo
+  // (@haveniq-demo.edu / Demo University).
   const res = await asFounder(request(app).get('/admin/metrics'));
   assert.equal(res.status, 200);
   const m = res.body;
   assert.equal(typeof m.generatedAt, 'string');
-  assert.deepEqual(m.users, { total: 42, verified: 30, quizCompleted: 25 });
-  assert.deepEqual(m.schools, [
-    { school: 'Test U', users: 30, verified: 22, quizCompleted: 18 },
-    { school: 'Other U', users: 12, verified: 8, quizCompleted: 7 },
-  ]);
+
+  // Only the real student counts — the demo account is excluded everywhere.
+  assert.deepEqual(m.users, { total: 1, verified: 1, quizCompleted: 1 });
+  assert.deepEqual(m.schools, [{ school: 'UC Berkeley', users: 1, verified: 1, quizCompleted: 1 }]);
+  assert.ok(!m.schools.some(s => s.school === 'Demo University'), 'a demo-only school must drop off entirely');
+
+  // matching + safety unchanged.
   assert.equal(m.matching.outcomesLogged, 7);
   assert.deepEqual(m.matching.certifiedShapes, [{ qid: 57, type: 'complementarity' }]);
   assert.equal(m.matching.lastTrainingRun, '2026-06-29T00:00:00.000Z');
   assert.deepEqual(m.safety, { openReports: 3, bannedUsers: 1 });
 
-  // Demo accounts are EXCLUDED from user + school counts (real traction, not
-  // seed inflation): the real totals (42, no "Demo High") prove the filter ran —
-  // without it the fake pool returns 242 + a demo school.
-  assert.equal(m.users.total, 42, 'demo users must not inflate the total');
-  assert.ok(!m.schools.some(s => s.school === 'Demo High'), 'demo cohort school must not appear');
-
-  // …and both count queries carry the two-domain demo exclusion, while the
-  // safety (banned) count is intentionally left UNfiltered.
-  const userQ   = dbCalls.find(c => c.sql.includes('AS total') && c.sql.includes('FROM users'));
-  const schoolQ = dbCalls.find(c => c.sql.includes('GROUP BY school'));
+  // Safety counts are intentionally NOT demo-filtered (a report on a demo
+  // account still matters): the banned-count query carries no demo exclusion.
   const bannedQ = dbCalls.find(c => c.sql.includes('COALESCE(is_banned'));
-  for (const q of [userQ, schoolQ]) {
-    assert.ok(q.sql.includes("NOT LIKE '%@haveniq-demo.edu'"), 'excludes seeded demos');
-    assert.ok(q.sql.includes("NOT LIKE '%@demo.haveniq.app'"), 'excludes manual test signups');
-  }
-  assert.ok(!bannedQ.sql.includes('haveniq-demo'), 'safety counts left as-is');
+  assert.ok(!/haveniq-demo/i.test(bannedQ.sql), 'safety (banned) count left as-is');
 });
