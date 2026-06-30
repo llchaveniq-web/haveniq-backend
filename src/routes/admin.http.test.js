@@ -64,13 +64,21 @@ const fakePool = {
     if (sql.startsWith('INSERT INTO otp_codes')) return { rows: [] };
     // ── /admin/metrics queries ──
     if (sql.includes('AS total') && sql.includes('FROM users')) {
-      return { rows: [{ total: 42, verified: 30, quiz_completed: 25 }] };
+      // Differentiate on the demo filter: WITHOUT it the counts are inflated by
+      // seed accounts, so a dropped filter fails the happy-path assertions.
+      const filtered = sql.includes("NOT LIKE '%@haveniq-demo.edu'") && sql.includes("NOT LIKE '%@demo.haveniq.app'");
+      return { rows: [ filtered
+        ? { total: 42, verified: 30, quiz_completed: 25 }
+        : { total: 242, verified: 230, quiz_completed: 225 } ] };
     }
     if (sql.includes('GROUP BY school')) {
-      return { rows: [
+      const filtered = sql.includes("NOT LIKE '%@haveniq-demo.edu'") && sql.includes("NOT LIKE '%@demo.haveniq.app'");
+      const real = [
         { school: 'Test U', users: 30, verified: 22, quiz_completed: 18 },
         { school: 'Other U', users: 12, verified: 8, quiz_completed: 7 },
-      ] };
+      ];
+      // Unfiltered would surface the seeded demo cohort's school.
+      return { rows: filtered ? real : [{ school: 'Demo High', users: 200, verified: 200, quiz_completed: 200 }, ...real] };
     }
     if (sql.includes('FROM pairing_outcomes')) return { rows: [{ n: 7 }] };
     if (sql.includes('FROM dimension_models WHERE certified')) {
@@ -238,4 +246,21 @@ test('metrics: founder gets the full AdminMetrics shape', async () => {
   assert.deepEqual(m.matching.certifiedShapes, [{ qid: 57, type: 'complementarity' }]);
   assert.equal(m.matching.lastTrainingRun, '2026-06-29T00:00:00.000Z');
   assert.deepEqual(m.safety, { openReports: 3, bannedUsers: 1 });
+
+  // Demo accounts are EXCLUDED from user + school counts (real traction, not
+  // seed inflation): the real totals (42, no "Demo High") prove the filter ran —
+  // without it the fake pool returns 242 + a demo school.
+  assert.equal(m.users.total, 42, 'demo users must not inflate the total');
+  assert.ok(!m.schools.some(s => s.school === 'Demo High'), 'demo cohort school must not appear');
+
+  // …and both count queries carry the two-domain demo exclusion, while the
+  // safety (banned) count is intentionally left UNfiltered.
+  const userQ   = dbCalls.find(c => c.sql.includes('AS total') && c.sql.includes('FROM users'));
+  const schoolQ = dbCalls.find(c => c.sql.includes('GROUP BY school'));
+  const bannedQ = dbCalls.find(c => c.sql.includes('COALESCE(is_banned'));
+  for (const q of [userQ, schoolQ]) {
+    assert.ok(q.sql.includes("NOT LIKE '%@haveniq-demo.edu'"), 'excludes seeded demos');
+    assert.ok(q.sql.includes("NOT LIKE '%@demo.haveniq.app'"), 'excludes manual test signups');
+  }
+  assert.ok(!bannedQ.sql.includes('haveniq-demo'), 'safety counts left as-is');
 });

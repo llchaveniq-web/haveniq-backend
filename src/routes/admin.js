@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requireFounder } = require('../middleware/requireFounder');
 const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { generateOTP, sendOTPEmail } = require('../services/email');
+const { notDemo } = require('../lib/demoFilter');
 
 // ── Founder review queue ─────────────────────────────────────────────────
 //
@@ -569,16 +570,21 @@ const METRICS_TTL_MS = 60 * 1000;
 
 async function computeMetrics() {
   const [users, schools, outcomes, shapes, lastRun, reports, banned] = await Promise.all([
+    // User + school counts exclude demo/test accounts (both demo domains) so the
+    // dashboard reflects real traction, not seed inflation. Safety counts below
+    // are intentionally left unfiltered.
     pool.query(`SELECT COUNT(*)::int AS total,
                        (COUNT(*) FILTER (WHERE is_verified IS TRUE))::int    AS verified,
                        (COUNT(*) FILTER (WHERE quiz_completed IS TRUE))::int AS quiz_completed
-                  FROM users`),
+                  FROM users
+                 WHERE ${notDemo('email')}`),
     pool.query(`SELECT school,
                        COUNT(*)::int AS users,
                        (COUNT(*) FILTER (WHERE is_verified IS TRUE))::int    AS verified,
                        (COUNT(*) FILTER (WHERE quiz_completed IS TRUE))::int AS quiz_completed
                   FROM users
                  WHERE school IS NOT NULL AND school <> ''
+                   AND ${notDemo('email')}
                  GROUP BY school
                  ORDER BY users DESC, school ASC`),
     pool.query(`SELECT COUNT(*)::int AS n FROM pairing_outcomes`),
