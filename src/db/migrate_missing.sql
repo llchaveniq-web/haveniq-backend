@@ -6,6 +6,24 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
+-- ── Developer API keys (founder-managed; no consumer surface yet) ─────────────
+-- Stores ONLY a sha256 hash of each secret — the plaintext is shown once at
+-- creation and never persisted. `prefix` (first ~12 chars) is for identification
+-- in the admin list. Nothing authenticates against these yet (stub); a future
+-- developer-API middleware will hash the incoming key, find a non-revoked row,
+-- constant-time compare, and bump last_used_at.
+CREATE TABLE IF NOT EXISTS api_keys (
+  id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  name         TEXT NOT NULL,
+  key_hash     TEXT NOT NULL,
+  prefix       TEXT NOT NULL,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ,
+  revoked      BOOLEAN NOT NULL DEFAULT FALSE
+);
+-- Supports the future verify path: lookup by hash among live keys.
+CREATE INDEX IF NOT EXISTS idx_api_keys_live ON api_keys (key_hash) WHERE revoked = FALSE;
+
 -- Ensure newer columns on users exist
 ALTER TABLE users ADD COLUMN IF NOT EXISTS age              INTEGER;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS neighborhoods    TEXT[];

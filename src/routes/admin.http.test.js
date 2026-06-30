@@ -4,6 +4,7 @@
 // cache so the tests need no live database, JWT, or Resend — they run anywhere.
 const test = require('node:test');
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 
 // Pin a founder id before anything reads it (founders.js reads env per call).
 process.env.FOUNDER_USER_IDS = 'founder-1';
@@ -72,6 +73,27 @@ const fakePool = {
     }
     if (sql.startsWith('DELETE FROM otp_codes')) return { rows: [], rowCount: 1 };
     if (sql.startsWith('INSERT INTO otp_codes')) return { rows: [] };
+    // ── api_keys ──
+    if (sql.includes('INSERT INTO api_keys')) {
+      // params = [name, key_hash, prefix] — echo back a row (NO key_hash column).
+      return { rows: [{
+        id: 'key-1', name: params[0], prefix: params[2],
+        created_at: new Date('2026-01-01T00:00:00.000Z'), last_used_at: null, revoked: false,
+      }] };
+    }
+    if (sql.includes('UPDATE api_keys SET revoked')) {
+      if (params[0] === 'missing') return { rows: [] };
+      return { rows: [{
+        id: params[0], name: 'CI key', prefix: 'hq_live_abcd',
+        created_at: new Date('2026-01-01T00:00:00.000Z'), last_used_at: null, revoked: true,
+      }] };
+    }
+    if (sql.includes('FROM api_keys ORDER BY')) {
+      return { rows: [
+        { id: 'key-1', name: 'CI', prefix: 'hq_live_aaaa', created_at: new Date('2026-02-01T00:00:00.000Z'), last_used_at: null, revoked: false },
+        { id: 'key-2', name: 'old', prefix: 'hq_live_bbbb', created_at: new Date('2026-01-01T00:00:00.000Z'), last_used_at: new Date('2026-03-01T00:00:00.000Z'), revoked: true },
+      ] };
+    }
     // ── /admin/metrics queries ── (apply the WHERE exclusion to the seed set)
     if (sql.includes('AS total') && sql.includes('FROM users')) {
       const pool_ = sqlExcludesDemo(sql) ? SEED_USERS.filter(u => !isDemoEmail(u.email)) : SEED_USERS;
@@ -145,6 +167,9 @@ test('non-founder gets 403 on each account-support route', async () => {
     () => asStranger(request(app).post('/admin/users/u-1/unlock')),
     () => asStranger(request(app).get('/admin/metrics')),
     () => asStranger(request(app).get('/admin/users/u-1/subscription')),
+    () => asStranger(request(app).get('/admin/api-keys')),
+    () => asStranger(request(app).post('/admin/api-keys').send({ name: 'x' })),
+    () => asStranger(request(app).post('/admin/api-keys/key-1/revoke')),
   ];
   for (const mk of cases) {
     const res = await mk();
@@ -240,6 +265,59 @@ test('subscription: a populated row maps to the full shape (forward-compat)', as
     currentPeriodEnd: '2026-07-29T00:00:00.000Z', cancelAtPeriodEnd: true,
     since: '2026-06-01T00:00:00.000Z',
   });
+});
+
+// ── api-keys ─────────────────────────────────────────────────────────────────
+test('api-keys: create returns the secret ONCE and persists only the hash', async () => {
+  const res = await asFounder(request(app).post('/admin/api-keys').send({ name: 'CI deploy bot' }));
+  assert.equal(res.status, 201);
+
+  // Secret returned once, correct format.
+  assert.match(res.body.secret, /^hq_live_[A-Za-z0-9_-]{32,}$/);
+
+  // Key object: camelCase, no secret/hash leaked.
+  const k = res.body.key;
+  assert.equal(k.name, 'CI deploy bot');
+  assert.equal(k.revoked, false);
+  assert.equal(k.lastUsedAt, null);
+  assert.equal(k.prefix, res.body.secret.slice(0, 12));
+  assert.ok(!('key_hash' in k) && !('keyHash' in k) && !('secret' in k), 'no hash/secret in the key object');
+
+  // Persistence: the INSERT stored the HASH, never the plaintext secret.
+  const insert = dbCalls.find(c => c.sql.includes('INSERT INTO api_keys'));
+  assert.ok(insert, 'an insert ran');
+  assert.ok(!insert.params.includes(res.body.secret), 'plaintext secret must NOT be in the row');
+  assert.ok(
+    insert.params.includes(crypto.createHash('sha256').update(res.body.secret).digest('hex')),
+    'the stored key_hash is sha256(secret)',
+  );
+});
+
+test('api-keys: create requires a name → 400', async () => {
+  const res = await asFounder(request(app).post('/admin/api-keys').send({}));
+  assert.equal(res.status, 400);
+});
+
+test('api-keys: revoke flips revoked → true', async () => {
+  const res = await asFounder(request(app).post('/admin/api-keys/key-1/revoke'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.key.id, 'key-1');
+  assert.equal(res.body.key.revoked, true);
+});
+
+test('api-keys: revoke unknown key → 404', async () => {
+  const res = await asFounder(request(app).post('/admin/api-keys/missing/revoke'));
+  assert.equal(res.status, 404);
+});
+
+test('api-keys: list returns camelCase rows with NO hashes', async () => {
+  const res = await asFounder(request(app).get('/admin/api-keys'));
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.body.keys) && res.body.keys.length === 2);
+  for (const k of res.body.keys) {
+    assert.ok('id' in k && 'name' in k && 'prefix' in k && 'createdAt' in k && 'lastUsedAt' in k && 'revoked' in k);
+    assert.ok(!('key_hash' in k) && !('keyHash' in k) && !('secret' in k), 'never expose hashes/secrets');
+  }
 });
 
 // ── metrics ──────────────────────────────────────────────────────────────────

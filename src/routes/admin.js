@@ -5,6 +5,7 @@ const { requireFounder } = require('../middleware/requireFounder');
 const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { notDemo } = require('../lib/demoFilter');
+const { generateApiSecret, hashApiKey } = require('../lib/apiKeys');
 
 // ── Founder review queue ─────────────────────────────────────────────────
 //
@@ -628,6 +629,70 @@ router.get('/metrics', requireAuth, requireFounder, async (req, res) => {
   } catch (err) {
     console.error('[admin/metrics] failed:', err);
     res.status(500).json({ error: 'metrics failed' });
+  }
+});
+
+// ── Founder-managed developer API keys ────────────────────────────────────
+// Same isFounder gate + 403. STUB: nothing authenticates against these yet (no
+// developer API surface exists). We never store or re-return the plaintext
+// secret — only its sha256 hash + a short prefix for identification. The secret
+// is returned exactly ONCE, at creation.
+const toKeyJson = (r) => ({
+  id:         r.id,
+  name:       r.name,
+  prefix:     r.prefix,
+  createdAt:  r.created_at  ? new Date(r.created_at).toISOString()  : null,
+  lastUsedAt: r.last_used_at ? new Date(r.last_used_at).toISOString() : null,
+  revoked:    r.revoked === true,
+});
+
+// GET /admin/api-keys — never includes hashes or secrets.
+router.get('/api-keys', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, name, prefix, created_at, last_used_at, revoked
+         FROM api_keys ORDER BY created_at DESC`,
+    );
+    res.json({ keys: rows.map(toKeyJson) });
+  } catch (err) {
+    console.error('[admin/api-keys GET] failed:', err);
+    res.status(500).json({ error: 'list failed' });
+  }
+});
+
+// POST /admin/api-keys { name } — mint a key; return the secret ONCE.
+router.post('/api-keys', requireAuth, requireFounder, async (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+  if (!name) return res.status(400).json({ error: 'name required' });
+  try {
+    const secret = generateApiSecret();           // plaintext — returned once, never stored
+    const prefix = secret.slice(0, 12);
+    const { rows } = await pool.query(
+      `INSERT INTO api_keys (name, key_hash, prefix)
+       VALUES ($1, $2, $3)
+       RETURNING id, name, prefix, created_at, last_used_at, revoked`,
+      [name, hashApiKey(secret), prefix],          // only the HASH is persisted
+    );
+    res.status(201).json({ key: toKeyJson(rows[0]), secret });
+  } catch (err) {
+    console.error('[admin/api-keys POST] failed:', err);
+    res.status(500).json({ error: 'create failed' });
+  }
+});
+
+// POST /admin/api-keys/:id/revoke — flip revoked; key can never be un-revoked.
+router.post('/api-keys/:id/revoke', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE api_keys SET revoked = TRUE WHERE id = $1
+       RETURNING id, name, prefix, created_at, last_used_at, revoked`,
+      [req.params.id],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'key not found' });
+    res.json({ key: toKeyJson(rows[0]) });
+  } catch (err) {
+    console.error('[admin/api-keys revoke] failed:', err);
+    res.status(500).json({ error: 'revoke failed' });
   }
 });
 
