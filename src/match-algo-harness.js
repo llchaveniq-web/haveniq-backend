@@ -1,8 +1,21 @@
 // match-algo-harness.js — offline harness to eyeball the real matching engine on
-// deliberately DISPARATE sample profiles. No DB, no network: it calls the exact
-// scoring engine production uses (services/scoring.calculateCompatibility).
+// deliberately DISPARATE sample profiles. By default: no DB, no network — it
+// calls the exact scoring engine production uses (services/scoring).
 //
 // Run:  node src/match-algo-harness.js
+//       node src/match-algo-harness.js --llm-judge   (optional spot-check, below)
+//
+// ─── HARD RULE for --llm-judge ───────────────────────────────────────────────
+// --llm-judge is a DEV AID, NEVER A GATE. It asks Claude for a one-line "does
+// this pairing / score look sane?" read, printed beside the engine result, so a
+// human can eyeball obvious nonsense. That is ALL it is:
+//   • It NEVER feeds back into scoring and NEVER changes a score.
+//   • It NEVER fails the run — any API error is caught and printed inline.
+//   • Real cohabitation OUTCOMES decide whether a match was good, not the LLM.
+//     An LLM will confidently rate a genuinely bad match as good; treating its
+//     opinion as truth would launder a guess into a verdict.
+//   • Off by default; the API key comes from env, so normal runs cost nothing.
+// ─────────────────────────────────────────────────────────────────────────────
 //
 // NOTE on answer shape: the engine's flatten() accepts the wire shape this
 // harness builds — { type:'option', index } — directly (it reads v.index), as
@@ -10,6 +23,40 @@
 // adjustment; we keep the realistic wire shape.
 
 const { calculateCompatibility } = require('./services/scoring');
+
+// ─── Optional LLM judge (dev aid — see HARD RULE above) ──────────────────────
+const LLM_JUDGE   = process.argv.includes('--llm-judge');
+const JUDGE_MODEL = process.env.LLM_JUDGE_MODEL || 'claude-haiku-4-5'; // cheap spot-check
+
+// Ask Claude for a one-line sanity read on a pair + its engine score. Best-effort
+// and TOTALLY isolated: returns a short string (never throws), so it can never
+// fail the run or touch scoring. No key / any error → a printable note, not a crash.
+async function judgePair(profA, profB, score) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return '(no ANTHROPIC_API_KEY — skipped)';
+  const render = (p) => Object.entries(p.a).map(([q, idx]) => `Q${q}=${idx}`).join(' ');
+  const prompt = [
+    'You are spot-checking a roommate-matching engine (NOT deciding anything — a human reads your note).',
+    'Two students answered a lifestyle quiz. Option index 0 = low end, 3 = high end of each question; Q14 is 0/1.',
+    `Student A (${profA.name}): ${render(profA)}`,
+    `Student B (${profB.name}): ${render(profB)}`,
+    `The engine scored this pair ${score}/100.`,
+    'In ONE blunt sentence: does this pairing make sense, and does the score look about right?',
+  ].join('\n');
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: JUDGE_MODEL, max_tokens: 120, messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!res.ok) return `(judge HTTP ${res.status})`;
+    const j = await res.json();
+    const text = (j.content || []).find(b => b.type === 'text')?.text;
+    return text ? text.trim().replace(/\s+/g, ' ').slice(0, 220) : '(empty response)';
+  } catch (e) {
+    return `(judge error: ${e.message})`;
+  }
+}
 
 // The 14 SCORED v8 questions (everything else is ignored by the engine), with a
 // short label + the meaning of the LOW (0) and HIGH (max) option so the sample
@@ -216,3 +263,30 @@ console.log(`    one-sided (A only)  score=${pad(mOne.finalPct, 3)} mult=${mOne.
 
 console.log('Probes are SYNTHETIC: hand-built certified shapes/drift show the wiring');
 console.log('fires. In production nothing here is certified until real outcomes earn it.\n');
+
+// ── Optional LLM judge (DEV AID — see HARD RULE in the file header) ───────────
+// Runs ONLY with --llm-judge. Asks Claude for a one-line sanity read per pair,
+// printed beside the engine score. It changes nothing; it's a human-eyeball aid.
+if (LLM_JUDGE) {
+  (async () => {
+    console.log('=== LLM JUDGE (DEV AID — never a gate; real outcomes decide, not the LLM) ===\n');
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.log('ANTHROPIC_API_KEY not set — skipping. Normal runs cost nothing.\n');
+      return;
+    }
+    console.log(`model: ${JUDGE_MODEL}  (one Claude call per pair; spot-check only)\n`);
+    for (let i = 0; i < PROFILES.length; i++) {
+      for (let j = i + 1; j < PROFILES.length; j++) {
+        const r = scorePair(PROFILES[i], PROFILES[j]);
+        // judgePair never throws — a failure prints inline and the loop continues.
+        const note = await judgePair(PROFILES[i], PROFILES[j], r.score);
+        console.log(`  [${i}]×[${j}] engine=${pad(r.score, 3)} | judge: ${note}`);
+      }
+    }
+    console.log('\nReminder: an LLM will confidently call a bad match good. This note never');
+    console.log('feeds back into scoring — real cohabitation outcomes are the only judge.\n');
+  })().catch(err => {
+    // Belt-and-suspenders: the judge must NEVER fail the run.
+    console.log(`\n[llm-judge] skipped after an unexpected error (non-fatal): ${err.message}\n`);
+  });
+}
