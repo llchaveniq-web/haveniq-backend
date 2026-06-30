@@ -522,4 +522,70 @@ router.post('/users/:id/unlock', requireAuth, requireFounder, async (req, res) =
   }
 });
 
+// ── GET /admin/metrics ────────────────────────────────────────────────────
+// Founder dashboard counts (same gate + 403). All single COUNT / GROUP BY
+// queries, run in parallel, cached ~60s so a dashboard refresh loop is cheap.
+// `lastTrainingRun` = the most recent dimension_models.updated_at — the trainer
+// (train-dimension-models / the daily sweep) upserts every row on each run.
+let _metricsCache = null; // { at, data }
+const METRICS_TTL_MS = 60 * 1000;
+
+async function computeMetrics() {
+  const [users, schools, outcomes, shapes, lastRun, reports, banned] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS total,
+                       (COUNT(*) FILTER (WHERE is_verified IS TRUE))::int    AS verified,
+                       (COUNT(*) FILTER (WHERE quiz_completed IS TRUE))::int AS quiz_completed
+                  FROM users`),
+    pool.query(`SELECT school,
+                       COUNT(*)::int AS users,
+                       (COUNT(*) FILTER (WHERE is_verified IS TRUE))::int    AS verified,
+                       (COUNT(*) FILTER (WHERE quiz_completed IS TRUE))::int AS quiz_completed
+                  FROM users
+                 WHERE school IS NOT NULL AND school <> ''
+                 GROUP BY school
+                 ORDER BY users DESC, school ASC`),
+    pool.query(`SELECT COUNT(*)::int AS n FROM pairing_outcomes`),
+    pool.query(`SELECT qid, type FROM dimension_models WHERE certified = TRUE ORDER BY qid`),
+    pool.query(`SELECT MAX(updated_at) AS last FROM dimension_models`),
+    pool.query(`SELECT COUNT(*)::int AS n FROM user_reports WHERE status = 'open'`),
+    pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE COALESCE(is_banned, FALSE) = TRUE`),
+  ]);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    users: {
+      total:         users.rows[0].total,
+      verified:      users.rows[0].verified,
+      quizCompleted: users.rows[0].quiz_completed,
+    },
+    schools: schools.rows.map(r => ({
+      school: r.school, users: r.users, verified: r.verified, quizCompleted: r.quiz_completed,
+    })),
+    matching: {
+      outcomesLogged:  outcomes.rows[0].n,
+      certifiedShapes: shapes.rows.map(r => ({ qid: r.qid, type: r.type })),
+      lastTrainingRun: lastRun.rows[0].last ? new Date(lastRun.rows[0].last).toISOString() : null,
+    },
+    safety: {
+      openReports: reports.rows[0].n,
+      bannedUsers: banned.rows[0].n,
+    },
+  };
+}
+
+router.get('/metrics', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const now = Date.now();
+    if (_metricsCache && now - _metricsCache.at < METRICS_TTL_MS) {
+      return res.json(_metricsCache.data);
+    }
+    const data = await computeMetrics();
+    _metricsCache = { at: now, data };
+    res.json(data);
+  } catch (err) {
+    console.error('[admin/metrics] failed:', err);
+    res.status(500).json({ error: 'metrics failed' });
+  }
+});
+
 module.exports = router;

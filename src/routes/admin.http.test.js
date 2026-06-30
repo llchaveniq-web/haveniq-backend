@@ -47,6 +47,25 @@ const fakePool = {
     }
     if (sql.startsWith('DELETE FROM otp_codes')) return { rows: [], rowCount: 1 };
     if (sql.startsWith('INSERT INTO otp_codes')) return { rows: [] };
+    // ── /admin/metrics queries ──
+    if (sql.includes('AS total') && sql.includes('FROM users')) {
+      return { rows: [{ total: 42, verified: 30, quiz_completed: 25 }] };
+    }
+    if (sql.includes('GROUP BY school')) {
+      return { rows: [
+        { school: 'Test U', users: 30, verified: 22, quiz_completed: 18 },
+        { school: 'Other U', users: 12, verified: 8, quiz_completed: 7 },
+      ] };
+    }
+    if (sql.includes('FROM pairing_outcomes')) return { rows: [{ n: 7 }] };
+    if (sql.includes('FROM dimension_models WHERE certified')) {
+      return { rows: [{ qid: 57, type: 'complementarity' }] };
+    }
+    if (sql.includes('MAX(updated_at)') && sql.includes('dimension_models')) {
+      return { rows: [{ last: new Date('2026-06-29T00:00:00.000Z') }] };
+    }
+    if (sql.includes('FROM user_reports')) return { rows: [{ n: 3 }] };
+    if (sql.includes('COALESCE(is_banned')) return { rows: [{ n: 1 }] };
     return { rows: [] };
   },
 };
@@ -90,6 +109,7 @@ test('non-founder gets 403 on each account-support route', async () => {
     () => asStranger(request(app).get('/admin/users/lookup?email=found@school.edu')),
     () => asStranger(request(app).post('/admin/users/u-1/resend-otp')),
     () => asStranger(request(app).post('/admin/users/u-1/unlock')),
+    () => asStranger(request(app).get('/admin/metrics')),
   ];
   for (const mk of cases) {
     const res = await mk();
@@ -160,4 +180,21 @@ test('unlock: clears the lockout and returns locked_until null', async () => {
 test('unlock: unknown user → 404', async () => {
   const res = await asFounder(request(app).post('/admin/users/missing/unlock'));
   assert.equal(res.status, 404);
+});
+
+// ── metrics ──────────────────────────────────────────────────────────────────
+test('metrics: founder gets the full AdminMetrics shape', async () => {
+  const res = await asFounder(request(app).get('/admin/metrics'));
+  assert.equal(res.status, 200);
+  const m = res.body;
+  assert.equal(typeof m.generatedAt, 'string');
+  assert.deepEqual(m.users, { total: 42, verified: 30, quizCompleted: 25 });
+  assert.deepEqual(m.schools, [
+    { school: 'Test U', users: 30, verified: 22, quizCompleted: 18 },
+    { school: 'Other U', users: 12, verified: 8, quizCompleted: 7 },
+  ]);
+  assert.equal(m.matching.outcomesLogged, 7);
+  assert.deepEqual(m.matching.certifiedShapes, [{ qid: 57, type: 'complementarity' }]);
+  assert.equal(m.matching.lastTrainingRun, '2026-06-29T00:00:00.000Z');
+  assert.deepEqual(m.safety, { openReports: 3, bannedUsers: 1 });
 });
