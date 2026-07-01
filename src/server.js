@@ -435,14 +435,41 @@ app.use('/building-reviews', sharedReviews.buildingRouter);
 // build is actually live — the hardcoded `version` couldn't. Falls back
 // to 'local' off-Railway.
 const DEPLOY_COMMIT = (process.env.RAILWAY_GIT_COMMIT_SHA || 'local').slice(0, 7);
-app.get('/health', (req, res) => res.status(200).json({
-  ok: true,                          // simple liveness flag (UptimeRobot/Railway)
-  status: 'ok',
-  version: '1.0.0',
-  commit: DEPLOY_COMMIT,             // deployed git SHA — confirms which build is live
-  uptime: process.uptime(),          // seconds since this instance booted
-  timestamp: new Date().toISOString(),
-}));
+
+// A live Node process is NOT the same as a healthy service: the DB/auth layer
+// can be failing while the process happily serves. So /health does a trivial
+// read-only round-trip to Postgres and returns 503 when it can't — that's the
+// class of outage (DB unreachable / connection pool wedged) UptimeRobot must
+// page on. Kept unauthenticated (UptimeRobot hits it anonymously) and never
+// writes. NB: this does NOT catch app-logic bugs (e.g. an auth handler that
+// 400s while the DB is fine) — the Sentry backend_outage alert is the
+// complementary tripwire for that case.
+const HEALTH_DB_TIMEOUT_MS = 2500;
+app.get('/health', async (req, res) => {
+  const base = {
+    version: '1.0.0',
+    commit: DEPLOY_COMMIT,             // deployed git SHA — confirms which build is live
+    uptime: process.uptime(),          // seconds since this instance booted
+    timestamp: new Date().toISOString(),
+  };
+  // Race SELECT 1 against a short timeout so a hung connection returns 503 fast
+  // instead of hanging the health check itself (the pool's connectionTimeout
+  // only bounds *acquiring* a connection, not a query on an open-but-stuck one).
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`db health timeout after ${HEALTH_DB_TIMEOUT_MS}ms`)), HEALTH_DB_TIMEOUT_MS);
+    if (timer.unref) timer.unref();    // don't keep the event loop alive for this
+  });
+  try {
+    await Promise.race([pool.query('SELECT 1'), timeout]);
+    clearTimeout(timer);
+    res.status(200).json({ ok: true, status: 'ok', db: 'up', ...base });
+  } catch (err) {
+    clearTimeout(timer);               // stop the loser from later rejecting unhandled
+    console.error('[health] DB check failed → 503:', err.message);
+    res.status(503).json({ ok: false, status: 'degraded', db: 'down', ...base });
+  }
+});
 
 
 // 404 handler
