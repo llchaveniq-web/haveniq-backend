@@ -714,6 +714,16 @@ server.listen(PORT, () => {
     try {
       const r = await require('./services/housingTiming').ingestZori();
       console.log('[housing-ingest]', JSON.stringify(r));
+      // Watch loop: right AFTER a source refresh, recompute coverage across all
+      // schools, diff vs the last snapshot, store the report, and page Discord
+      // ONLY on a flagged regression/anomaly transition. Routine refresh = silent.
+      // Best-effort; a diff failure never affects the ingest. GET /ops/data-diff.
+      try {
+        const d = await require('./services/coverageDiff').runCoverageDiff();
+        console.log('[coverage-diff]', JSON.stringify(d));
+      } catch (e) {
+        console.error('[coverage-diff] could not run:', e.message);
+      }
     } catch (err) {
       console.error('[housing-ingest] could not start:', err.message);
     } finally {

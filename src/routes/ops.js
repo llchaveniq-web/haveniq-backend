@@ -13,6 +13,7 @@ const { requireAuth } = require('../middleware/auth');
 const { requireFounder } = require('../middleware/requireFounder');
 const { watcher } = require('../services/healthWatchRunner');
 const lifecycle = require('../services/lifecycleSender');
+const coverageDiff = require('../services/coverageDiff');
 
 router.get('/ops/health-history', requireAuth, requireFounder, (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
@@ -42,6 +43,14 @@ router.get('/ops/lifecycle-log', requireAuth, requireFounder, async (req, res) =
     sendCount: sends.length,
     sends,                       // [] when nothing has been sent — the honest answer
   });
+});
+
+// The housing-coverage data-refresh diff report — what the last source refresh
+// changed vs the prior snapshot, plus flagged anomalies. Founder-only, same
+// gate. Honest empty ({ report: null }) until the first refresh has run.
+router.get('/ops/data-diff', requireAuth, requireFounder, async (req, res) => {
+  const report = await coverageDiff.latestReport(pool);
+  res.json({ report }); // null when no snapshot exists yet — not a fabricated diff
 });
 
 module.exports = router;
