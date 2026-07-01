@@ -35,6 +35,16 @@ const { projectIndex, convergence, HORIZON_DEFAULT_DAYS } = require('./trajector
 // so distance-scoring it was meaningless). Remaining 14 questions, ~54%
 // lifestyle / ~39% behavioral-conflict / ~8% money. First pass; the per-school
 // weight-learning step (pairing_outcomes) will retune these from real outcomes.
+// ── Shared weight version stamp (outcome-learning lockstep) ───────────────
+// The frontend mirrors QUESTION_POINTS in constants/quiz.ts / quizStore.ts.
+// Every APPROVED weight change (Phase 2/3 of the outcome-learning loop) bumps
+// this stamp in BOTH repos in the same commit, so a drift between backend and
+// app is detectable (a test here pins the fingerprint of QUESTION_POINTS to
+// this version — change the weights without bumping the stamp and it fails).
+// 'v8' = the 2026-06-24 lifestyle-first expert prior; the learning job proposes
+// 'v9-learned-*' successors for human approval, never auto-committing.
+const WEIGHTS_VERSION = 'v8';
+
 const QUESTION_POINTS = {
   // ── Lifestyle (daily-living friction) — ~54% ──
   50: 45,  // cleanliness — shared-space standard
@@ -645,6 +655,7 @@ module.exports = {
   diffScore,        // exported for direct unit tests of the option-count normalization
   OPTION_COUNTS,
   QUESTION_POINTS,  // exported for the engine-analysis script (weight audit)
+  WEIGHTS_VERSION,  // shared lockstep stamp — see the note by QUESTION_POINTS
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
   // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its

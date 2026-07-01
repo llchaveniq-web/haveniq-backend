@@ -411,7 +411,11 @@ app.use('/', require('./routes/profile'));            // GET /bot-admin/stale-pr
 // algorithm eventually learn from real roommate outcomes. Captures
 // 60-day check-ins, lease decisions, ended relationships.
 app.use('/users', require('./routes/matchOutcomes')); // /users/me/match-outcomes
-app.use('/', require('./routes/matchOutcomes'));      // /bot-admin/pending-checkins + summary
+app.use('/', require('./routes/matchOutcomes'));      // /bot-admin/pending-checkins + summary + /match-outcomes/calibration
+// Outcome-learning Phases 2–4: regularized weight-learning review queue,
+// per-school personalization, public proof headline, calibration metrics.
+// Human-gated (analyst proposes, founder approves); nothing auto-commits.
+app.use('/', require('./routes/weightLearning'));     // /match-outcomes/proof + /bot-admin/weight-* + /weight-proposals/:id/approve
 // Tier 3 Sentry webhook — when Sentry detects a new issue, it POSTs here
 // within ~5-10 seconds. We triage immediately, post to Discord, and
 // dispatch the auto-fix workflow without waiting for the every-15-min
@@ -715,6 +719,66 @@ server.listen(PORT, () => {
   };
   setTimeout(runHousingIngest, 10 * 60 * 1000);
   setInterval(runHousingIngest, 7 * 24 * 60 * 60 * 1000).unref?.();
+
+  // ── Outcome-learning 24/7 wiring (Phases 1–4) ──────────────────────────────
+  // Two always-on jobs ride this existing scheduler; the ONE hard stop —
+  // committing weight changes to the live matching model — stays human-gated.
+  // Both are best-effort, non-overlapping, and INERT until outcomes accrue
+  // (no data → no snapshot rows, no proposals → scoring stays today, bit-for-bit).
+
+  // (a) Calibration recompute + quality snapshot: refresh the prediction-vs-
+  // reality curve, Brier, AUC, monotonicity, and the public headline multiple so
+  // `Does this actually work?` and the metrics route are always current. DB-only,
+  // no LLM. Runs ~15 min after boot, then every 6h.
+  let calibInFlight = false;
+  const runCalibrationSnapshot = async () => {
+    if (calibInFlight) return;
+    calibInFlight = true;
+    try {
+      const wl = require('./routes/weightLearning');
+      const metrics = require('./services/calibrationMetrics');
+      const snapshots = require('./services/learningSnapshots');
+      const { calibration, points } = await wl._readCalibration();
+      if (!calibration.ok) return; // no data yet — record nothing (honest)
+      const headline = metrics.publicHeadline(calibration);
+      await snapshots.record({
+        totalSample: calibration.totalSample,
+        brier: metrics.brierScore(points),
+        auc: metrics.auc(points),
+        monotonic: metrics.isMonotonic(calibration.bands),
+        headlineMult: headline.ok ? headline.multiple : null,
+        bands: calibration.bands,
+      });
+      console.log(`[calibration] snapshot n=${calibration.totalSample} monotonic=${metrics.isMonotonic(calibration.bands)}`);
+    } catch (err) {
+      console.error('[calibration] snapshot could not start:', err.message);
+    } finally {
+      calibInFlight = false;
+    }
+  };
+  setTimeout(runCalibrationSnapshot, 15 * 60 * 1000);
+  setInterval(runCalibrationSnapshot, 6 * 60 * 60 * 1000).unref?.();
+
+  // (b) The analyst: label outcomes, run the regularized stats (global +
+  // per-school), draft a plain-English summary, and enqueue READY proposals for
+  // human approval. Below the readiness gate it enqueues nothing. One small LLM
+  // call only when a NEW proposal is created (deduped) — no always-on burn. Runs
+  // ~20 min after boot, then daily.
+  let analystInFlight = false;
+  const runWeightAnalyst = async () => {
+    if (analystInFlight) return;
+    analystInFlight = true;
+    try {
+      const r = await require('./services/weightAnalyst').runAnalyst({ enqueue: true });
+      if (r.enqueued.length) console.log('[weight-analyst]', JSON.stringify(r));
+    } catch (err) {
+      console.error('[weight-analyst] sweep could not start:', err.message);
+    } finally {
+      analystInFlight = false;
+    }
+  };
+  setTimeout(runWeightAnalyst, 20 * 60 * 1000);
+  setInterval(runWeightAnalyst, 24 * 60 * 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };
