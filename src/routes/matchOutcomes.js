@@ -37,6 +37,84 @@ const ALLOWED_OUTCOMES = new Set([
   'survey_180d',          // 6-month in-app check-in
 ]);
 
+// ── Calibration helpers (2b) — pure, no I/O ────────────────────────────────
+// The "does this actually work?" report buckets every ANSWERED outcome by the
+// score we PREDICTED for that pair and reports the REAL success rate per band.
+// A calibrated engine shows success rising with the band. These functions are
+// the single source of truth for the bucketing + success definition (so the
+// unit tests cover them directly); the route is a thin DB wrapper around them.
+//
+// `min` is the inclusive lower bound of each band; the top band's upper bound
+// is 100 (scores never exceed it). Frontend sorts high→low by `min`. Kept in
+// lockstep with docs/BACKEND_OUTCOME_LEARNING.md §2a.
+const CALIBRATION_BANDS = [
+  { band: '85–100',   min: 85 },
+  { band: '70–84',    min: 70 },
+  { band: '55–69',    min: 55 },
+  { band: 'Below 55', min: 0  },
+];
+const RETENTION_STAGES = new Set(['day30', 'day60', 'day90', 'month6']);
+
+// A RESOLVED response we can score. Pending ('notyet') and rows without a
+// decisive answer are excluded from the denominator — an unresolved check-in
+// is not evidence for OR against the prediction (mirrors the existing summary
+// query, which excludes 'still_chatting').
+function isAnswered({ stage, answer, rating }) {
+  if (stage === 'meet48') return answer === 'yes' || answer === 'no';
+  if (RETENTION_STAGES.has(stage)) {
+    return Number.isFinite(rating) || answer === 'yes' || answer === 'no';
+  }
+  return false;
+}
+
+// Did the pairing succeed? meet48 → they actually met (answer 'yes').
+// Retention → still happy (rating >= 4). Per BACKEND_OUTCOME_LEARNING §2a.
+function isSuccess({ stage, answer, rating }) {
+  if (stage === 'meet48') return answer === 'yes';
+  if (RETENTION_STAGES.has(stage)) return Number.isFinite(rating) && rating >= 4;
+  return false;
+}
+
+function bandFor(score) {
+  for (const b of CALIBRATION_BANDS) if (score >= b.min) return b;
+  return CALIBRATION_BANDS[CALIBRATION_BANDS.length - 1];
+}
+
+// rows: [{ predictedScore, stage, answer, rating }]. Returns the aggregate
+// calibration payload — cohort rates only, never an individual's outcome. No
+// answered data → { ok:false } (the honest "still gathering" state); never
+// padded, never fabricated.
+function computeCalibration(rows) {
+  const buckets = new Map(); // band label -> { total, success }
+  let totalSample = 0;
+  for (const r of rows || []) {
+    const score = Number(r.predictedScore);
+    if (!Number.isFinite(score)) continue;            // must carry a prediction
+    const rating = Number.isFinite(Number(r.rating)) ? Number(r.rating) : undefined;
+    const item = { stage: r.stage, answer: r.answer, rating };
+    if (!isAnswered(item)) continue;                  // only resolved outcomes
+    totalSample++;
+    const { band } = bandFor(score);
+    const cur = buckets.get(band) || { total: 0, success: 0 };
+    cur.total++;
+    if (isSuccess(item)) cur.success++;
+    buckets.set(band, cur);
+  }
+  if (totalSample === 0) return { ok: false };
+  const bands = CALIBRATION_BANDS
+    .filter((b) => buckets.has(b.band))
+    .map((b) => {
+      const { total, success } = buckets.get(b.band);
+      return {
+        band: b.band,
+        min: b.min,
+        actualSuccess: Math.round((success / total) * 1000) / 1000, // 0–1, 3dp
+        sampleSize: total,
+      };
+    });
+  return { ok: true, totalSample, bands };
+}
+
 async function ensureTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS match_outcomes (
@@ -123,6 +201,38 @@ router.get('/me/match-outcomes', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[match-outcomes] read failed:', err);
     res.status(500).json({ error: 'failed to read outcomes' });
+  }
+});
+
+// ── GET /match-outcomes/calibration ────────────────────────────────────
+// The "does this actually work?" proof. Buckets every ANSWERED outcome by the
+// score we PREDICTED for that pair and reports the REAL success rate per band.
+// Aggregate cohort rates ONLY — never an individual's outcome, no user ids, no
+// answers. Any logged-in user may call it (no admin gate). Honest by
+// construction: no data → { ok:false }; never padded or seeded.
+router.get('/match-outcomes/calibration', requireAuth, async (req, res) => {
+  await ensureTable();
+  try {
+    const { rows } = await pool.query(`
+      SELECT details->>'predictedScore' AS predicted_score,
+             details->>'stage'          AS stage,
+             details->>'answer'         AS answer,
+             details->>'rating'         AS rating
+        FROM match_outcomes
+       WHERE details->>'predictedScore' ~ '^[0-9.]+$'`);
+    const result = computeCalibration(rows.map((r) => ({
+      predictedScore: r.predicted_score,
+      stage: r.stage,
+      answer: r.answer,
+      rating: r.rating,
+    })));
+    if (!result.ok) return res.status(404).json({ ok: false });
+    return res.json(result);
+  } catch (err) {
+    // Honest degrade: a failed aggregation reads as "still gathering", never a
+    // fabricated curve. The frontend treats ok:false / 404 identically.
+    console.error('[match-outcomes] calibration failed:', err);
+    return res.status(404).json({ ok: false });
   }
 });
 
@@ -425,5 +535,8 @@ router.post('/bot-admin/train-text-insights', requireBotToken, async (req, res) 
     res.status(500).json({ error: 'training failed' });
   }
 });
+
+// Pure calibration internals, exposed for unit tests (no DB required).
+router._calibration = { computeCalibration, isAnswered, isSuccess, bandFor, CALIBRATION_BANDS };
 
 module.exports = router;
