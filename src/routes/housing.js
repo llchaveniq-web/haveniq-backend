@@ -188,20 +188,55 @@ router.get('/timing', async (req, res) => {
     const r = ht.resolveHousing({ metro, area, domain, school });
     if (!r) return res.status(404).json({ error: 'no housing-timing data for that area' });
 
-    // Prefer city-level timing when we hold it; else the metro roll-up. Either
-    // way `metro` carries the full CBSA title and its state matches the school.
-    if (r.city) {
-      const cityRow = await ht.getTimingByKey(`city:${ht.normalizeRegionKey(r.city)}`);
+    // Precedence: ZORI city (seasonal) → ZORI metro (seasonal) → HUD county
+    // (annual LEVEL) → 404. Each tier carries its own confidence + honesty flags.
+    if (r.zori && r.zori.city) {
+      const cityRow = await ht.getTimingByKey(`city:${ht.normalizeRegionKey(r.zori.city)}`);
       if (cityRow && cityRow.timing) {
-        return res.json({ metro: r.cbsaFull, city: r.city, areaLevel: 'city', confidence: 'high', ...cityRow.timing });
+        return res.json({ metro: r.zori.cbsaFull, city: r.zori.city, areaLevel: 'city',
+                          confidence: 'high', ...cityRow.timing });
       }
     }
-    const metroRow = await ht.getTimingByKey(ht.normalizeRegionKey(r.short));
-    if (!metroRow || !metroRow.timing) return res.status(404).json({ error: 'no housing-timing data for that area' });
-    res.json({ metro: r.cbsaFull, areaLevel: 'metro', confidence: 'high', ...metroRow.timing });
+    if (r.zori) {
+      const metroRow = await ht.getTimingByKey(ht.normalizeRegionKey(r.zori.short));
+      if (metroRow && metroRow.timing) {
+        return res.json({ metro: r.zori.cbsaFull, areaLevel: 'metro',
+                          confidence: 'medium', ...metroRow.timing });
+      }
+    }
+    // HUD county-level fallback — an annual LEVEL, never seasonal. Assemble
+    // explicitly so no seasonal field can leak: no months, hasSeasonal:false,
+    // typicalRent set, and the HUD source label carried verbatim.
+    if (r.fips) {
+      const countyRow = await ht.getTimingByKey(`county:${r.fips}`);
+      if (countyRow && countyRow.timing) {
+        const t = countyRow.timing;
+        return res.json({
+          metro: countyRow.region_name, areaLevel: 'county', confidence: 'low',
+          hasSeasonal: false, typicalRent: t.typicalRent, bestMonthsToSearch: [],
+          asOf: t.asOf, source: t.source,
+        });
+      }
+    }
+    return res.status(404).json({ error: 'no housing-timing data for that area' });
   } catch (err) {
     console.error('[housing/timing] failed:', err);
     res.status(500).json({ error: 'housing timing lookup failed' });
+  }
+});
+
+// ── GET /housing/review (founder-only) ───────────────────────────────────────
+// The crosswalk review queue: NEW / renamed / low-confidence-fuzzy school→metro
+// matches held for a human instead of auto-shipped. Empty in the healthy case
+// (the app's schools are 100% exact .edu-domain matches). Founder-gated because
+// it exposes the maintenance backlog, not student-facing data.
+router.get('/review', requireAuth, async (req, res) => {
+  if (!isFounder(req.user.id)) return res.status(403).json({ error: 'Founder-only' });
+  try {
+    res.json({ pending: await ht.listCrosswalkReview('pending') });
+  } catch (err) {
+    console.error('[housing/review] failed:', err);
+    res.status(500).json({ error: 'Failed to load review queue' });
   }
 });
 

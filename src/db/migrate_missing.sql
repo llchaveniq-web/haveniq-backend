@@ -48,13 +48,28 @@ CREATE TABLE IF NOT EXISTS housing_rent_index (
   PRIMARY KEY (region_key, region_type, period)
 );
 CREATE TABLE IF NOT EXISTS housing_timing (
-  region_key   TEXT PRIMARY KEY,
+  region_key   TEXT PRIMARY KEY,      -- 'city:<key>' | '<metro-key>' | 'county:<FIPS>'
   region_name  TEXT NOT NULL,
-  region_type  TEXT,
+  region_type  TEXT,                  -- 'city' | 'metro' | 'county'
   state        TEXT,
-  timing       JSONB,                -- {bestMonthsToSearch,expectedSeasonalSwing,leadTimeWeeks,asOf,source}
+  timing       JSONB,                -- {bestMonthsToSearch,expectedSeasonalSwing?,leadTimeWeeks?,typicalRent?,hasSeasonal,asOf,source}
   computed_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Crosswalk review queue: NEW / renamed / low-confidence-fuzzy school→metro
+-- matches are HELD here for a human instead of auto-shipping a guess. High-
+-- confidence exact matches go straight into the bundled crosswalk; these don't.
+CREATE TABLE IF NOT EXISTS housing_crosswalk_review (
+  id              BIGSERIAL PRIMARY KEY,
+  school_name     TEXT,
+  domain          TEXT,
+  proposed_region TEXT,               -- the fuzzy candidate (NOT yet trusted)
+  confidence      NUMERIC,            -- 0..1 token-Jaccard score
+  reason          TEXT,               -- low_confidence | cross_state | distance | remap
+  status          TEXT DEFAULT 'pending',   -- pending | approved | rejected
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS housing_review_status_idx ON housing_crosswalk_review (status);
 
 -- Ensure newer columns on users exist
 ALTER TABLE users ADD COLUMN IF NOT EXISTS age              INTEGER;

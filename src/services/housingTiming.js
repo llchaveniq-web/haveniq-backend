@@ -22,6 +22,14 @@ const DEFAULT_ZORI_URL =
 // fallback. Override via env if Zillow moves the path.
 const DEFAULT_ZORI_CITY_URL =
   'https://files.zillowstatic.com/research/public_csvs/zori/City_zori_uc_sfrcondomfr_sm_month.csv';
+// HUD Fair Market Rents — annual, authoritative, EVERY US county. Served from
+// HUD's own keyless ArcGIS FeatureServer (huduser.gov itself is WAF-gated). This
+// is a LEVEL, not a seasonal index: county-level results carry typicalRent and
+// hasSeasonal:false, and are NEVER labeled Zillow/seasonal. FMR area codes
+// encode the geography: NCNTY{fips}N{fips} = a nonmetro county (FIPS direct);
+// METRO{cbsa}M{cbsa} = a metro (covers many counties → mapped via countyCbsa).
+const HUD_FMR_QUERY_URL =
+  'https://services.arcgis.com/VTyQ9soqVukalItT/arcgis/rest/services/Fair_Market_Rents/FeatureServer/0/query';
 
 // ── CSV ──────────────────────────────────────────────────────────────────────
 // Minimal RFC-4180-ish line parser: handles double-quoted fields that contain
@@ -136,11 +144,14 @@ function computeSeasonality(series) {
   const leadTimeWeeks = clamp(Math.round(4 + swingPct / 3), 4, 10);
 
   const asOf = s[s.length - 1].period.slice(0, 7); // YYYY-MM
+  const typicalRent = Math.round(v[n - 1]);        // latest observed monthly rent ($)
 
   return {
     bestMonthsToSearch,
     expectedSeasonalSwing: `${swingPct}%`,
     leadTimeWeeks,
+    typicalRent,
+    hasSeasonal: true,        // ZORI IS a seasonal index — months are real
     asOf,
     source: SOURCE,
   };
@@ -274,33 +285,38 @@ function normCounty(s) {
 }
 
 /**
- * Resolve a request to a ZORI metro, honestly. Returns
- *   { short, cbsaFull, city }   — city = canonical "City, ST" when a city-level
- *                                 series is available for it, else null —
- * or null when it can't resolve confidently (→ 404). Priority (per the brief):
+ * Resolve a request to what we can serve, honestly. Returns
+ *   { zori: { short, cbsaFull, city } | null, fips: string | null }
+ * or null when we can't even identify the school (→ 404). `zori` is the
+ * seasonal ZORI resolution (city = canonical "City, ST" when a city-level
+ * series exists); `fips` is the school's county FIPS for the HUD county-level
+ * fallback. The route applies precedence: ZORI city → ZORI metro → HUD county.
+ *
+ * ZORI resolution priority (per the brief):
  *   1. metro — explicit override, trusted.
  *   2. area  — student-typed locality (strongest signal), gated to school state.
  *   3. domain / name → school ZIP → school city → school county.
- * Sanity gate: the resolved CBSA's state list must include the school's state.
- * Membership holds by construction — we only look up the school's OWN
- * zip/city/county, or the typed area within the school's state — never the
- * nearest metro by distance.
+ * Sanity gate: the resolved CBSA's state must include the school's state.
+ * Membership holds by construction — only the school's OWN zip/city/county, or
+ * the typed area within its state — never the nearest metro by distance.
  */
 function resolveHousing({ metro, area, domain, school } = {}) {
   const b = loadBundle();
 
-  // school → location (for the state gate + the domain/name fallbacks)
+  // school → location (state gate, ZIP/city/county fallbacks, and the county
+  // FIPS for the HUD county-level fallback).
   let loc = null;
   for (const d of domainCandidates(domain)) { if (b.byDomain[d]) { loc = b.byDomain[d]; break; } }
   if (!loc && school) { const n = normalizeSchoolName(school); if (b.byName[n]) loc = b.byName[n]; }
   const schoolState = loc ? loc.state : null;
+  const fips = loc && loc.fips ? loc.fips : null;
 
   // 1. explicit metro override — trust it (short name or full CBSA title).
   if (metro && String(metro).trim()) {
     const m = String(metro).trim();
     let short = b.cbsa[m] ? m : null;
     if (!short) for (const s of Object.keys(b.cbsa)) { if (b.cbsa[s].full === m) { short = s; break; } }
-    return short ? { short, cbsaFull: b.cbsa[short].full, city: null } : null;
+    return short ? { zori: { short, cbsaFull: b.cbsa[short].full, city: null }, fips: null } : null;
   }
 
   let short = null, cityEntry = null;
@@ -321,14 +337,76 @@ function resolveHousing({ metro, area, domain, school } = {}) {
     if (!short && loc.county) short = b.byCountyState[`${normCounty(loc.county)}|${schoolState}`] || null;
   }
 
-  if (!short) return null;
-  const info = b.cbsa[short];
-  if (!info) return null;
-  // Sanity gate: never return a metro whose state doesn't match the school's.
-  if (schoolState && !info.states.includes(schoolState)) return null;
+  // ZORI (seasonal) resolution, with the state sanity gate applied.
+  let zori = null;
+  if (short) {
+    const info = b.cbsa[short];
+    if (info && (!schoolState || info.states.includes(schoolState))) {
+      const city = (cityEntry && cityEntry.short === short && cityEntry.cityData) ? cityEntry.city : null;
+      zori = { short, cbsaFull: info.full, city };
+    }
+  }
 
-  const city = (cityEntry && cityEntry.short === short && cityEntry.cityData) ? cityEntry.city : null;
-  return { short, cbsaFull: info.full, city };
+  // Nothing to serve if we couldn't even identify the school (no ZORI, no FIPS).
+  if (!zori && !fips) return null;
+  return { zori, fips };
+}
+
+// Load the bundled county-FIPS → CBSA-code map (Census delineation), used by the
+// HUD ingest to attach metro-county FMRs (nonmetro counties key directly).
+let _countyCbsa = null;
+function loadCountyCbsa() {
+  if (_countyCbsa) return _countyCbsa;
+  try { _countyCbsa = require('../data/countyCbsa.json'); }
+  catch { _countyCbsa = {}; }
+  return _countyCbsa;
+}
+
+// ── Fuzzy school match + review queue (crosswalk maintenance) ─────────────────
+// The offline crosswalk is keyed by exact .edu domain + normalized name. For a
+// NEW / renamed / misspelled school that doesn't hit those, this token-Jaccard
+// match against the IPEDS name index proposes a candidate with a confidence.
+// The rule (never auto-ship a guess): HIGH → usable, MID → held for review,
+// LOW → no match. The scheduled maintenance path records MID matches to the
+// review queue instead of shipping them live.
+const FUZZY_HIGH = 0.85, FUZZY_MIN = 0.55;
+function fuzzyMatchSchool(name) {
+  const b = loadBundle();
+  const q = new Set(normalizeSchoolName(name).split(' ').filter(Boolean));
+  if (!q.size) return { match: null, confidence: 0, loc: null, verdict: 'none' };
+  let best = null, bestScore = 0;
+  for (const key of Object.keys(b.byName)) {
+    const t = key.split(' ');
+    let inter = 0; for (const w of t) if (q.has(w)) inter++;
+    const jac = inter / (q.size + t.length - inter);
+    if (jac > bestScore) { bestScore = jac; best = key; }
+  }
+  const confidence = Number(bestScore.toFixed(3));
+  const verdict = confidence >= FUZZY_HIGH ? 'high' : confidence >= FUZZY_MIN ? 'review' : 'none';
+  return { match: best, confidence, loc: verdict === 'none' ? null : b.byName[best], verdict };
+}
+
+// Persist a held-for-review match (best-effort; table created by migrate_missing).
+async function recordCrosswalkReview({ school, domain, proposed, confidence, reason }) {
+  try {
+    const pool = require('../db/pool');
+    await pool.query(
+      `INSERT INTO housing_crosswalk_review (school_name, domain, proposed_region, confidence, reason)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
+      [school || null, domain || null, proposed || null, confidence ?? null, reason || 'low_confidence'],
+    );
+    return true;
+  } catch (e) { console.error('[housing] review insert failed:', e.message); return false; }
+}
+
+async function listCrosswalkReview(status = 'pending') {
+  try {
+    const pool = require('../db/pool');
+    const { rows } = await pool.query(
+      `SELECT id, school_name, domain, proposed_region, confidence, reason, status, created_at
+         FROM housing_crosswalk_review WHERE status = $1 ORDER BY created_at DESC LIMIT 500`, [status]);
+    return rows;
+  } catch { return []; }
 }
 
 // ── DB / network (lazy pool) ─────────────────────────────────────────────────
@@ -378,7 +456,11 @@ async function ingestZori({ url } = {}) {
   // City-level timing is a best-effort enrichment — a failure here just means
   // the app serves the (correct) metro roll-up instead of a city-level number.
   const cities = await ingestCityTiming().catch(e => ({ ok: false, reason: e.message }));
-  return { ok: true, regions: regions.length, rowsUpserted: upserted, computed, cities };
+  // HUD county-level FMR (annual levels) — closes the ZORI coverage gap toward
+  // ~100%. Best-effort: a failure just leaves the (correct) 404 for uncovered
+  // rural areas instead of a county-level level.
+  const counties = await ingestCountyFmr().catch(e => ({ ok: false, reason: e.message }));
+  return { ok: true, regions: regions.length, rowsUpserted: upserted, computed, cities, counties };
 }
 
 // Recompute timing for every region we have rent data for; store in housing_timing.
@@ -461,6 +543,82 @@ async function ingestCityTiming(url) {
   return { ok: true, cities: regions.length, stored };
 }
 
+// Ingest HUD Fair Market Rents (county-level LEVELS) into housing_timing, keyed
+// 'county:<FIPS>'. Source is HUD's keyless ArcGIS FeatureServer. Nonmetro FMR
+// areas (NCNTY) carry the county FIPS directly; metro FMR areas (METRO{cbsa})
+// are attached to their member counties via the bundled Census county→CBSA map.
+// Stored as a LEVEL — typicalRent, hasSeasonal:false, bestMonthsToSearch:[] —
+// with an honest HUD source label. NEVER seasonal, never a fabricated month.
+async function ingestCountyFmr({ url } = {}) {
+  const pool = require('../db/pool');
+  const base = url || process.env.HUD_FMR_QUERY_URL || HUD_FMR_QUERY_URL;
+  let features = [], year = null;
+  try {
+    // Fiscal year: HUD publishes next-FY FMRs in ~Aug–Sep; derive from the
+    // layer's lastEditDate so the source label stays accurate year to year.
+    const meta = await fetch(`${base.replace(/\/query$/, '')}?f=json`).then(r => r.json()).catch(() => null);
+    const le = meta && meta.editingInfo && meta.editingInfo.lastEditDate;
+    if (le) { const d = new Date(le); year = d.getUTCMonth() >= 7 ? d.getUTCFullYear() + 1 : d.getUTCFullYear(); }
+    for (let offset = 0; ; offset += 1000) {
+      const qs = new URLSearchParams({
+        where: '1=1', outFields: 'FMR_CODE,FMR_AREANAME,FMR_2BDR', returnGeometry: 'false',
+        f: 'json', resultOffset: String(offset), resultRecordCount: '1000', orderByFields: 'OBJECTID',
+      });
+      const page = await fetch(`${base}?${qs}`).then(r => r.json());
+      const batch = (page && page.features) || [];
+      features.push(...batch);
+      if (batch.length < 1000) break;
+    }
+  } catch (e) {
+    return { ok: false, reason: `HUD fetch failed: ${e.message}` };
+  }
+  if (!features.length) return { ok: false, reason: 'no FMR areas' };
+
+  const label = process.env.HUD_FMR_LABEL || `HUD Fair Market Rents (FY${year || new Date().getUTCFullYear()})`;
+  const asOf = String(year || new Date().getUTCFullYear());
+
+  // Decode FMR codes: nonmetro county FIPS → rent, metro CBSA → rent.
+  const countyRent = {}, cbsaRent = {};
+  for (const f of features) {
+    const a = f.attributes || {};
+    const code = a.FMR_CODE || '', rent = a.FMR_2BDR;
+    if (!rent) continue;
+    if (code.startsWith('NCNTY')) countyRent[code.slice(5, 10)] = { rent, area: a.FMR_AREANAME };
+    else if (code.startsWith('METRO')) cbsaRent[code.slice(5, 10)] = { rent, area: a.FMR_AREANAME };
+  }
+  // Metro counties inherit their CBSA's FMR (every county in a CBSA shares it).
+  const countyCbsa = loadCountyCbsa();
+  for (const [fips, cbsa] of Object.entries(countyCbsa)) {
+    if (!countyRent[fips] && cbsaRent[cbsa]) countyRent[fips] = cbsaRent[cbsa];
+  }
+
+  let stored = 0;
+  for (const [fips, rec] of Object.entries(countyRent)) {
+    const st = (rec.area && (rec.area.match(/,\s*([A-Z]{2})\b/) || [])[1]) || fips.slice(0, 2);
+    const timing = {
+      typicalRent: rec.rent,
+      bestMonthsToSearch: [],   // HUD is an annual LEVEL — never invent months
+      hasSeasonal: false,
+      asOf,
+      source: label,
+    };
+    try {
+      await pool.query(
+        `INSERT INTO housing_timing (region_key, region_name, region_type, state, timing, computed_at)
+         VALUES ($1,$2,'county',$3,$4,NOW())
+         ON CONFLICT (region_key) DO UPDATE
+           SET region_name = EXCLUDED.region_name, region_type = 'county',
+               state = EXCLUDED.state, timing = EXCLUDED.timing, computed_at = NOW()`,
+        [`county:${fips}`, rec.area || `County ${fips}`, st, JSON.stringify(timing)],
+      );
+      stored += 1;
+    } catch (e) {
+      console.error(`[housing] county FMR ${fips} failed:`, e.message);
+    }
+  }
+  return { ok: true, fmrAreas: features.length, counties: stored, label };
+}
+
 // Read the stored timing for a region key. null when we have no data.
 async function getTimingByKey(regionKey) {
   try {
@@ -486,9 +644,10 @@ async function listTimingRegionNames() {
 }
 
 module.exports = {
-  SOURCE, DEFAULT_ZORI_URL, DEFAULT_ZORI_CITY_URL,
+  SOURCE, DEFAULT_ZORI_URL, DEFAULT_ZORI_CITY_URL, HUD_FMR_QUERY_URL,
   parseCsvLine, parseZoriCsv, computeSeasonality,
   normalizeRegionKey, resolveSchoolToMetro, CURATED_SCHOOL_METRO,
-  normalizeSchoolName, domainCandidates, cbsaShort, normCounty, resolveHousing,
-  ingestZori, ingestCityTiming, computeAndStoreTiming, getTimingByKey, listTimingRegionNames,
+  normalizeSchoolName, domainCandidates, cbsaShort, normCounty, resolveHousing, loadCountyCbsa,
+  fuzzyMatchSchool, recordCrosswalkReview, listCrosswalkReview,
+  ingestZori, ingestCityTiming, ingestCountyFmr, computeAndStoreTiming, getTimingByKey, listTimingRegionNames,
 };

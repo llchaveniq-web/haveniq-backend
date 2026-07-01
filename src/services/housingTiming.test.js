@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const {
   parseCsvLine, parseZoriCsv, computeSeasonality,
   normalizeRegionKey, resolveSchoolToMetro, SOURCE,
-  normalizeSchoolName, domainCandidates, cbsaShort, normCounty, resolveHousing,
+  normalizeSchoolName, domainCandidates, cbsaShort, normCounty, resolveHousing, fuzzyMatchSchool,
 } = require('./housingTiming');
 
 test('parseCsvLine handles quoted fields with embedded commas', () => {
@@ -105,28 +105,52 @@ test('resolveHousing: the SLO→LA bug is fixed (area first, never a wrong metro
   // THE bug: Cal Poly SLO with area "San Luis Obispo" must resolve to its own
   // CBSA, never Los Angeles (~200mi away). SLO is its own MSA that ZORI covers.
   const slo = resolveHousing({ school: 'Cal Poly SLO', domain: 'calpoly.edu', area: 'San Luis Obispo' });
-  assert.equal(slo.cbsaFull, 'San Luis Obispo-Paso Robles, CA');
-  assert.ok(!/Los Angeles/.test(slo.cbsaFull), 'must never be Los Angeles');
+  assert.equal(slo.zori.cbsaFull, 'San Luis Obispo-Paso Robles, CA');
+  assert.ok(!/Los Angeles/.test(slo.zori.cbsaFull), 'must never be Los Angeles');
+  assert.ok(slo.zori.city, 'SLO has city-level ZORI');
+  assert.equal(slo.fips, '06079'); // carries the county FIPS too
   // Domain alone (no area) still resolves SLO correctly.
-  assert.equal(resolveHousing({ domain: 'calpoly.edu' }).cbsaFull, 'San Luis Obispo-Paso Robles, CA');
+  assert.equal(resolveHousing({ domain: 'calpoly.edu' }).zori.cbsaFull, 'San Luis Obispo-Paso Robles, CA');
 });
 
 test('resolveHousing: correct metros for a spread of schools', () => {
-  assert.equal(resolveHousing({ domain: 'osu.edu' }).cbsaFull, 'Columbus, OH');
-  assert.equal(resolveHousing({ domain: 'nyu.edu' }).cbsaFull, 'New York-Newark-Jersey City, NY-NJ-PA');
-  assert.equal(resolveHousing({ domain: 'umich.edu' }).cbsaFull, 'Ann Arbor, MI');
+  assert.equal(resolveHousing({ domain: 'osu.edu' }).zori.cbsaFull, 'Columbus, OH');
+  assert.equal(resolveHousing({ domain: 'nyu.edu' }).zori.cbsaFull, 'New York-Newark-Jersey City, NY-NJ-PA');
+  assert.equal(resolveHousing({ domain: 'umich.edu' }).zori.cbsaFull, 'Ann Arbor, MI');
   // CSU Long Beach IS in the LA metro (Long Beach is a member) — correct, in-state.
-  assert.equal(resolveHousing({ domain: 'csulb.edu' }).cbsaFull, 'Los Angeles-Long Beach-Anaheim, CA');
+  assert.equal(resolveHousing({ domain: 'csulb.edu' }).zori.cbsaFull, 'Los Angeles-Long Beach-Anaheim, CA');
   // Sub-domained student email still resolves via the registrable domain.
-  assert.equal(resolveHousing({ domain: 'mail.student.osu.edu' }).cbsaFull, 'Columbus, OH');
+  assert.equal(resolveHousing({ domain: 'mail.student.osu.edu' }).zori.cbsaFull, 'Columbus, OH');
+});
+
+test('resolveHousing: rural school ZORI misses → county FIPS for the HUD fallback', () => {
+  // University of West Alabama (Livingston, AL) — no ZORI metro, but its county
+  // FIPS is returned so the route can serve HUD county-level (never a 404 here).
+  const r = resolveHousing({ domain: 'uwa.edu' });
+  assert.equal(r.zori, null, 'no ZORI metro for this rural area');
+  assert.equal(r.fips, '01119', 'county FIPS carried for HUD fallback');
+});
+
+test('fuzzyMatchSchool: high-confidence usable, ambiguous HELD for review, junk none', () => {
+  // Exact IPEDS name → high confidence → usable.
+  const exact = fuzzyMatchSchool('Ohio State University Agricultural Technical Institute');
+  assert.equal(exact.verdict, 'high');
+  assert.ok(exact.loc, 'high-confidence carries a location');
+  // Ambiguous name (which UC campus?) → 'review': HELD, not auto-shipped live.
+  const amb = fuzzyMatchSchool('University of California');
+  assert.equal(amb.verdict, 'review');
+  assert.ok(amb.confidence >= 0.55 && amb.confidence < 0.85, `mid confidence, got ${amb.confidence}`);
+  // Junk → no match at all.
+  assert.equal(fuzzyMatchSchool('Zxqw Nonsense Academy Ltd').verdict, 'none');
+  assert.equal(fuzzyMatchSchool('').verdict, 'none');
 });
 
 test('resolveHousing: unresolved / cross-state → null (404, never a default)', () => {
-  // Unknown school → null; there is no blanket-default metro.
+  // Truly-unknown school (not in IPEDS) → null; there is no blanket-default.
   assert.equal(resolveHousing({ school: 'Nowhere Institute of Nothing', domain: 'notareal.example' }), null);
   // Area with no known school → cannot gate on state → null.
   assert.equal(resolveHousing({ area: 'San Luis Obispo' }), null);
   // Explicit metro override is trusted; unknown metro string → null.
-  assert.equal(resolveHousing({ metro: 'San Luis Obispo, CA' }).cbsaFull, 'San Luis Obispo-Paso Robles, CA');
+  assert.equal(resolveHousing({ metro: 'San Luis Obispo, CA' }).zori.cbsaFull, 'San Luis Obispo-Paso Robles, CA');
   assert.equal(resolveHousing({ metro: 'Atlantis, ZZ' }), null);
 });
