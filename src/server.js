@@ -840,6 +840,30 @@ server.listen(PORT, () => {
   };
   setTimeout(runLifecycleJob, 25 * 60 * 1000);
   setInterval(runLifecycleJob, 24 * 60 * 60 * 1000).unref?.();
+
+  // ── Grow loop: weekly growth digest (informational only) ───────────────────
+  // Reads REAL numbers (signups, quiz completions, matches, connects, referrals),
+  // computes week-over-week deltas + the activation funnel, and drafts a founder
+  // digest (LLM writes the narrative around DB numbers; deterministic fallback).
+  // Emails via Resend + GET /ops/growth-digest. Takes NO action, sends nothing to
+  // users — so no circuit breaker; a kill switch (WATCH_DIGEST_ENABLED, default
+  // OFF) gates when it starts. Best-effort, non-overlapping. First ~35 min after
+  // boot, then weekly.
+  let digestInFlight = false;
+  const runGrowthDigest = async () => {
+    if (digestInFlight) return;
+    digestInFlight = true;
+    try {
+      const r = await require('./services/growthDigest').runDigest();
+      if (r.enabled) console.log('[growth-digest]', JSON.stringify({ emailed: r.emailed, source: r.source, biggestDrop: r.biggestDrop }));
+    } catch (err) {
+      console.error('[growth-digest] run could not start:', err.message);
+    } finally {
+      digestInFlight = false;
+    }
+  };
+  setTimeout(runGrowthDigest, 35 * 60 * 1000);
+  setInterval(runGrowthDigest, 7 * 24 * 60 * 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };

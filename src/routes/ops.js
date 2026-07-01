@@ -14,6 +14,7 @@ const { requireFounder } = require('../middleware/requireFounder');
 const { watcher } = require('../services/healthWatchRunner');
 const lifecycle = require('../services/lifecycleSender');
 const coverageDiff = require('../services/coverageDiff');
+const growthDigest = require('../services/growthDigest');
 
 router.get('/ops/health-history', requireAuth, requireFounder, (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
@@ -51,6 +52,14 @@ router.get('/ops/lifecycle-log', requireAuth, requireFounder, async (req, res) =
 router.get('/ops/data-diff', requireAuth, requireFounder, async (req, res) => {
   const report = await coverageDiff.latestReport(pool);
   res.json({ report }); // null when no snapshot exists yet — not a fabricated diff
+});
+
+// The latest weekly growth digest — real funnel/deltas + the LLM narrative
+// around them. Founder-only, same gate. Honest empty ({ digest: null }) until
+// the (kill-switch-gated) weekly job has run at least once.
+router.get('/ops/growth-digest', requireAuth, requireFounder, async (req, res) => {
+  const digest = await growthDigest.latestDigest(pool);
+  res.json({ enabled: growthDigest.cfg().enabled, digest });
 });
 
 module.exports = router;
