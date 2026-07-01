@@ -17,6 +17,11 @@ const SOURCE = 'Zillow Research (ZORI)';
 // env if the path moves; ingest fails gracefully (logs, no data) if it 404s.
 const DEFAULT_ZORI_URL =
   'https://files.zillowstatic.com/research/public_csvs/zori/Metro_zori_uc_sfrcondomfr_sm_month.csv';
+// City-level ZORI — same public dataset at city granularity. Used to serve
+// city-level timing (areaLevel:'city') when we hold it; the metro roll-up is the
+// fallback. Override via env if Zillow moves the path.
+const DEFAULT_ZORI_CITY_URL =
+  'https://files.zillowstatic.com/research/public_csvs/zori/City_zori_uc_sfrcondomfr_sm_month.csv';
 
 // ── CSV ──────────────────────────────────────────────────────────────────────
 // Minimal RFC-4180-ish line parser: handles double-quoted fields that contain
@@ -212,24 +217,27 @@ function resolveSchoolToMetro(school, regionNames = []) {
   return best ? best.region : null;
 }
 
-// ── National school→metro crosswalk ──────────────────────────────────────────
-// A prebuilt map of every US college (IPEDS) → its ZORI metro ("City, ST"),
-// derived offline from public data (IPEDS HD school coords/ZIP × Zillow ZORI
-// metro geography): exact ZIP→CBSA where the ZIP is a ZORI ZIP, else the
-// nearest ZORI-metro centroid within 75 miles. ~97% of the 4,852-school app
-// list resolves; the rest (US territories, remote tribal/rural campuses with no
-// metro rental market) fall through to 404 → reasoned guidance. Keyed by both
-// school domain (most reliable) and normalized school name.
-let _crosswalk = null;
-function loadCrosswalk() {
-  if (_crosswalk) return _crosswalk;
-  try { _crosswalk = require('../data/schoolMetro.json'); }
-  catch { _crosswalk = { byDomain: {}, byName: {} }; }
-  return _crosswalk;
+// ── National school→CBSA crosswalk (authoritative membership, no guessing) ────
+// Prebuilt bundle (src/data/housingCrosswalk.json), built offline from PUBLIC
+// data: IPEDS HD (every US institution → city/state/ZIP/county, keyed by .edu
+// domain and normalized name) × Zillow ZORI's Census-CBSA geography (ZIP / city /
+// county → CBSA). A school maps to a metro ONLY when its own ZIP/city/county —
+// or the student-typed area, within the school's state — is a MEMBER of that
+// CBSA. There is deliberately NO nearest-metro / distance fallback: snapping a
+// campus to the closest big city is exactly the SLO→Los Angeles bug this
+// replaces. Unresolved, or a cross-state resolution, returns null → the route
+// 404s and the app degrades to honest reasoned guidance.
+let _bundle = null;
+function loadBundle() {
+  if (_bundle) return _bundle;
+  try { _bundle = require('../data/housingCrosswalk.json'); }
+  catch { _bundle = { byDomain: {}, byName: {}, byZip: {}, byCityState: {}, byCountyState: {}, cbsa: {} }; }
+  return _bundle;
 }
 
 // Mirror the offline name normalizer exactly (lowercase, & → and, strip
-// punctuation to spaces, collapse) so app-supplied names hit the byName keys.
+// punctuation to spaces, collapse) so app-supplied names hit the byName /
+// byCityState keys.
 function normalizeSchoolName(s) {
   return String(s || '')
     .toLowerCase()
@@ -250,19 +258,77 @@ function domainCandidates(domain) {
   return out; // [full, …, registrable]
 }
 
+// Reduce a ZORI CBSA full title to its short "City, ST" key (how the metro rent
+// series is keyed): "New York-Newark-Jersey City, NY-NJ-PA" → "New York, NY".
+function cbsaShort(full) {
+  const s = String(full || '');
+  const c = s.lastIndexOf(',');
+  if (c < 0) return s.trim();
+  return `${s.slice(0, c).split('-')[0].trim()}, ${s.slice(c + 1).trim().split('-')[0].trim()}`;
+}
+
+// County key: "San Luis Obispo County" → "san luis obispo" (IPEDS and ZORI both
+// spell counties "X County"), normalized like the city keys.
+function normCounty(s) {
+  return normalizeSchoolName(String(s || '').replace(/\s+county$/i, ''));
+}
+
 /**
- * Resolve a school to its ZORI metro NAME ("City, ST") via the national
- * crosswalk: domain first (exact, then registrable-domain fallback), then
- * normalized school name. Returns null when the school isn't in the crosswalk.
+ * Resolve a request to a ZORI metro, honestly. Returns
+ *   { short, cbsaFull, city }   — city = canonical "City, ST" when a city-level
+ *                                 series is available for it, else null —
+ * or null when it can't resolve confidently (→ 404). Priority (per the brief):
+ *   1. metro — explicit override, trusted.
+ *   2. area  — student-typed locality (strongest signal), gated to school state.
+ *   3. domain / name → school ZIP → school city → school county.
+ * Sanity gate: the resolved CBSA's state list must include the school's state.
+ * Membership holds by construction — we only look up the school's OWN
+ * zip/city/county, or the typed area within the school's state — never the
+ * nearest metro by distance.
  */
-function resolveViaCrosswalk({ school, domain } = {}) {
-  const cw = loadCrosswalk();
-  for (const d of domainCandidates(domain)) {
-    if (cw.byDomain[d]) return cw.byDomain[d];
+function resolveHousing({ metro, area, domain, school } = {}) {
+  const b = loadBundle();
+
+  // school → location (for the state gate + the domain/name fallbacks)
+  let loc = null;
+  for (const d of domainCandidates(domain)) { if (b.byDomain[d]) { loc = b.byDomain[d]; break; } }
+  if (!loc && school) { const n = normalizeSchoolName(school); if (b.byName[n]) loc = b.byName[n]; }
+  const schoolState = loc ? loc.state : null;
+
+  // 1. explicit metro override — trust it (short name or full CBSA title).
+  if (metro && String(metro).trim()) {
+    const m = String(metro).trim();
+    let short = b.cbsa[m] ? m : null;
+    if (!short) for (const s of Object.keys(b.cbsa)) { if (b.cbsa[s].full === m) { short = s; break; } }
+    return short ? { short, cbsaFull: b.cbsa[short].full, city: null } : null;
   }
-  const name = normalizeSchoolName(school);
-  if (name && cw.byName[name]) return cw.byName[name];
-  return null;
+
+  let short = null, cityEntry = null;
+
+  // 2. typed area first — strongest locality signal; gated to the school's state.
+  if (area && schoolState) {
+    const e = b.byCityState[`${normalizeSchoolName(area)}|${schoolState}`];
+    if (e) { short = e.short; cityEntry = e; }
+  }
+
+  // 3/4/5. school ZIP → school city → school county (all authoritative members).
+  if (!short && loc) {
+    const zip = String(loc.zip || '').padStart(5, '0');
+    if (b.byZip[zip]) short = b.byZip[zip];
+    const ce = b.byCityState[`${normalizeSchoolName(loc.city)}|${schoolState}`];
+    if (!short && ce) short = ce.short;
+    if (short && ce && ce.short === short) cityEntry = ce;
+    if (!short && loc.county) short = b.byCountyState[`${normCounty(loc.county)}|${schoolState}`] || null;
+  }
+
+  if (!short) return null;
+  const info = b.cbsa[short];
+  if (!info) return null;
+  // Sanity gate: never return a metro whose state doesn't match the school's.
+  if (schoolState && !info.states.includes(schoolState)) return null;
+
+  const city = (cityEntry && cityEntry.short === short && cityEntry.cityData) ? cityEntry.city : null;
+  return { short, cbsaFull: info.full, city };
 }
 
 // ── DB / network (lazy pool) ─────────────────────────────────────────────────
@@ -309,7 +375,10 @@ async function ingestZori({ url } = {}) {
     }
   }
   const computed = await computeAndStoreTiming();
-  return { ok: true, regions: regions.length, rowsUpserted: upserted, computed };
+  // City-level timing is a best-effort enrichment — a failure here just means
+  // the app serves the (correct) metro roll-up instead of a city-level number.
+  const cities = await ingestCityTiming().catch(e => ({ ok: false, reason: e.message }));
+  return { ok: true, regions: regions.length, rowsUpserted: upserted, computed, cities };
 }
 
 // Recompute timing for every region we have rent data for; store in housing_timing.
@@ -345,6 +414,53 @@ async function computeAndStoreTiming() {
   return computed;
 }
 
+// Compute + store CITY-level timing directly into housing_timing (keyed
+// 'city:<key>' so it never collides with a same-named metro short key). Bounded
+// to cities the crosswalk can actually resolve to, so we don't persist thousands
+// of cities no school maps to. Timing is computed inline from the in-memory
+// series — this deliberately does NOT touch housing_rent_index. Best-effort.
+async function ingestCityTiming(url) {
+  const pool = require('../db/pool');
+  const csvUrl = url || process.env.ZORI_CITY_CSV_URL || DEFAULT_ZORI_CITY_URL;
+  let regions;
+  try {
+    const res = await fetch(csvUrl, { headers: { 'user-agent': 'haveniq-housing-ingest/1' } });
+    if (!res.ok) return { ok: false, reason: `download ${res.status}`, url: csvUrl };
+    regions = parseZoriCsv(await res.text());
+  } catch (e) {
+    return { ok: false, reason: `download failed: ${e.message}`, url: csvUrl };
+  }
+  // Only the cities the crosswalk can resolve to (byCityState with cityData).
+  const b = loadBundle();
+  const allowed = new Set();
+  for (const v of Object.values(b.byCityState || {})) {
+    if (v && v.cityData && v.city) allowed.add(`city:${normalizeRegionKey(v.city)}`);
+  }
+  let stored = 0;
+  for (const reg of regions) {
+    if (!reg.state || !reg.regionName) continue;
+    const canonical = `${reg.regionName}, ${reg.state}`;
+    const key = `city:${normalizeRegionKey(canonical)}`;
+    if (!allowed.has(key)) continue;
+    const timing = computeSeasonality(reg.series);
+    if (!timing) continue;
+    try {
+      await pool.query(
+        `INSERT INTO housing_timing (region_key, region_name, region_type, state, timing, computed_at)
+         VALUES ($1,$2,'city',$3,$4,NOW())
+         ON CONFLICT (region_key) DO UPDATE
+           SET region_name = EXCLUDED.region_name, region_type = 'city',
+               state = EXCLUDED.state, timing = EXCLUDED.timing, computed_at = NOW()`,
+        [key, canonical, reg.state, JSON.stringify(timing)],
+      );
+      stored += 1;
+    } catch (e) {
+      console.error(`[housing] city timing ${key} failed:`, e.message);
+    }
+  }
+  return { ok: true, cities: regions.length, stored };
+}
+
 // Read the stored timing for a region key. null when we have no data.
 async function getTimingByKey(regionKey) {
   try {
@@ -370,9 +486,9 @@ async function listTimingRegionNames() {
 }
 
 module.exports = {
-  SOURCE, DEFAULT_ZORI_URL,
+  SOURCE, DEFAULT_ZORI_URL, DEFAULT_ZORI_CITY_URL,
   parseCsvLine, parseZoriCsv, computeSeasonality,
   normalizeRegionKey, resolveSchoolToMetro, CURATED_SCHOOL_METRO,
-  normalizeSchoolName, resolveViaCrosswalk, domainCandidates,
-  ingestZori, computeAndStoreTiming, getTimingByKey, listTimingRegionNames,
+  normalizeSchoolName, domainCandidates, cbsaShort, normCounty, resolveHousing,
+  ingestZori, ingestCityTiming, computeAndStoreTiming, getTimingByKey, listTimingRegionNames,
 };

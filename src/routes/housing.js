@@ -168,42 +168,37 @@ router.delete('/listings/:id', requireAuth, async (req, res) => {
   }
 });
 
-// ── GET /housing/timing?metro=... | ?school=... ──────────────────────────────
-// "Best time to lock in" for a metro, computed from PUBLIC Zillow Research ZORI
-// rent data (no scraping). ?metro is normalized directly; ?school is best-effort
-// resolved to a metro we hold data for. 404 when we have no data for that area —
-// the app degrades to reasoned guidance. Public (no auth): aggregate stats only,
-// no listings or PII. Honest source attribution is carried in the payload.
+// ── GET /housing/timing?school=&domain=&area=&metro= ─────────────────────────
+// "Best time to lock in" for a student's area, from PUBLIC Zillow Research ZORI
+// rent data (no scraping). Resolution priority: metro (explicit override) →
+// area (typed locality) → domain/name → school ZIP/city/county, resolved to a
+// CBSA by authoritative Census membership with a state sanity gate. It NEVER
+// snaps to the nearest big metro: if it isn't confident, it 404s (the app then
+// degrades to honest reasoned guidance) — a wrong metro is worse than no data.
+// City-level ZORI is returned when held (areaLevel:'city'); else the metro
+// roll-up (areaLevel:'metro'). Public (no auth): aggregate stats only, no PII.
 router.get('/timing', async (req, res) => {
   try {
-    const metro  = typeof req.query.metro  === 'string' ? req.query.metro.trim()  : '';
-    const school = typeof req.query.school === 'string' ? req.query.school.trim() : '';
-    const domain = typeof req.query.domain === 'string' ? req.query.domain.trim() : '';
-    if (!metro && !school && !domain) {
-      return res.status(400).json({ error: 'metro, school, or domain query param required' });
+    const q = (k) => (typeof req.query[k] === 'string' ? req.query[k].trim() : '');
+    const metro = q('metro'), school = q('school'), domain = q('domain'), area = q('area');
+    if (!metro && !school && !domain && !area) {
+      return res.status(400).json({ error: 'metro, school, domain, or area query param required' });
     }
 
-    let regionKey = null;
-    if (metro) {
-      regionKey = ht.normalizeRegionKey(metro);
-    } else {
-      // National crosswalk first (domain → metro, then name); fall back to the
-      // legacy substring/curated resolver for any name it doesn't carry.
-      let resolved = ht.resolveViaCrosswalk({ school, domain });
-      if (!resolved && school) {
-        const names = await ht.listTimingRegionNames();
-        resolved = ht.resolveSchoolToMetro(school, names);
+    const r = ht.resolveHousing({ metro, area, domain, school });
+    if (!r) return res.status(404).json({ error: 'no housing-timing data for that area' });
+
+    // Prefer city-level timing when we hold it; else the metro roll-up. Either
+    // way `metro` carries the full CBSA title and its state matches the school.
+    if (r.city) {
+      const cityRow = await ht.getTimingByKey(`city:${ht.normalizeRegionKey(r.city)}`);
+      if (cityRow && cityRow.timing) {
+        return res.json({ metro: r.cbsaFull, city: r.city, areaLevel: 'city', confidence: 'high', ...cityRow.timing });
       }
-      if (resolved) regionKey = ht.normalizeRegionKey(resolved);
     }
-    if (!regionKey) return res.status(404).json({ error: 'no housing-timing data for that area' });
-
-    const row = await ht.getTimingByKey(regionKey);
-    if (!row || !row.timing) return res.status(404).json({ error: 'no housing-timing data for that area' });
-
-    // timing carries { bestMonthsToSearch, expectedSeasonalSwing, leadTimeWeeks,
-    // asOf, source: 'Zillow Research (ZORI)' }. Surface the resolved metro too.
-    res.json({ metro: row.region_name, ...row.timing });
+    const metroRow = await ht.getTimingByKey(ht.normalizeRegionKey(r.short));
+    if (!metroRow || !metroRow.timing) return res.status(404).json({ error: 'no housing-timing data for that area' });
+    res.json({ metro: r.cbsaFull, areaLevel: 'metro', confidence: 'high', ...metroRow.timing });
   } catch (err) {
     console.error('[housing/timing] failed:', err);
     res.status(500).json({ error: 'housing timing lookup failed' });

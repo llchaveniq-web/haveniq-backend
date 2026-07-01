@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const {
   parseCsvLine, parseZoriCsv, computeSeasonality,
   normalizeRegionKey, resolveSchoolToMetro, SOURCE,
-  normalizeSchoolName, domainCandidates, resolveViaCrosswalk,
+  normalizeSchoolName, domainCandidates, cbsaShort, normCounty, resolveHousing,
 } = require('./housingTiming');
 
 test('parseCsvLine handles quoted fields with embedded commas', () => {
@@ -90,14 +90,43 @@ test('domainCandidates reduces a host to registrable-domain fallbacks', () => {
   assert.deepEqual(domainCandidates(''), []);
 });
 
-test('resolveViaCrosswalk maps schools nationwide via the bundled crosswalk', () => {
-  // Domain first — flagships that aren't named after their metro.
-  assert.equal(resolveViaCrosswalk({ domain: 'umich.edu' }), 'Ann Arbor, MI');
-  assert.equal(resolveViaCrosswalk({ domain: 'osu.edu' }), 'Columbus, OH');
-  // Sub-domained student email still resolves to the registrable domain.
-  assert.equal(resolveViaCrosswalk({ domain: 'student.umich.edu' }), 'Ann Arbor, MI');
-  // Name fallback when no domain is supplied.
-  assert.equal(resolveViaCrosswalk({ school: 'Ohio State University-Main Campus' }), 'Columbus, OH');
-  // Unknown → null (endpoint 404s; app degrades to reasoned guidance).
-  assert.equal(resolveViaCrosswalk({ domain: 'nope.example', school: 'Nowhere College' }), null);
+test('cbsaShort reduces a full CBSA title to its ZORI "City, ST" key', () => {
+  assert.equal(cbsaShort('New York-Newark-Jersey City, NY-NJ-PA'), 'New York, NY');
+  assert.equal(cbsaShort('San Luis Obispo-Paso Robles, CA'), 'San Luis Obispo, CA');
+  assert.equal(cbsaShort('Columbus, OH'), 'Columbus, OH');
+});
+
+test('normCounty strips the "County" suffix and normalizes', () => {
+  assert.equal(normCounty('San Luis Obispo County'), 'san luis obispo');
+  assert.equal(normCounty('St. Louis County'), 'st louis');
+});
+
+test('resolveHousing: the SLO→LA bug is fixed (area first, never a wrong metro)', () => {
+  // THE bug: Cal Poly SLO with area "San Luis Obispo" must resolve to its own
+  // CBSA, never Los Angeles (~200mi away). SLO is its own MSA that ZORI covers.
+  const slo = resolveHousing({ school: 'Cal Poly SLO', domain: 'calpoly.edu', area: 'San Luis Obispo' });
+  assert.equal(slo.cbsaFull, 'San Luis Obispo-Paso Robles, CA');
+  assert.ok(!/Los Angeles/.test(slo.cbsaFull), 'must never be Los Angeles');
+  // Domain alone (no area) still resolves SLO correctly.
+  assert.equal(resolveHousing({ domain: 'calpoly.edu' }).cbsaFull, 'San Luis Obispo-Paso Robles, CA');
+});
+
+test('resolveHousing: correct metros for a spread of schools', () => {
+  assert.equal(resolveHousing({ domain: 'osu.edu' }).cbsaFull, 'Columbus, OH');
+  assert.equal(resolveHousing({ domain: 'nyu.edu' }).cbsaFull, 'New York-Newark-Jersey City, NY-NJ-PA');
+  assert.equal(resolveHousing({ domain: 'umich.edu' }).cbsaFull, 'Ann Arbor, MI');
+  // CSU Long Beach IS in the LA metro (Long Beach is a member) — correct, in-state.
+  assert.equal(resolveHousing({ domain: 'csulb.edu' }).cbsaFull, 'Los Angeles-Long Beach-Anaheim, CA');
+  // Sub-domained student email still resolves via the registrable domain.
+  assert.equal(resolveHousing({ domain: 'mail.student.osu.edu' }).cbsaFull, 'Columbus, OH');
+});
+
+test('resolveHousing: unresolved / cross-state → null (404, never a default)', () => {
+  // Unknown school → null; there is no blanket-default metro.
+  assert.equal(resolveHousing({ school: 'Nowhere Institute of Nothing', domain: 'notareal.example' }), null);
+  // Area with no known school → cannot gate on state → null.
+  assert.equal(resolveHousing({ area: 'San Luis Obispo' }), null);
+  // Explicit metro override is trusted; unknown metro string → null.
+  assert.equal(resolveHousing({ metro: 'San Luis Obispo, CA' }).cbsaFull, 'San Luis Obispo-Paso Robles, CA');
+  assert.equal(resolveHousing({ metro: 'Atlantis, ZZ' }), null);
 });
