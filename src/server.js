@@ -806,6 +806,30 @@ server.listen(PORT, () => {
   };
   setTimeout(runHealthWatch, 30 * 1000);
   setInterval(runHealthWatch, 60 * 1000).unref?.();
+
+  // ── Grow loop: autonomous lifecycle messaging ──────────────────────────────
+  // Segment users by REAL state and send the matching frozen template with no
+  // per-batch approval — guardrails replace the human gate: kill switch
+  // (WATCH_LIFECYCLE_ENABLED, default OFF), a 7-day per-user frequency cap, and
+  // a volume circuit breaker that PAUSES + pages Discord if a run would blast
+  // more than WATCH_LIFECYCLE_MAX_FRACTION of active users. Every send + run is
+  // audited (GET /ops/lifecycle-log). Best-effort, non-overlapping. Runs ~25 min
+  // after boot, then daily. Inert until the kill switch is flipped on.
+  let lifecycleInFlight = false;
+  const runLifecycleJob = async () => {
+    if (lifecycleInFlight) return;
+    lifecycleInFlight = true;
+    try {
+      const r = await require('./services/lifecycleSender').runLifecycle();
+      if (r.sent || r.paused) console.log('[lifecycle]', JSON.stringify(r));
+    } catch (err) {
+      console.error('[lifecycle] run could not start:', err.message);
+    } finally {
+      lifecycleInFlight = false;
+    }
+  };
+  setTimeout(runLifecycleJob, 25 * 60 * 1000);
+  setInterval(runLifecycleJob, 24 * 60 * 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };

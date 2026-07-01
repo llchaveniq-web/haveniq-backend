@@ -8,9 +8,11 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const router = require('express').Router();
+const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { requireFounder } = require('../middleware/requireFounder');
 const { watcher } = require('../services/healthWatchRunner');
+const lifecycle = require('../services/lifecycleSender');
 
 router.get('/ops/health-history', requireAuth, requireFounder, (req, res) => {
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
@@ -19,6 +21,26 @@ router.get('/ops/health-history', requireAuth, requireFounder, (req, res) => {
     status: watcher.status(),   // 'unknown' with observations:0 when nothing polled yet
     count: history.length,
     history,                    // [] when there is no data — the honest answer
+  });
+});
+
+// What the autonomous Grow loop sent (or paused) while you slept. Founder-only,
+// same gate as /ops/health-history. Honest empty when it hasn't run yet.
+router.get('/ops/lifecycle-log', requireAuth, requireFounder, async (req, res) => {
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+  const c = lifecycle.cfg();
+  const [runs, sends] = await Promise.all([
+    lifecycle.recentRuns(pool, 20),
+    lifecycle.recentSends(pool, limit),
+  ]);
+  res.json({
+    config: {                    // the thresholds a human approved once, for transparency
+      enabled: c.enabled, maxFraction: c.maxFraction, minAbs: c.minAbs,
+      cooldownDays: c.cooldownDays, activeWindowDays: c.activeWindow,
+    },
+    runs,                        // recent runs incl. any circuit-breaker pauses
+    sendCount: sends.length,
+    sends,                       // [] when nothing has been sent — the honest answer
   });
 });
 
