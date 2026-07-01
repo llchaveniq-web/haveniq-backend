@@ -416,6 +416,9 @@ app.use('/', require('./routes/matchOutcomes'));      // /bot-admin/pending-chec
 // per-school personalization, public proof headline, calibration metrics.
 // Human-gated (analyst proposes, founder approves); nothing auto-commits.
 app.use('/', require('./routes/weightLearning'));     // /match-outcomes/proof + /bot-admin/weight-* + /weight-proposals/:id/approve
+// Watch loop self-reporting status surface (founder-only). The polling job is
+// wired on the existing scheduler below; this exposes its rolling history.
+app.use('/', require('./routes/ops'));                // /ops/health-history
 // Tier 3 Sentry webhook — when Sentry detects a new issue, it POSTs here
 // within ~5-10 seconds. We triage immediately, post to Discord, and
 // dispatch the auto-fix workflow without waiting for the every-15-min
@@ -779,6 +782,30 @@ server.listen(PORT, () => {
   };
   setTimeout(runWeightAnalyst, 20 * 60 * 1000);
   setInterval(runWeightAnalyst, 24 * 60 * 60 * 1000).unref?.();
+
+  // ── Watch loop: self-reporting health monitor ──────────────────────────────
+  // Poll /health (deep DB check + deployed SHA), record each result to a small
+  // rolling in-memory ring, and page the human (signal:backend_outage) ONLY on a
+  // debounced transition into unhealthy — a single blip never pages. Clears on
+  // recovery. GET /ops/health-history exposes the ring so status self-reports.
+  // Best-effort + never overlaps; a poll failure is itself just an unhealthy
+  // observation. First poll ~30s after boot (past the migration window), then
+  // every 60s.
+  let watchInFlight = false;
+  const runHealthWatch = async () => {
+    if (watchInFlight) return;
+    watchInFlight = true;
+    try {
+      const transition = await require('./services/healthWatchRunner').pollOnce();
+      if (transition) console.log(`[watch] transition → ${transition}`);
+    } catch (err) {
+      console.error('[watch] poll could not start:', err.message);
+    } finally {
+      watchInFlight = false;
+    }
+  };
+  setTimeout(runHealthWatch, 30 * 1000);
+  setInterval(runHealthWatch, 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };
