@@ -96,18 +96,24 @@ test('circuit breaker → PAUSES (no sends) and pages once', async () => {
   assert.equal(pool.inserts.runs[0].paused, true); // the pause is audited
 });
 
-test('demo/consent belt: a demo address that slips through is not emailed', async () => {
+test('demo/consent belt: demo addresses (incl. @demo.haveniq.test) are not emailed', async () => {
   const pool = makePool({
     activeCount: 100,
-    quiz: [U('u1', 'A'), { id: 'u2', email: 'test@demo.haveniq.app', first_name: 'Demo' }],
+    quiz: [
+      U('u1', 'A'),                                                            // real → emailed
+      { id: 'u2', email: 'test@demo.haveniq.app', first_name: 'Demo' },        // @demo.* → skipped
+      { id: 'u3', email: 'sim@demo.haveniq.test', first_name: 'Sim' },         // .test + @demo.* → skipped
+      { id: 'u4', email: 'seed@haveniq-demo.edu', first_name: 'Seed' },        // *-demo.* → skipped
+    ],
   });
   const sink = makeSink();
   const r = await runLifecycle({
     enabled: true, pool, sendEmail: sink.sendEmail, alert: sink.alert,
     config: { maxFraction: 0.9, minAbs: 10, hardCap: 2000, activeWindow: 30, cooldownDays: 7 },
   });
-  assert.equal(sink.emails.length, 1);             // only the real user
+  assert.equal(sink.emails.length, 1);             // ONLY the real user
   assert.equal(sink.emails[0].to, 'u1@school.edu');
+  assert.ok(!sink.emails.some((e) => /@demo\.haveniq\.test$/.test(e.to)), 'no @demo.haveniq.test send');
 });
 
 test('a send failure is logged and does not abort the batch', async () => {

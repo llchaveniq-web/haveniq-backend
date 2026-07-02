@@ -1,40 +1,44 @@
-// Shared demo/test-account SQL exclusion — the single source of truth.
+// Shared demo/test-account exclusion — the single source of truth for keeping
+// non-real accounts out of real students' surfaces (feeds, signup stats) and out
+// of LIFECYCLE/marketing email. Change the rule here and every caller stays
+// correct. It is deliberately CONSERVATIVE ("when in doubt, exclude") because a
+// demo/test account leaking into real lifecycle email has happened before, and a
+// false-exclude of a genuine user is far cheaper than emailing a fake one.
 //
-// Demo / test accounts must NEVER appear to real students or count as a real
-// signup. TWO flavors exist in production:
-//   • @haveniq-demo.edu  — the seeded demo cohort (admin.js generator); the
-//                          domain most of the codebase historically filtered on.
-//   • @demo.haveniq.app  — the founder's manual test signups made through the
-//                          real flow. They live only in the DB (no source
-//                          reference), so a single-domain @haveniq-demo.edu
-//                          filter MISSES them — which is how a test account
-//                          leaked into real feeds, signup stats, and retention
-//                          emails. Filtering only ONE domain is the bug this
-//                          helper exists to prevent recurring: change the rule
-//                          in ONE place, every surface stays correct.
+// A column/address is a demo/test account iff it matches ANY of:
+//   • a `.test` TLD          — reserved (RFC 2606), never a real address
+//                              (covers the cohort-sim's @demo.haveniq.test)
+//   • an `@demo.*` domain     — e.g. @demo.haveniq.app, @demo.haveniq.test
+//   • an `@*-demo.*` domain   — e.g. @haveniq-demo.edu (the seeded cohort)
+// (The two original explicit domains @haveniq-demo.edu / @demo.haveniq.app are
+// subsumed by the -demo. / @demo. rules.) No real school domain looks like these.
 //
-// Pass the column reference (e.g. 'email' or 'u.email'). Returns a SQL
-// boolean fragment — caller supplies the surrounding AND/WHERE.
-// ILIKE (case-insensitive) so a mixed-case demo address can't slip past the
-// filter; no real .edu is ever @haveniq-demo.edu / @demo.haveniq.app, so this
-// can't false-exclude a genuine user.
-function notDemo(col = 'email') {
-  return `${col} NOT ILIKE '%@haveniq-demo.edu' AND ${col} NOT ILIKE '%@demo.haveniq.app'`;
-}
+// NOTE: this gates lifecycle/marketing + real-user-facing surfaces ONLY. It must
+// NOT touch TRANSACTIONAL email (sign-in codes) — those go to any address,
+// including a .test one, so a tester can still receive their login code.
+//
+// If a `users.is_demo` / `is_test` flag column is ever added, extend the SQL
+// forms with `OR <alias>.is_demo = TRUE` (pass the alias) — none exists today.
 
-// Positive form of the same rule — "this column IS a demo/test account".
-// Use inside EXISTS / NOT EXISTS sub-selects where you're matching demo rows
-// rather than excluding them. Keep this in lock-step with notDemo().
+// ILIKE (case-insensitive) patterns; `.` is a literal here, not a wildcard.
+const DEMO_ILIKE_PATTERNS = ['%.test', '%@demo.%', '%-demo.%'];
+
+// "this column IS a demo/test account" — a parenthesized SQL boolean.
 function isDemo(col = 'email') {
-  return `(${col} ILIKE '%@haveniq-demo.edu' OR ${col} ILIKE '%@demo.haveniq.app')`;
+  return `(${DEMO_ILIKE_PATTERNS.map((p) => `${col} ILIKE '${p}'`).join(' OR ')})`;
 }
 
-// JS-side equivalent for code paths that test an email in JavaScript rather
-// than SQL (e.g. skipping app emails to demo recipients). Same two-domain
-// rule — added because scattered single-domain regexes were re-introducing
-// the exact leak notDemo() was built to kill.
+// "this column is NOT a demo/test account" — self-contained; safe to drop into
+// any WHERE/AND context, e.g. `AND ${notDemo('u.email')}`.
+function notDemo(col = 'email') {
+  return `(NOT ${isDemo(col)})`;
+}
+
+// JS-side equivalent for code paths that test an email in JavaScript (e.g. the
+// lifecycle send loop skipping a demo recipient). Kept in lock-step with the SQL.
 function isDemoEmail(email) {
-  return /@(haveniq-demo\.edu|demo\.haveniq\.app)$/i.test(String(email || ''));
+  const e = String(email || '').toLowerCase();
+  return /\.test$/.test(e) || e.includes('@demo.') || e.includes('-demo.');
 }
 
-module.exports = { notDemo, isDemo, isDemoEmail };
+module.exports = { notDemo, isDemo, isDemoEmail, DEMO_ILIKE_PATTERNS };
