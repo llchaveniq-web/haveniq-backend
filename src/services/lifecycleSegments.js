@@ -19,6 +19,7 @@ const ELIGIBLE = `
       u.is_verified = TRUE
   AND COALESCE(u.is_banned, FALSE) = FALSE
   AND COALESCE(u.email_undeliverable, FALSE) = FALSE   -- bounce / spam complaint = opted-out
+  AND COALESCE(u.lifecycle_opted_out, FALSE) = FALSE   -- one-click unsubscribe (GET/POST /unsubscribe)
   AND u.email IS NOT NULL AND u.email <> ''
   AND (${notDemo('u.email')})
 `;

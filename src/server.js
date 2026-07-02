@@ -419,6 +419,9 @@ app.use('/', require('./routes/weightLearning'));     // /match-outcomes/proof +
 // Watch loop self-reporting status surface (founder-only). The polling job is
 // wired on the existing scheduler below; this exposes its rolling history.
 app.use('/', require('./routes/ops'));                // /ops/health-history
+// One-click unsubscribe for lifecycle/marketing email (signed token = auth, no
+// login). Public GET (footer link) + POST (RFC 8058 List-Unsubscribe-Post).
+app.use('/', require('./routes/unsubscribe'));        // GET/POST /unsubscribe?token=…
 // Tier 3 Sentry webhook — when Sentry detects a new issue, it POSTs here
 // within ~5-10 seconds. We triage immediately, post to Discord, and
 // dispatch the auto-fix workflow without waiting for the every-15-min

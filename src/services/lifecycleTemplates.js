@@ -23,8 +23,10 @@ const FROM       = 'HavenIQ <noreply@haveniq.org>';
 // header (honored by Gmail/Apple Mail). A spam complaint already sets
 // email_undeliverable=TRUE, which the sender treats as opted-out.
 const UNSUB_MAILTO = 'mailto:support@haveniq.org?subject=unsubscribe';
+// {{unsubUrl}} is filled per-recipient at render time with a signed one-click
+// unsubscribe link (falls back to the mailto if a caller omits it).
 const FOOTER_TEXT  = "\n\n—\nYou're receiving this as a verified HavenIQ member. "
-  + 'To stop these occasional nudges, reply "unsubscribe" or email support@haveniq.org.';
+  + 'To stop these occasional nudges, unsubscribe here: {{unsubUrl}}';
 
 function shell(bodyHtml) {
   return `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#FBF1EA;margin:0;padding:40px 20px;">
@@ -35,7 +37,7 @@ function shell(bodyHtml) {
       <div style="padding:32px;color:#2D2620;font-size:15px;line-height:1.6;">${bodyHtml}</div>
       <div style="background:#FBF1EA;padding:18px 32px;text-align:center;border-top:1px solid #E8DCC6;">
         <p style="color:#75695A;font-size:12px;margin:0;">You're receiving this as a verified HavenIQ member.
-          <a href="${UNSUB_MAILTO}" style="color:#A33625;">Unsubscribe</a>.</p>
+          <a href="{{unsubUrl}}" style="color:#A33625;">Unsubscribe</a>.</p>
       </div>
     </div></body></html>`;
 }
@@ -69,12 +71,14 @@ const TEMPLATES = {
 // List-Unsubscribe header value the sender attaches to every lifecycle email.
 const LIST_UNSUBSCRIBE = `<${UNSUB_MAILTO}>`;
 
-// Render a template for one recipient — the ONLY substitution is their real
-// first name. Falls back to a neutral greeting; never injects any other value.
-function render(template, { firstName } = {}) {
+// Render a template for one recipient. The ONLY substitutions are their real
+// first name and their signed unsubscribe URL — never any other value. Falls
+// back to a neutral greeting and the mailto opt-out if either is omitted.
+function render(template, { firstName, unsubUrl } = {}) {
   const name = (firstName && String(firstName).trim()) || 'there';
-  const sub = (s) => String(s).replace(/\{\{firstName\}\}/g, name);
+  const url = (unsubUrl && String(unsubUrl).trim()) || UNSUB_MAILTO;
+  const sub = (s) => String(s).replace(/\{\{firstName\}\}/g, name).replace(/\{\{unsubUrl\}\}/g, url);
   return { subject: sub(template.subject), text: sub(template.text), html: sub(template.html) };
 }
 
-module.exports = { TEMPLATES, render, LIST_UNSUBSCRIBE, FROM, APP_URL };
+module.exports = { TEMPLATES, render, LIST_UNSUBSCRIBE, UNSUB_MAILTO, FROM, APP_URL };

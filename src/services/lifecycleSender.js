@@ -24,9 +24,25 @@
 
 const poolDefault = require('../db/pool');
 const { SEGMENTS, ACTIVE_USERS_SQL, dedupByPriority, circuitBreaker } = require('./lifecycleSegments');
-const { TEMPLATES, render, LIST_UNSUBSCRIBE, FROM } = require('./lifecycleTemplates');
+const { TEMPLATES, render, LIST_UNSUBSCRIBE, UNSUB_MAILTO, FROM } = require('./lifecycleTemplates');
 const { isDemoEmail } = require('../lib/demoFilter');
+const { sign: signUnsub } = require('../lib/unsubscribeToken');
 const sentry = require('../utils/sentry');
+
+// Base URL for the one-click unsubscribe link — this backend serves /unsubscribe.
+const UNSUB_BASE = (process.env.API_PUBLIC_URL || process.env.PUBLIC_API_URL
+  || 'https://haveniq-backend-production.up.railway.app').replace(/\/$/, '');
+// Build a recipient's signed one-click link + the RFC 8058 headers for it.
+function unsubFor(userId) {
+  const url = `${UNSUB_BASE}/unsubscribe?token=${encodeURIComponent(signUnsub(userId, 'lifecycle'))}`;
+  return {
+    url,
+    headers: {
+      'List-Unsubscribe': `<${url}>, <${UNSUB_MAILTO}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    },
+  };
+}
 
 const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const cfg = () => ({
@@ -92,13 +108,15 @@ async function pageCircuitBreaker(info, fetchImpl) {
   }).catch(() => {});
 }
 
-// Real email send via the existing Resend path, with a List-Unsubscribe header.
-async function defaultSendEmail({ to, subject, text, html }) {
+// Real email send via the existing Resend path. Per-recipient List-Unsubscribe
+// headers (RFC 8058 one-click) are passed in by the caller; the static header is
+// only a fallback if a caller omits them.
+async function defaultSendEmail({ to, subject, text, html, headers }) {
   const { Resend } = require('resend');
   const resend = new Resend(process.env.RESEND_API_KEY);
   await resend.emails.send({
     from: FROM, to, subject, text, html,
-    headers: { 'List-Unsubscribe': LIST_UNSUBSCRIBE },
+    headers: { 'List-Unsubscribe': LIST_UNSUBSCRIBE, ...(headers || {}) },
   });
 }
 
@@ -165,9 +183,10 @@ async function runLifecycle(opts = {}) {
     if (!p.email || isDemoEmail(p.email)) continue;  // belt-and-suspenders vs demo/null
     const tpl = TEMPLATES[p.segmentId];
     if (!tpl) continue;
-    const msg = render(tpl, { firstName: p.firstName });
+    const unsub = unsubFor(p.userId);
+    const msg = render(tpl, { firstName: p.firstName, unsubUrl: unsub.url });
     try {
-      await sendEmail({ to: p.email, subject: msg.subject, text: msg.text, html: msg.html });
+      await sendEmail({ to: p.email, subject: msg.subject, text: msg.text, html: msg.html, headers: unsub.headers });
       sent += 1;
       await recordSend(pool, p, 'sent', null).catch(() => {});
     } catch (err) {

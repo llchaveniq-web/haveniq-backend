@@ -473,6 +473,13 @@ CREATE INDEX IF NOT EXISTS idx_sign_in_events_user
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_undeliverable BOOLEAN DEFAULT FALSE;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_undeliverable_reason TEXT;
 
+-- Lifecycle/marketing email opt-out (one-click unsubscribe, GET/POST /unsubscribe
+-- via a signed token). Distinct from email_undeliverable (a bounce/spam signal):
+-- this is a deliberate user choice. The lifecycle sender's eligibility query
+-- excludes it; transactional email (login codes) never consults it.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_opted_out BOOLEAN DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS lifecycle_opted_out_at TIMESTAMPTZ;
+
 -- ── Message-specific reports — long-press on a Journal message →
 --    "Report message" should record which specific message tripped the
 --    report (not just which user). Lets the moderator open the report
