@@ -28,8 +28,10 @@ const SEED_USERS = [
   { email: 'real1@berkeley.edu',       is_verified: true, quiz_completed: true,  school: 'UC Berkeley' },
   { email: 'demo001@haveniq-demo.edu', is_verified: true, quiz_completed: true,  school: 'Demo University' },
 ];
-const isDemoEmail = (e) => /@(haveniq-demo\.edu|demo\.haveniq\.app)$/i.test(e);
-const sqlExcludesDemo = (sql) => /haveniq-demo\.edu/i.test(sql); // the WHERE references the demo domain
+// Use the REAL shared filter so this test tracks it automatically. A query
+// "excludes demo" if its WHERE carries any of the demo ILIKE patterns.
+const { isDemoEmail, DEMO_ILIKE_PATTERNS } = require('../lib/demoFilter');
+const sqlExcludesDemo = (sql) => DEMO_ILIKE_PATTERNS.some((p) => sql.includes(`ILIKE '${p}'`));
 
 // Fake pool: pattern-match the SQL our three endpoints issue.
 const fakePool = {
@@ -344,5 +346,5 @@ test('metrics: full shape, and the seeded DEMO user is NOT counted in users/scho
   // Safety counts are intentionally NOT demo-filtered (a report on a demo
   // account still matters): the banned-count query carries no demo exclusion.
   const bannedQ = dbCalls.find(c => c.sql.includes('COALESCE(is_banned'));
-  assert.ok(!/haveniq-demo/i.test(bannedQ.sql), 'safety (banned) count left as-is');
+  assert.ok(!sqlExcludesDemo(bannedQ.sql), 'safety (banned) count left as-is');
 });
