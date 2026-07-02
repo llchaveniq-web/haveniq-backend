@@ -62,4 +62,49 @@ router.get('/ops/growth-digest', requireAuth, requireFounder, async (req, res) =
   res.json({ enabled: growthDigest.cfg().enabled, digest });
 });
 
+// ── Manual triggers (founder-only) ──────────────────────────────────────────
+// Hand-crank the SAME scheduled Grow-loop jobs so you can verify them NOW
+// instead of waiting for the weekly/daily tick. A manual trigger is NOT a
+// bypass: each route calls the identical job function with its default pool +
+// config, so EVERY guardrail applies unchanged — the kill switch, the frequency
+// cap, the circuit breaker, the consent/demo exclusions, the honesty rules.
+// When a kill switch is off the job short-circuits and we surface
+// { ok:false, reason:'disabled' } rather than running. Honest empty/thin output
+// is the correct result — nothing here pads it.
+
+// Run the weekly growth-digest job now; return the digest it just produced.
+router.post('/ops/growth-digest/run', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const result = await growthDigest.runDigest();          // identical to the weekly scheduler call
+    if (result.enabled === false) return res.json({ ok: false, reason: 'disabled' });
+    if (!result.ok) return res.status(502).json({ ok: false, reason: result.reason || 'run_failed' });
+    const digest = await growthDigest.latestDigest(pool);   // the row the job just stored
+    return res.json({ ok: true, ran: result, digest });
+  } catch (err) {
+    console.error('[ops/growth-digest/run] failed:', err.message);
+    return res.status(500).json({ ok: false, reason: 'run_failed' });
+  }
+});
+
+// Run the daily lifecycle-sender job now; return an honest run summary.
+router.post('/ops/lifecycle/run', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const r = await lifecycle.runLifecycle();               // identical to the daily scheduler call
+    if (r.enabled === false) return res.json({ ok: false, reason: 'disabled' });
+    return res.json({
+      ok: true,
+      paused: !!r.paused,           // true when the volume circuit breaker paused the run (no sends)
+      planned: r.planned || 0,
+      sent: r.sent || 0,
+      failed: r.failed || 0,
+      threshold: r.threshold,
+      activeCount: r.activeCount,
+      bySegment: r.bySegment || {}, // how many users matched each segment
+    });
+  } catch (err) {
+    console.error('[ops/lifecycle/run] failed:', err.message);
+    return res.status(500).json({ ok: false, reason: 'run_failed' });
+  }
+});
+
 module.exports = router;

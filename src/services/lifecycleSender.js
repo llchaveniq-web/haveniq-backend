@@ -155,7 +155,7 @@ async function runLifecycle(opts = {}) {
       sent: 0, failed: 0, paused: true, bySegment: bySegmentCounts,
       note: `paused: ${planned.length} > cap ${breaker.threshold}`,
     }).catch(() => {});
-    return { ok: true, enabled: true, paused: true, planned: planned.length, threshold: breaker.threshold, activeCount };
+    return { ok: true, enabled: true, paused: true, planned: planned.length, threshold: breaker.threshold, activeCount, bySegment: bySegmentCounts };
   }
 
   // ── Within budget → send autonomously, logging every send. ────────────────
