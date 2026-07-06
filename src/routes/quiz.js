@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
-const { calculateCompatibility, generateWhyMatched } = require('../services/scoring');
+const { calculateCompatibility, generateWhyMatched, topFrictionTopic } = require('../services/scoring');
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { loadDrift } = require('../services/pulseDrift');
 const { horizonFromMoveIn } = require('../services/trajectory');
@@ -463,7 +463,8 @@ async function scoreNewMatches(userId, newAnswers) {
       result.isSoftBlocked,
       result.shadowPenalty,
       JSON.stringify(result.breakdown),
-      generateWhyMatched(result.breakdown, finalPct, result.complementaryDims, result.convergingDims, result.textInsightDims),
+      generateWhyMatched(result.breakdown, finalPct, result.complementaryDims, result.convergingDims, result.textInsightDims,
+        { capReason: result.capReason, frictionTopic: topFrictionTopic(newAnswers, other.answers) }),
       // Part 2: behavioral-validation layer. validationMultiplier is an honest
       // 1.0 unless BOTH users have a real validation_score; preValidationPct is
       // the headline before that multiplier.

@@ -507,7 +507,15 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
 // compat-report / Fit Report / matches card / AI advisor all read this string.
 // Empty/absent ⇒ today's copy verbatim (complementarity is never asserted by
 // default; it ships only once the gate certifies it on real outcomes).
-function generateWhyMatched(breakdown, score, complementaryDims = [], convergingDims = [], textInsightDims = []) {
+// Plain-language label for a dealbreaker cap, so the "why" can name the gap
+// instead of spinning positive against a low score.
+const FRICTION_CAP_LABEL = {
+  cleanliness: 'cleanliness', smoking: 'smoking at home',
+  alcohol: 'alcohol comfort', overnight: 'overnight guests',
+};
+
+function generateWhyMatched(breakdown, score, complementaryDims = [], convergingDims = [], textInsightDims = [], opts = {}) {
+  const { capReason = null, frictionTopic = null } = opts;
   const sorted = Object.entries(breakdown || {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 2);
@@ -528,6 +536,15 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
   const a = top[0] || 'compatibility';
   const b = top[1] || a;
 
+  // HONESTY: a dealbreaker-capped pair has a genuine gap. Never lead with a
+  // positive (which would contradict the low score) — name the gap plainly and
+  // make it actionable. This is the one place the "why" MUST match the score.
+  if (capReason) {
+    const topic = FRICTION_CAP_LABEL[capReason] || frictionTopic || 'a core living habit';
+    return `The real gap here is ${topic} — a common roommate dealbreaker. You do line up on `
+      + `${a}, but that's something you'd need to work out before signing a lease together.`;
+  }
+
   let base;
   if (score >= 95) {
     // Reserve the system-wide superlative for the genuinely rare top — the
@@ -536,9 +553,16 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
   } else if (score >= 90) {
     base = `Exceptional alignment — your ${a} and ${b} line up unusually well.`;
   } else if (score >= 80) {
-    base = `Strong compatibility in ${a} and ${b}. A few differences to discuss but nothing dealbreaking.`;
+    // Even a strong pair has a top thing to compare notes on — name it when we
+    // know it, so the "why" is specific, not a generic reassurance.
+    base = `Strong compatibility in ${a} and ${b}.`
+      + (frictionTopic ? ` The main thing to compare notes on: ${frictionTopic}.`
+                       : ` A few differences to discuss but nothing dealbreaking.`);
   } else {
-    base = `Meaningful overlap in ${a}. Some lifestyle differences worth talking through before committing.`;
+    // Name the single biggest gap instead of a vague "some differences".
+    base = frictionTopic
+      ? `Meaningful overlap in ${a}, but ${frictionTopic} is where you differ most — worth sorting out before you commit.`
+      : `Meaningful overlap in ${a}. Some lifestyle differences worth talking through before committing.`;
   }
 
   // Deep-matching #6: a plain-language trajectory note when habits are closing

@@ -205,6 +205,25 @@ test('generateWhyMatched returns a non-empty string', () => {
   assert.ok(why.length > 10);
 });
 
+test('whyMatched HONESTY: a capped pair names the gap, never spins positive', () => {
+  // Dealbreaker-capped (low score) → the reason must NAME the gap, not lead with
+  // an overlap category (which would contradict the score and read as a horoscope).
+  const why = generateWhyMatched({ lifestyle: 20, communication: 40 }, 39,
+    [], [], [], { capReason: 'cleanliness', frictionTopic: 'cleanliness' });
+  assert.match(why, /real gap here is cleanliness/i);
+  assert.match(why, /dealbreaker/i);
+  assert.ok(!/^Strong compatibility/i.test(why) && !/^Exceptional/i.test(why), 'never spins a capped pair positive');
+});
+
+test('whyMatched SPECIFICITY: a low/moderate pair names the biggest friction', () => {
+  const why = generateWhyMatched({ lifestyle: 40, communication: 30 }, 59,
+    [], [], [], { frictionTopic: 'sleep schedules' });
+  assert.match(why, /sleep schedules is where you differ most/i);
+  // Without a friction topic it falls back to the generic line (backward compat).
+  const generic = generateWhyMatched({ lifestyle: 40 }, 59);
+  assert.match(generic, /Some lifestyle differences worth talking through/i);
+});
+
 test('finalPct is always clamped to 0..100', () => {
   const r = calculateCompatibility(AGREE, { ...AGREE });
   assert.ok(r.finalPct >= 0 && r.finalPct <= 100);
