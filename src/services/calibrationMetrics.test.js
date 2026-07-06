@@ -64,3 +64,28 @@ test('publicHeadline: fewer than 2 real bands → ok:false', () => {
     { band: '85–100', min: 85, actualSuccess: 0.8, sampleSize: 100 },
   ] }), { ok: false });
 });
+
+test('publicHeadline: tiny anchor band → ok:false even past the total floor', () => {
+  // 50 total clears PUBLIC_MIN_SAMPLE, but the top anchor is 2 people and the
+  // reference is 3 — a "3× more often" here is noise that would flip on the next
+  // outcome. The per-band floor must suppress it (no claim off a 1–3 person band).
+  const tinyAnchors = { totalSample: 50, bands: [
+    { band: '85–100', min: 85, actualSuccess: 1.0,  sampleSize: 2 },
+    { band: '70–84',  min: 70, actualSuccess: 0.8,  sampleSize: 45 },
+    { band: '55–69',  min: 55, actualSuccess: 0.33, sampleSize: 3 },
+  ] };
+  assert.deepEqual(m.publicHeadline(tinyAnchors), { ok: false });
+  // A single-person top band can never anchor a public claim.
+  const onePerson = { totalSample: 80, bands: [
+    { band: '85–100', min: 85, actualSuccess: 1.0, sampleSize: 1 },
+    { band: '55–69',  min: 55, actualSuccess: 0.4, sampleSize: 79 },
+  ] };
+  assert.deepEqual(m.publicHeadline(onePerson), { ok: false });
+  // Both anchors at exactly the floor (10) with real lift → the claim IS allowed.
+  const atFloor = { totalSample: 60, bands: [
+    { band: '85–100', min: 85, actualSuccess: 0.8, sampleSize: 10 },
+    { band: '55–69',  min: 55, actualSuccess: 0.4, sampleSize: 10 },
+  ] };
+  assert.equal(m.publicHeadline(atFloor).ok, true);
+  assert.equal(m.publicHeadline(atFloor).multiple, 2);
+});
