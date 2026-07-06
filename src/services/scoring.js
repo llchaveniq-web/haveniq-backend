@@ -515,7 +515,7 @@ const FRICTION_CAP_LABEL = {
 };
 
 function generateWhyMatched(breakdown, score, complementaryDims = [], convergingDims = [], textInsightDims = [], opts = {}) {
-  const { capReason = null, frictionTopic = null } = opts;
+  const { capReason = null, frictionTopic = null, confidence = 1 } = opts;
   const sorted = Object.entries(breakdown || {})
     .sort(([, a], [, b]) => b - a)
     .slice(0, 2);
@@ -543,6 +543,15 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
     const topic = FRICTION_CAP_LABEL[capReason] || frictionTopic || 'a core living habit';
     return `The real gap here is ${topic} — a common roommate dealbreaker. You do line up on `
       + `${a}, but that's something you'd need to work out before signing a lease together.`;
+  }
+
+  // HONESTY: a low score from THIN data (few answers, or a straight-lined answer
+  // vector) is UNCERTAINTY, not a clash. Never blame "differences" we can't
+  // actually see yet — say we don't know enough, and point at the fix. Strong
+  // pairs that earned 80+ despite reduced confidence keep their positive read.
+  if (confidence < 1 && score < 80) {
+    return `We don't have enough answers yet to call this pairing with confidence — `
+      + `it gets sharper as you both finish more of the quiz.`;
   }
 
   let base;

@@ -224,6 +224,24 @@ test('whyMatched SPECIFICITY: a low/moderate pair names the biggest friction', (
   assert.match(generic, /Some lifestyle differences worth talking through/i);
 });
 
+test('whyMatched HONESTY: a low score from THIN data reads as uncertainty, not a clash', () => {
+  // conf < 1 (few answers / straight-lined) + score < 80 → say we don't know
+  // enough yet + point at the fix, NEVER blame "differences" we can't see.
+  const thin = generateWhyMatched({ lifestyle: 55 }, 59, [], [], [],
+    { confidence: 0.6, frictionTopic: 'cleanliness' });
+  assert.match(thin, /don't have enough answers yet/i);
+  assert.match(thin, /finish more of the quiz/i);
+  assert.ok(!/where you differ most/i.test(thin), 'never blames a clash on thin data');
+  // A dealbreaker cap is a hard signal even from thin data → it still names the gap.
+  const capped = generateWhyMatched({ lifestyle: 20 }, 39, [], [], [],
+    { confidence: 0.6, capReason: 'smoking' });
+  assert.match(capped, /smoking at home/i);
+  // A strong pair (>=80) keeps its positive read even if confidence dipped.
+  const strong = generateWhyMatched({ lifestyle: 90, communication: 85 }, 84, [], [], [],
+    { confidence: 0.7, frictionTopic: 'chores' });
+  assert.match(strong, /Strong compatibility/i);
+});
+
 test('finalPct is always clamped to 0..100', () => {
   const r = calculateCompatibility(AGREE, { ...AGREE });
   assert.ok(r.finalPct >= 0 && r.finalPct <= 100);
