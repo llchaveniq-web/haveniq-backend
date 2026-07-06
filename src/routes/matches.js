@@ -184,6 +184,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          cs.validation_multiplier,
          cs.complementary_dims,
          cs.converging_dims,
+         cs.confidence,
          dq.answers AS candidate_answers,
          u.id,
          u.first_name,
@@ -309,6 +310,12 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // "Active today / Active Nd ago" presence label on their match card.
       lastActiveAt:  r.last_active_at,
       compatScore:   parseFloat(r.score),
+      // Confidence coefficient (0–1). <1 when either side's quiz answers are
+      // thin/uniform — the scorer already multiplied compatScore down by it.
+      // `isProvisional` lets the card render the number as "still learning you
+      // two" instead of a hard figure that looks as certain as a full-data one.
+      confidence:    r.confidence != null ? parseFloat(r.confidence) : 1,
+      isProvisional: r.confidence != null && parseFloat(r.confidence) < 1,
       isSoftBlocked: r.is_soft_blocked,
       shadowPenalty: parseFloat(r.shadow_penalty),
       breakdown:     r.breakdown || {},

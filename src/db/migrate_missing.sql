@@ -137,6 +137,12 @@ ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS complementary_dims JSO
 -- a shape + projection certify on outcomes. The app renders the note as a reason.
 ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS converging_dims JSONB;
 
+-- Confidence coefficient (<1 when either side's answers are thin/uniform — the
+-- scorer already multiplies the score down by it). Stored so the feed can render
+-- a low-confidence score as "still learning" instead of a hard, certain-looking
+-- number. Default 1 = full confidence for pre-existing rows until they recompute.
+ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS confidence NUMERIC(3,2) DEFAULT 1;
+
 -- ── Part 3: the learning loop ─────────────────────────────────
 -- Every connect / accept / decline, with the per-category compatibility
 -- breakdown captured AT decision time. services/decisionLearning.js fits

@@ -476,13 +476,17 @@ async function scoreNewMatches(userId, newAnswers) {
       // Deep-matching #6: structured trajectory ("converging") dims. Empty unless
       // projection/convergence is earned and materially closing this pair.
       JSON.stringify(result.convergingDims || []),
+      // Confidence coefficient (<1 when either side's answers are thin/uniform).
+      // Stored so the feed can render a low-confidence score as "still learning"
+      // rather than a hard number that looks as certain as a full-data one.
+      result.confidence,
     ]);
   }
 
   if (rows.length === 0) return;
 
-  // Flatten into a single $1...$N param list. 12 columns per row.
-  const COLS = 12;
+  // Flatten into a single $1...$N param list. 13 columns per row.
+  const COLS = 13;
   const valuePlaceholders = rows
     .map((_, rowIdx) => {
       const base = rowIdx * COLS;
@@ -494,7 +498,7 @@ async function scoreNewMatches(userId, newAnswers) {
 
   await pool.query(
     `INSERT INTO compatibility_scores
-       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims, converging_dims)
+       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims, converging_dims, confidence)
      VALUES ${valuePlaceholders}
      ON CONFLICT (user_a, user_b) DO UPDATE
      SET score          = EXCLUDED.score,
@@ -507,6 +511,7 @@ async function scoreNewMatches(userId, newAnswers) {
          validation_multiplier = EXCLUDED.validation_multiplier,
          complementary_dims    = EXCLUDED.complementary_dims,
          converging_dims       = EXCLUDED.converging_dims,
+         confidence      = EXCLUDED.confidence,
          calculated_at   = NOW()`,
     params,
   );
