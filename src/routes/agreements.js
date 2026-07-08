@@ -79,14 +79,26 @@ router.put('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
       [req.params.conversationId],
     );
     const items = Array.isArray(rows[0]?.items) ? rows[0].items : [];
+    const idx = items.findIndex(i => i && i.topic === topic.trim());
+    const prev = idx >= 0 ? items[idx] : null;
+    // A rule counts as agreed only once BOTH roommates have accepted its current
+    // text (that's the "joint act of agreeing"). Whoever writes/edits a rule has,
+    // by definition, agreed to their own wording — so they seed acceptedBy. If
+    // the wording CHANGES, prior agreement no longer applies (you agreed to
+    // different terms), so it resets to just the editor; re-saving identical text
+    // keeps the agreement intact.
+    const valueChanged = !prev || prev.value !== value.trim();
+    const acceptedBy = valueChanged
+      ? [req.user.id]
+      : Array.from(new Set([...(Array.isArray(prev.acceptedBy) ? prev.acceptedBy : []), req.user.id]));
     const entry = {
-      topic:     topic.trim(),
-      value:     value.trim(),
-      setBy:     req.user.id,
-      setByName: req.user.first_name || 'Roommate',
-      updatedAt: new Date().toISOString(),
+      topic:      topic.trim(),
+      value:      value.trim(),
+      setBy:      req.user.id,
+      setByName:  req.user.first_name || 'Roommate',
+      acceptedBy,
+      updatedAt:  new Date().toISOString(),
     };
-    const idx = items.findIndex(i => i && i.topic === entry.topic);
     if (idx >= 0) items[idx] = entry; else items.push(entry);
 
     await pool.query(
@@ -99,6 +111,48 @@ router.put('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
   } catch (err) {
     console.error('[agreements] put failed:', err.message);
     res.status(500).json({ error: 'Could not save the agreement' });
+  }
+});
+
+// POST /agreements/:conversationId/accept — the other roommate agrees to a rule
+// as written. Adds them to the rule's acceptedBy; once both are in it, the rule
+// reads as "agreed by both". Body: { topic }. Idempotent (agreeing twice is a
+// no-op). The setter is already in acceptedBy from the PUT, so this is what turns
+// a one-sided proposal into a genuine joint agreement.
+router.post('/:conversationId/accept', requireAuth, refuseBanned, async (req, res) => {
+  try {
+    await ensureTable();
+    const { topic } = req.body || {};
+    if (typeof topic !== 'string' || !topic.trim()) {
+      return res.status(400).json({ error: 'topic required' });
+    }
+    if (!(await isMember(req.params.conversationId, req.user.id))) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    const { rows } = await pool.query(
+      'SELECT items FROM shared_agreements WHERE conversation_id = $1',
+      [req.params.conversationId],
+    );
+    const items = Array.isArray(rows[0]?.items) ? rows[0].items : [];
+    const idx = items.findIndex(i => i && i.topic === topic.trim());
+    // Can only agree to a rule that exists and has actual wording.
+    if (idx < 0 || !items[idx].value) {
+      return res.status(404).json({ error: 'No such rule to agree to' });
+    }
+    const accepted = new Set(Array.isArray(items[idx].acceptedBy) ? items[idx].acceptedBy : []);
+    accepted.add(req.user.id);
+    items[idx] = { ...items[idx], acceptedBy: Array.from(accepted) };
+
+    await pool.query(
+      `INSERT INTO shared_agreements (conversation_id, items, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (conversation_id) DO UPDATE SET items = $2, updated_at = NOW()`,
+      [req.params.conversationId, JSON.stringify(items)],
+    );
+    res.json({ items });
+  } catch (err) {
+    console.error('[agreements] accept failed:', err.message);
+    res.status(500).json({ error: 'Could not record your agreement' });
   }
 });
 
