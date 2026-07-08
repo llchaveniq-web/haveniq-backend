@@ -372,6 +372,54 @@ router.get('/bot-admin/match-outcomes-summary', requireBotToken, async (req, res
   }
 });
 
+// ── GET /bot-admin/match-outcomes-flags ────────────────────────────────────
+// The review surface behind the check-in promise: "if you flag a problem, our
+// safety team can follow up." The summary above is aggregate-only, so a student
+// who wrote a note or rated the situation poorly was invisible to anyone without
+// raw DB access. This surfaces the check-ins that warrant a human look — a
+// written note, a low happiness rating (1-2), or a "decided not to continue" —
+// so the founder/safety team can actually act. Bot/founder-gated + internal
+// only (it includes reporter identity so they can reach out); never client.
+router.get('/bot-admin/match-outcomes-flags', requireBotToken, async (req, res) => {
+  await ensureTable();
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+    const { rows } = await pool.query(
+      `SELECT id, reporter_id, other_user_id, outcome, details, created_at
+         FROM match_outcomes
+        WHERE (COALESCE(btrim(details->>'note'), '') <> ''
+               OR (details->>'rating') ~ '^[12]$'
+               OR outcome = 'decided_not_to_continue')
+        ORDER BY created_at DESC
+        LIMIT $1`,
+      [limit],
+    );
+    const flags = rows.map((r) => {
+      const d = r.details || {};
+      // Why this row surfaced — lets the reviewer triage at a glance.
+      const reasons = [];
+      if (typeof d.note === 'string' && d.note.trim()) reasons.push('note');
+      if (['1', '2', 1, 2].includes(d.rating)) reasons.push('low_rating');
+      if (r.outcome === 'decided_not_to_continue') reasons.push('ended');
+      return {
+        id:          r.id,
+        reporterId:  r.reporter_id,
+        otherUserId: r.other_user_id,
+        outcome:     r.outcome,
+        stage:       d.stage ?? null,
+        rating:      d.rating ?? null,
+        note:        d.note ?? null,
+        reasons,
+        createdAt:   r.created_at,
+      };
+    });
+    res.json({ count: flags.length, flags });
+  } catch (err) {
+    console.error('[match-outcomes] flags failed:', err);
+    res.status(500).json({ error: 'flags failed' });
+  }
+});
+
 // ── 2c: Bot-admin weight-learning scaffolding ──────────────────────────────
 // Proposes recalibrated PART-0 weights from real outcomes — REGULARISED (shrunk
 // toward the CURRENT weights until N is large) and MANUAL: it never edits
