@@ -10,6 +10,16 @@
 const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { writeReview } = require('../middleware/rateLimits');
+const { screenMessage } = require('../lib/contentFilter');
+
+// These reviews are network-wide public and name a real landlord / building —
+// the highest-exposure UGC in the app. Screen their free text like every other
+// UGC surface so harassment or a defamatory rant can't be published. A negative
+// review is fine; an abusive one is refused.
+const REVIEW_BLOCKED = {
+  code:  'content_blocked',
+  error: "This review can't be posted — it looks like it breaks our community guidelines. A negative review is fine, but keep it factual and respectful.",
+};
 
 // ── Landlord reviews ──────────────────────────────────────────────────────
 const landlordRouter = require('express').Router();
@@ -41,6 +51,11 @@ landlordRouter.post('/', requireAuth, writeReview, async (req, res) => {
       if (v != null && (!Number.isInteger(v) || v < 1 || v > 5)) {
         return res.status(400).json({ error: `${k} must be an integer 1-5 or omitted` });
       }
+    }
+    // Screen the free text (and the landlord name, which is displayed) so an
+    // abusive or defamatory review can't be published network-wide.
+    if (screenMessage(`${landlordName} ${reviewText}`).action === 'block') {
+      return res.status(422).json(REVIEW_BLOCKED);
     }
 
     const { rows } = await pool.query(
@@ -121,6 +136,11 @@ buildingRouter.post('/', requireAuth, writeReview, async (req, res) => {
       if (v != null && (!Number.isInteger(v) || v < 1 || v > 5)) {
         return res.status(400).json({ error: `${k} must be an integer 1-5 or omitted` });
       }
+    }
+    // Screen the free-text fields so an abusive review can't be published.
+    const freeText = [pros, cons, tips].filter(t => typeof t === 'string' && t.trim()).join(' \n ');
+    if (freeText && screenMessage(freeText).action === 'block') {
+      return res.status(422).json(REVIEW_BLOCKED);
     }
 
     const { rows } = await pool.query(
