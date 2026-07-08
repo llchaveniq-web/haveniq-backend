@@ -289,7 +289,10 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       return ({
       userId:        r.id,
       firstName:     r.first_name,
-      lastName:      r.last_name,
+      // Only the initial ever leaves the server — never the full surname. The
+      // UI shows "First L." everywhere, so the raw last name would be an unused
+      // field sitting on another student's device (privacy policy §3).
+      lastInitial:   (r.last_name || '').slice(0, 1).toUpperCase(),
       school:        r.school,
       schoolYear:    r.school_year,
       major:         r.major,

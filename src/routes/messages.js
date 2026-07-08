@@ -142,7 +142,9 @@ router.get('/conversations', requireAuth, async (req, res) => {
       otherUser: {
         id:         r.other_user_id,
         firstName:  r.first_name,
-        lastName:   r.last_name,
+        // Initial only — the UI renders "First L.", so shipping the full surname
+        // would just leak an unused field to the other user (privacy policy §3).
+        lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
         school:     r.school,
         photoUrl:   r.photo_url,
         isVerified: r.is_verified,
