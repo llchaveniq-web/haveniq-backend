@@ -95,7 +95,7 @@ router.get('/conversations', requireAuth, async (req, res) => {
       `SELECT
          c.id AS conversation_id,
          CASE WHEN c.user_a = $1 THEN c.user_b ELSE c.user_a END AS other_user_id,
-         u.first_name, u.last_name, u.school, u.photo_url, u.is_verified, u.last_active_at,
+         u.first_name, u.last_name, u.school, u.photo_url, u.is_verified, u.identity_verified_at, u.last_active_at,
          m.body AS last_message,
          m.created_at AS last_message_at,
          m.sender_id AS last_sender_id,
@@ -148,6 +148,10 @@ router.get('/conversations', requireAuth, async (req, res) => {
         school:     r.school,
         photoUrl:   r.photo_url,
         isVerified: r.is_verified,
+        // Real Stripe-Identity state — powers the thread's anti-scam
+        // share-contact gate (both parties must be ID-verified to exchange
+        // contact info). Non-null = ID-verified.
+        identityVerifiedAt: r.identity_verified_at,
         lastActiveAt: r.last_active_at,
       },
       lastMessage:   r.last_message,
