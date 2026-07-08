@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { screenMessage } = require('../lib/contentFilter');
 
 // ── POST /reviews ─────────────────────────────────────────────────────────
 // Submit (or update) a roommate review for another user. The UNIQUE
@@ -43,6 +44,16 @@ router.post('/', requireAuth, async (req, res) => {
     // words — far more than any reasonable roommate review.
     if (body.length > 5000) {
       return res.status(400).json({ error: 'body exceeds 5000 character limit' });
+    }
+    // A review is public UGC about a NAMED person — the most sensitive text in
+    // the app. Screen it like every other UGC surface (messages, agreements) so
+    // harassment/slurs can't be published as a "review". A critical review is
+    // fine; an abusive one is not.
+    if (screenMessage(body).action === 'block') {
+      return res.status(422).json({
+        code: 'content_blocked',
+        error: "This review can't be posted — it looks like it breaks our community guidelines. A critical review is fine, but keep it respectful.",
+      });
     }
 
     const { rows } = await pool.query(
