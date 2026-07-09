@@ -1,5 +1,16 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
+const { readTokenCookie, cookieAuthEnabled } = require('../lib/sessionCookie');
+
+// Session token from the Authorization header (native app + legacy web) OR,
+// once the cookie migration is live, the httpOnly `hq_session` cookie. The
+// header ALWAYS wins, so nothing changes for existing bearer clients; the
+// cookie is a pure fallback that is null until COOKIE_AUTH_ENABLED is flipped.
+function extractSessionToken(req) {
+  const header = req.headers.authorization;
+  if (header && header.startsWith('Bearer ')) return header.split(' ')[1];
+  return readTokenCookie(req);
+}
 
 // Fail fast at module load if JWT_SECRET is missing or weak. A missing
 // secret makes jwt.sign() throw on every signin; a short secret makes
@@ -17,12 +28,11 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
 
 async function requireAuth(req, res, next) {
   try {
-    const header = req.headers.authorization;
-    if (!header || !header.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Missing or invalid authorization header' });
+    const token = extractSessionToken(req);
+    if (!token) {
+      return res.status(401).json({ error: 'Missing or invalid authorization' });
     }
 
-    const token = header.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     // Reject tokens with a `purpose` claim. The 2FA login flow issues a
@@ -89,9 +99,9 @@ async function requireAuth(req, res, next) {
  */
 async function optionalAuth(req, res, next) {
   try {
-    const header = req.headers.authorization;
-    if (!header || !header.startsWith('Bearer ')) return next();
-    const decoded = jwt.verify(header.split(' ')[1], process.env.JWT_SECRET);
+    const token = extractSessionToken(req);
+    if (!token) return next();
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (decoded.purpose) return next();
     const { rows } = await pool.query(
       'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason FROM users WHERE id = $1',
@@ -123,6 +133,23 @@ function refuseBanned(req, res, next) {
   next();
 }
 
+// CSRF guard for cookie-authenticated mutations. Inert unless COOKIE_AUTH_ENABLED.
+// The session cookie is SameSite=Lax (so browsers don't send it on cross-site
+// POSTs at all) — this is belt-and-suspenders: any state-changing request that
+// rides the cookie must ALSO carry a custom header (X-HavenIQ-CSRF) that a
+// cross-site page cannot set without a CORS preflight our origin allowlist
+// denies. Requests with no session cookie (Stripe/identity webhooks, pre-login
+// OTP, native bearer clients) are untouched — they carry no ambient credential
+// to forge. Mount globally AFTER the body parser, before the routes.
+function csrfGuard(req, res, next) {
+  if (!cookieAuthEnabled()) return next();
+  const m = req.method.toUpperCase();
+  if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return next();
+  if (!readTokenCookie(req)) return next();          // not cookie-authenticated → nothing to forge
+  if (req.headers['x-haveniq-csrf']) return next();  // custom header ⇒ same-origin (CORS-preflighted)
+  return res.status(403).json({ error: 'CSRF check failed' });
+}
+
 function signToken(userId) {
   // 7-day TTL (was 30d). Combined with the /auth/refresh endpoint's
   // 7-day grace window, the maximum lifetime of a stolen JWT drops
@@ -135,4 +162,4 @@ function signToken(userId) {
   });
 }
 
-module.exports = { requireAuth, optionalAuth, refuseBanned, signToken };
+module.exports = { requireAuth, optionalAuth, refuseBanned, signToken, csrfGuard, extractSessionToken };

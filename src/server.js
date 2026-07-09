@@ -368,6 +368,12 @@ app.use(rateLimit({
   },
 }));
 
+// CSRF guard for cookie-authenticated mutations. Inert unless COOKIE_AUTH_ENABLED
+// (the staged httpOnly-cookie migration). Auto-skips webhooks, pre-login OTP, and
+// native bearer clients — anything carrying no hq_session cookie. See
+// middleware/auth.js and docs/COOKIE_AUTH_MIGRATION.md.
+app.use(require('./middleware/auth').csrfGuard);
+
 // ── Routes ────────────────────────────────────────────────────────────────
 app.use('/auth',     require('./routes/auth'));
 // Mount /auth/2fa AFTER /auth so the dedicated twoFactor router owns

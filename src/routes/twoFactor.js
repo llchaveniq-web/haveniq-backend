@@ -68,6 +68,7 @@ const { ipKeyGenerator } = require('express-rate-limit');
 const { authenticator } = require('otplib');
 const pool    = require('../db/pool');
 const { requireAuth, signToken } = require('../middleware/auth');
+const { setSessionCookie } = require('../lib/sessionCookie');
 
 // ── Rate limiters ────────────────────────────────────────────────────
 // Without these the 2FA routes are a brute-force surface:
@@ -414,6 +415,7 @@ router.post('/challenge', challengeLimit, async (req, res) => {
     // doesn't bypass any security boundary.
     if (!u.totp_enabled || !u.totp_secret) {
       const token = signToken(u.id);
+      setSessionCookie(res, token);   // no-op until COOKIE_AUTH_ENABLED (staged migration)
       return res.json({
         success: true,
         token,
@@ -483,6 +485,7 @@ router.post('/challenge', challengeLimit, async (req, res) => {
     ).catch(err => console.error('[2fa] sign-in audit write failed:', err.message));
 
     const token = signToken(u.id);
+    setSessionCookie(res, token);   // no-op until COOKIE_AUTH_ENABLED (staged migration)
     return res.json({
       success: true,
       token,

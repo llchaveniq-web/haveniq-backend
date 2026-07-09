@@ -30,6 +30,7 @@ function logSignIn(pool, userId, method, req) {
 // (routes/admin.js resend/unlock) via lib/otp so they can never drift.
 const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { signToken, requireAuth } = require('../middleware/auth');
+const { setSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
 const { signChallengeToken } = require('./twoFactor');
 const analytics = require('../services/analytics');
 
@@ -513,6 +514,7 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     }
 
     const token = signToken(user.id);
+    setSessionCookie(res, token);   // no-op until COOKIE_AUTH_ENABLED (staged migration)
     logSignIn(pool, user.id, 'otp', req);
 
     res.json({
@@ -605,10 +607,23 @@ router.post('/refresh', refreshLimitIp, async (req, res) => {
     if (!rows[0]) return res.status(401).json({ error: 'User not found' });
 
     logSignIn(pool, decoded.userId, 'refresh', req);
-    res.json({ token: signToken(decoded.userId) });
+    const fresh = signToken(decoded.userId);
+    setSessionCookie(res, fresh);   // no-op until COOKIE_AUTH_ENABLED (staged migration)
+    res.json({ token: fresh });
   } catch {
     res.status(401).json({ error: 'Invalid token' });
   }
+});
+
+// ── POST /auth/logout ──────────────────────────────────────────────────────
+// Clears the httpOnly session cookie — the ONLY way to end a cookie session,
+// since client JS can't touch an httpOnly cookie. A no-op for bearer/native
+// clients (they just drop their stored token). Always 200 so sign-out never
+// "fails"; unauthenticated on purpose so a stale/expired session can still
+// clear itself.
+router.post('/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.json({ success: true });
 });
 
 // ═══ Logged-in .edu re-verification ════════════════════════════════════════
