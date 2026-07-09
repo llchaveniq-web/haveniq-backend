@@ -326,7 +326,35 @@ router.post('/report', requireAuth, async (req, res) => {
     }
   }
 
+  // Auto-acknowledge the student so they're never left wondering if it landed.
+  // Fire-and-forget — a mail hiccup must not affect the response.
+  (async () => {
+    try {
+      const { rows } = await pool.query('SELECT email, first_name FROM users WHERE id = $1', [userId]);
+      if (rows[0]?.email) await require('../services/email').sendSupportAckEmail(rows[0].email, rows[0].first_name);
+    } catch (e) { console.error('[telemetry/report] ack email failed:', e.message); }
+  })();
+
   res.json({ received: true });
+});
+
+// GET /telemetry/reports/mine — the student's own "Report a problem" history +
+// any staff reply, so they can see their support thread IN-APP (not just email).
+router.get('/reports/mine', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, message, screen, status, staff_reply, replied_at, created_at
+         FROM user_problem_reports
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 50`,
+      [req.user.id],
+    );
+    res.json({ reports: rows });
+  } catch (err) {
+    console.error('[telemetry/reports/mine] failed:', err.message);
+    res.status(500).json({ error: 'Could not load your reports.' });
+  }
 });
 
 module.exports = router;

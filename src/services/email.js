@@ -562,6 +562,53 @@ async function sendSupportReplyEmail({ toEmail, toName, replyBody, originalMessa
   });
 }
 
+// Auto-acknowledgement — sent the instant a student submits "Report a problem",
+// so they're never left wondering if it went through. Honest: promises a real
+// person will reply, no fake SLA.
+async function sendSupportAckEmail(toEmail, toName) {
+  await getResend().emails.send({
+    from:     'HavenIQ Support <support@haveniq.org>',
+    to:       toEmail,
+    reply_to: 'support@haveniq.org',
+    subject:  'We got your message ✦',
+    html: `
+      <!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#FBF1EA;margin:0;padding:40px 20px;">
+        <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+          <div style="background:#A33625;padding:28px;text-align:center;"><p style="font-size:26px;font-weight:800;color:#fff;margin:0;">HavenIQ ✦</p></div>
+          <div style="padding:32px;">
+            <p style="color:#2D2620;font-size:16px;margin:0 0 16px;">Hi ${String(toName || 'there').replace(/[<>&]/g, '')},</p>
+            <p style="color:#2D2620;font-size:15px;line-height:1.7;margin:0 0 18px;">Thanks for reaching out — we've got your message and a real person will get back to you. You can just reply to this email if you need to add anything.</p>
+            <p style="color:#75695A;font-size:13px;line-height:1.6;margin:0;">If it's urgent or you feel unsafe, contact your campus safety office or call 911.</p>
+          </div>
+        </div>
+      </body></html>`,
+  });
+}
+
+// Crisis escalation — alerts the safety team when a student's message trips the
+// self-harm/crisis detector, so a HUMAN can decide whether to reach out. The
+// detector is a heuristic (false positives happen), so the copy says "may need
+// support" and "use your judgment," not a diagnosis.
+async function sendCrisisAlertEmail({ to, studentName, studentEmail, studentId, conversationId }) {
+  const safe = (s) => String(s || '—').replace(/[<>&]/g, '');
+  await getResend().emails.send({
+    from:    'HavenIQ Safety <noreply@haveniq.org>',
+    to,
+    subject: '⚠️ Possible crisis signal — a student may need support',
+    html: `
+      <!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1a1a1a;margin:0;padding:32px 20px;">
+        <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
+          <div style="background:#C0392B;padding:24px;"><p style="font-size:18px;font-weight:800;color:#fff;margin:0;">⚠️ Possible crisis signal</p></div>
+          <div style="padding:28px;">
+            <p style="color:#2D2620;font-size:15px;line-height:1.7;margin:0 0 16px;">A message from <strong>${safe(studentName)}</strong> (${safe(studentEmail)}) tripped the self-harm / crisis detector. Consider checking in — a short, human "hey, are you okay?" can matter.</p>
+            <p style="color:#75695A;font-size:13px;line-height:1.6;margin:0 0 12px;">This is a heuristic detector, not a diagnosis — use your judgment. If you believe someone is in immediate danger, contact 911 or their campus safety office. The 988 Suicide &amp; Crisis Lifeline is available to share.</p>
+            <p style="color:#75695A;font-size:12px;margin:0;">Student ID: ${safe(studentId)}${conversationId ? ` · Conversation: ${safe(conversationId)}` : ''}</p>
+          </div>
+        </div>
+      </body></html>`,
+  });
+}
+
 module.exports = {
   generateOTP, sendOTPEmail, sendMatchEmail,
   sendParentMatchEmail, sendParentInviteEmail,
@@ -569,5 +616,5 @@ module.exports = {
   sendFounderSignupAlert,
   sendParentDigestEmail,
   sendConnectRequestEmail, sendNewMessageEmail,
-  sendSupportReplyEmail,
+  sendSupportReplyEmail, sendSupportAckEmail, sendCrisisAlertEmail,
 };

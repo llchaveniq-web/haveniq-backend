@@ -367,9 +367,16 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
     maybeEmailNewMessage(req.params.conversationId, otherUserId, req.user.first_name).catch(() => {});
 
     // If the sender's own message signals self-harm/crisis, attach supportive
-    // resources to the response (the message is still delivered). Clients show
-    // a gentle 988 / Crisis Text Line card. This is care, not moderation —
-    // nothing is blocked or logged to the abuse queue.
+    // resources to the response (the message is still delivered) — clients show
+    // a gentle 988 / Crisis Text Line card — AND escalate to the safety team so
+    // a human can decide to check in. It's care, not moderation: nothing is
+    // blocked, and the escalation is debounced (once per user per 6h) so a
+    // distressed run of messages doesn't spam the safety channel.
+    if (screen.crisis) {
+      require('../services/crisisAlert')
+        .maybeAlertCrisis(req.user, req.params.conversationId)
+        .catch(() => {});
+    }
     res.status(201).json(screen.crisis ? { ...rows[0], support: CRISIS_SUPPORT } : rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Failed to send message' });
