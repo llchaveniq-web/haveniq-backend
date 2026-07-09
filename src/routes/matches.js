@@ -11,6 +11,7 @@ const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 const { loadDrift } = require('../services/pulseDrift');
 const { calculateCompatibility, topFrictionTopic } = require('../services/scoring');
+const { computeFrictions } = require('../services/friction');
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { buildSuites } = require('../services/suiteOptimizer');
 const { loadFeatures: loadTextInsightFeatures } = require('../services/textInsight');
@@ -286,6 +287,14 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // Deep-matching #6: surface trajectory ("converging") dims only when present.
       const convDims = Array.isArray(r.converging_dims) ? r.converging_dims : [];
       const convergingFields = convDims.length ? { convergingDims: convDims } : {};
+      // Specific friction forecast — "where you'll clash + the exact script",
+      // computed here because this is the only place BOTH answer sets exist (the
+      // client never receives another student's raw answers). A certified
+      // complementary dim is a balance, not a fight, so it's suppressed. Empty
+      // array is omitted so the app shows nothing rather than a hollow section.
+      const suppressDims = compDims.map(d => Number(d && d.qid)).filter(Number.isFinite);
+      const topFrictions = computeFrictions(myAnswers, r.candidate_answers, { suppressDims, n: 3 });
+      const frictionFields = topFrictions.length ? { topFrictions } : {};
       return ({
       userId:        r.id,
       firstName:     r.first_name,
@@ -338,6 +347,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       ...validationFields,
       ...complementaryFields,
       ...convergingFields,
+      ...frictionFields,
     });
     });
 
