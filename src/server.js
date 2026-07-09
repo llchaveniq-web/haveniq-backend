@@ -867,6 +867,30 @@ server.listen(PORT, () => {
   };
   setTimeout(runGrowthDigest, 35 * 60 * 1000);
   setInterval(runGrowthDigest, 7 * 24 * 60 * 60 * 1000).unref?.();
+
+  // ── Safety-report backlog digest — the trust-&-safety nudge ────────────────
+  // Individual reports already email the founder in real time; this once-daily
+  // job counts reports still sitting in `open` and pings the ops Discord so a
+  // backlog can't quietly rot because nobody opened /admin/safety (triage is a
+  // bus-factor of one). Fires ONLY when the queue is non-empty and a Discord
+  // hook is set — read-only, no action, sends nothing to users. No kill switch:
+  // unlike the growth/lifecycle digests it never touches a user, and it
+  // self-silences on a clean queue. First run ~10 min after boot, then daily.
+  let safetyDigestInFlight = false;
+  const runSafetyDigest = async () => {
+    if (safetyDigestInFlight) return;
+    safetyDigestInFlight = true;
+    try {
+      const r = await require('./services/safetyDigest').runSafetyDigest();
+      if (r.pinged) console.log('[safety-digest]', JSON.stringify(r));
+    } catch (err) {
+      console.error('[safety-digest] run could not start:', err.message);
+    } finally {
+      safetyDigestInFlight = false;
+    }
+  };
+  setTimeout(runSafetyDigest, 10 * 60 * 1000);
+  setInterval(runSafetyDigest, 24 * 60 * 60 * 1000).unref?.();
 });
 
 module.exports = { app, server };
