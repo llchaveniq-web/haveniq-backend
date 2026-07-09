@@ -30,7 +30,7 @@ function logSignIn(pool, userId, method, req) {
 // (routes/admin.js resend/unlock) via lib/otp so they can never drift.
 const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { signToken, requireAuth } = require('../middleware/auth');
-const { setSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
+const { setSessionCookie, clearSessionCookie, readTokenCookie } = require('../lib/sessionCookie');
 const { signChallengeToken } = require('./twoFactor');
 const analytics = require('../services/analytics');
 
@@ -576,7 +576,11 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
 const REFRESH_GRACE_DAYS = 7;
 router.post('/refresh', refreshLimitIp, async (req, res) => {
   try {
-    const { token } = req.body || {};
+    // Token from the request body (bearer clients) OR the httpOnly session
+    // cookie (cookie-auth web sends an empty body). Either path re-issues the
+    // token AND re-sets a fresh cookie, so a weekly-active cookie session never
+    // expires out from under the user.
+    const token = (req.body && req.body.token) || readTokenCookie(req);
     if (!token) return res.status(400).json({ error: 'token required' });
 
     const jwt = require('jsonwebtoken');

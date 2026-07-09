@@ -151,13 +151,19 @@ const io = new Server(server, {
   cors: {
     origin: corsOrigin,
     methods: ['GET', 'POST'],
+    // Allow the httpOnly session cookie on the WS handshake (cookie-auth mode).
+    // Harmless for bearer/native clients, which authenticate via the auth payload.
+    credentials: true,
   },
 });
 
 // Socket auth middleware
 io.use(async (socket, next) => {
   try {
-    const token = socket.handshake.auth.token;
+    // Token from the socket.io `auth` payload (native/bearer clients) OR, in
+    // cookie-auth mode, the httpOnly session cookie sent on the WS handshake.
+    const token = socket.handshake.auth.token
+      || require('./lib/sessionCookie').readTokenCookie({ headers: socket.handshake.headers });
     if (!token) throw new Error('No token');
 
     const jwt    = require('jsonwebtoken');
