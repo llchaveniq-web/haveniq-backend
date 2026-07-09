@@ -95,7 +95,8 @@ router.get('/conversations', requireAuth, async (req, res) => {
       `SELECT
          c.id AS conversation_id,
          CASE WHEN c.user_a = $1 THEN c.user_b ELSE c.user_a END AS other_user_id,
-         u.first_name, u.last_name, u.school, u.photo_url, u.is_verified, u.identity_verified_at, u.last_active_at,
+         u.first_name, u.last_name, u.school, u.school_year, u.major,
+         u.photo_url, u.is_verified, u.trust_score, u.identity_verified_at, u.last_active_at,
          m.body AS last_message,
          m.created_at AS last_message_at,
          m.sender_id AS last_sender_id,
@@ -139,6 +140,9 @@ router.get('/conversations', requireAuth, async (req, res) => {
 
     res.json(rows.map(r => ({
       conversationId: r.conversation_id,
+      // Full user profile for the other participant — same columns the match
+      // feed returns — so Messages renders their real photo + name instead of a
+      // placeholder + "Your match".
       otherUser: {
         id:         r.other_user_id,
         firstName:  r.first_name,
@@ -146,8 +150,11 @@ router.get('/conversations', requireAuth, async (req, res) => {
         // would just leak an unused field to the other user (privacy policy §3).
         lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
         school:     r.school,
-        photoUrl:   r.photo_url,
+        schoolYear: r.school_year,
+        major:      r.major,
+        photoUrl:   r.photo_url,       // ← the profile photo (Cloudinary URL)
         isVerified: r.is_verified,
+        trustScore: r.trust_score,
         // Real Stripe-Identity state — powers the thread's anti-scam
         // share-contact gate (both parties must be ID-verified to exchange
         // contact info). Non-null = ID-verified.
