@@ -241,17 +241,45 @@ router.post('/report', requireAuth, async (req, res) => {
 
   // Best-effort: log to the DB so we have a permanent audit trail
   try {
+    // The original DDL declared user_id BIGINT against the UUID users.id PK, so
+    // this table either never created or every insert failed silently — reports
+    // were never persisted (only Discord got them). Self-heal safely: the table
+    // is provably empty (inserts were failing), so drop-if-broken, then recreate
+    // with the correct UUID type + the support-triage columns. Idempotent — once
+    // fixed, the DO block finds no bigint column and does nothing.
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'user_problem_reports'
+            AND column_name = 'user_id' AND data_type = 'bigint'
+        ) THEN
+          DROP TABLE user_problem_reports;
+        END IF;
+      END $$;
+    `);
     await pool.query(
       `CREATE TABLE IF NOT EXISTS user_problem_reports (
          id          BIGSERIAL PRIMARY KEY,
-         user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
          message     TEXT NOT NULL,
          screen      TEXT,
          user_agent  TEXT,
          app_version TEXT,
+         status      TEXT NOT NULL DEFAULT 'open',
+         staff_reply TEXT,
+         replied_at  TIMESTAMPTZ,
+         handled_by  UUID,
          created_at  TIMESTAMPTZ DEFAULT NOW()
        )`
     );
+    // Belt-and-suspenders: add the support-triage columns to any pre-existing
+    // (correctly-typed) table that predates them.
+    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS status      TEXT NOT NULL DEFAULT 'open'`);
+    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS staff_reply TEXT`);
+    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS replied_at  TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS handled_by  UUID`);
     await pool.query(
       `INSERT INTO user_problem_reports (user_id, message, screen, user_agent, app_version)
        VALUES ($1, $2, $3, $4, $5)`,

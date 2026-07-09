@@ -529,6 +529,39 @@ async function sendNewMessageEmail(toEmail, toName, fromName, userId = null) {
   }
 }
 
+// Support reply — a real human (founder/moderator) answering a "Report a
+// problem" submission. Sent from support@ so the student can just reply and it
+// lands back in the monitored inbox. Quotes what they wrote for context.
+async function sendSupportReplyEmail({ toEmail, toName, replyBody, originalMessage }) {
+  const safe = (s) => String(s || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  await getResend().emails.send({
+    from:     'HavenIQ Support <support@haveniq.org>',
+    to:       toEmail,
+    reply_to: 'support@haveniq.org',
+    subject:  'Re: your message to HavenIQ support',
+    html: `
+      <!DOCTYPE html>
+      <html>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FBF1EA; margin:0; padding:40px 20px;">
+          <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+            <div style="background:#A33625; padding:28px; text-align:center;">
+              <p style="font-size:26px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
+            </div>
+            <div style="padding:32px;">
+              <p style="color:#2D2620; font-size:16px; margin:0 0 16px;">Hi ${safe(toName) || 'there'},</p>
+              <p style="color:#2D2620; font-size:15px; line-height:1.7; margin:0 0 22px; white-space:pre-wrap;">${safe(replyBody)}</p>
+              ${originalMessage ? `<div style="background:#FBF1EA; border-left:4px solid #A33625; padding:14px 18px; border-radius:8px; margin:0 0 22px;">
+                <p style="font-size:12px; color:#75695A; margin:0 0 6px; text-transform:uppercase; letter-spacing:0.5px;">You wrote:</p>
+                <p style="font-size:14px; color:#75695A; line-height:1.6; margin:0; white-space:pre-wrap;">${safe(originalMessage).slice(0, 1000)}</p>
+              </div>` : ''}
+              <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0;">Just reply to this email if you need anything else — it comes straight to us.</p>
+            </div>
+          </div>
+        </body>
+      </html>`,
+  });
+}
+
 module.exports = {
   generateOTP, sendOTPEmail, sendMatchEmail,
   sendParentMatchEmail, sendParentInviteEmail,
@@ -536,4 +569,5 @@ module.exports = {
   sendFounderSignupAlert,
   sendParentDigestEmail,
   sendConnectRequestEmail, sendNewMessageEmail,
+  sendSupportReplyEmail,
 };

@@ -381,6 +381,7 @@ app.use('/housing',  require('./routes/housing'));
 app.use('/premium',  require('./routes/premium'));
 app.use('/admin',    require('./routes/admin'));
 app.use('/admin/safety', require('./routes/adminSafety'));
+app.use('/admin/support', require('./routes/support'));  // "Report a problem" triage queue (founder + moderators)
 // Bot-admin: static-token-authed narrow endpoints for automation bots
 // (signup auto-review, weekly digest). Returns 503 until ADMIN_BOT_TOKEN
 // is set in env.
