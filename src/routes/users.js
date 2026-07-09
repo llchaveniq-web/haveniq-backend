@@ -395,6 +395,20 @@ router.patch('/me', requireAuth, async (req, res) => {
       }
     }
 
+    // Display name shown on every card/profile to strangers — screen it the
+    // same way (block only; the scam/contact-info "flag" doesn't apply to a
+    // name). Matters once signup is open to the public: an allowlist can be
+    // trusted to self-moderate their name, a stranger can't.
+    for (const nameField of ['firstName', 'lastName']) {
+      const v = req.body[nameField];
+      if (typeof v === 'string' && v.trim() && screenMessage(v).action === 'block') {
+        return res.status(422).json({
+          code:  'content_blocked',
+          error: 'That name can\'t be saved. Please use your real name.',
+        });
+      }
+    }
+
     values.push(req.user.id);
     const { rows } = await pool.query(
       `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${idx} RETURNING *`,
