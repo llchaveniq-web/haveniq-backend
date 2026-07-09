@@ -1399,11 +1399,11 @@ router.post('/me/email/send-code', requireAuth, changeEmailSendLimit, async (req
       return res.status(409).json({ error: 'That email is already in use by another account.' });
     }
     // 4. Issue a fresh OTP (invalidate any prior unused one for this email).
-    await pool.query('UPDATE otp_codes SET used = TRUE WHERE email = $1 AND used = FALSE', [emailLower]);
+    await pool.query("UPDATE otp_codes SET used = TRUE WHERE email = $1 AND used = FALSE AND purpose = 'email_change'", [emailLower]);
     const code      = generateOTP();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await pool.query(
-      'INSERT INTO otp_codes (email, code, expires_at) VALUES ($1, $2, $3)',
+      "INSERT INTO otp_codes (email, code, expires_at, purpose) VALUES ($1, $2, $3, 'email_change')",
       [emailLower, hashChangeEmailOtp(code), expiresAt],
     );
     try {
@@ -1435,7 +1435,7 @@ router.post('/me/email/verify', requireAuth, async (req, res) => {
 
     const { rows: otpRows } = await pool.query(
       `SELECT id, code, attempts FROM otp_codes
-       WHERE email = $1 AND used = FALSE AND expires_at > NOW()
+       WHERE email = $1 AND used = FALSE AND expires_at > NOW() AND purpose = 'email_change'
        ORDER BY created_at DESC LIMIT 1`, [emailLower]);
     if (!otpRows[0]) return res.status(400).json({ error: 'Code expired or not found. Request a new code.' });
     const otp = otpRows[0];

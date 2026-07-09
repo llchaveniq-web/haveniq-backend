@@ -243,7 +243,7 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
 
     // Invalidate any existing OTPs for this email
     await pool.query(
-      'UPDATE otp_codes SET used = TRUE WHERE email = $1 AND used = FALSE',
+      "UPDATE otp_codes SET used = TRUE WHERE email = $1 AND used = FALSE AND purpose = 'signup'",
       [emailLower]
     );
 
@@ -260,7 +260,7 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
     // accepts both formats so any OTP issued during the brief
     // cleartext window still validates.
     await pool.query(
-      'INSERT INTO otp_codes (email, code, expires_at) VALUES ($1, $2, $3)',
+      "INSERT INTO otp_codes (email, code, expires_at, purpose) VALUES ($1, $2, $3, 'signup')",
       [emailLower, hashOtp(code), expiresAt]
     );
 
@@ -331,7 +331,7 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     // Find valid OTP
     const { rows: otpRows } = await pool.query(
       `SELECT id, code, attempts FROM otp_codes
-       WHERE email = $1 AND used = FALSE AND expires_at > NOW()
+       WHERE email = $1 AND used = FALSE AND expires_at > NOW() AND purpose = 'signup'
        ORDER BY created_at DESC LIMIT 1`,
       [emailLower]
     );
