@@ -96,9 +96,18 @@ console.log(`   soft-blocked pairs  ${softBlocked}  (${((softBlocked / pairs) * 
 if (sampleWhy) console.log(`\n  Sample "why matched":  ${sampleWhy}`);
 
 // ── Sanity checks ────────────────────────────────────────────────────────
+// v8 replaced hard-zero blocks with dealbreaker CAPS (ceilings, score preserved,
+// not erased), so isHardBlocked is always false by design. Validate the CAP that
+// replaced it instead: a smoker × non-smoker pair must be capped below the feed
+// floor (drops out) even when otherwise identical.
+const capBase = students[0];
+const nonSmoker = { ...capBase, 51: 0 };
+const smoker    = { ...capBase, 51: 3 };
+const capProbe  = calculateCompatibility(nonSmoker, smoker).finalPct;
+
 const checks = [
   ['No NaN / crashes',          nanCount === 0],
-  ['Hard blocks fire',          hardBlocked > 0],
+  ['Dealbreaker caps fire (smoker×non-smoker → ≤40)', capProbe <= 40],
   ['Soft blocks fire',          softBlocked > 0],
   ['Healthy spread (std > 6)',  std > 6],
   ['Mean not pinned (35-85)',   mean > 35 && mean < 85],
