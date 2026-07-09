@@ -819,14 +819,12 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
       },
     }).catch(() => {});
 
-    // Surface the underlying error name to the user so they (and we)
-    // can tell at a glance whether it's a Cloudinary issue, a DB issue,
-    // a moderation false-positive, etc. instead of a useless generic.
-    const errSummary = err && err.message
-      ? err.message.slice(0, 200)
-      : 'Unknown error';
+    // Keep the internal detail in the SERVER logs (+ Sentry), not in the client
+    // response — a raw error string can carry Cloudinary/DB internals. The user
+    // gets a clean, generic message. (Was echoing err.message to the client.)
+    console.error('[photo-upload] failed:', err && err.message);
     res.status(500).json({
-      error: `Upload failed (${errSummary}). The team has been notified.`,
+      error: 'Upload failed. Please try again in a moment — the team has been notified.',
     });
   }
 });

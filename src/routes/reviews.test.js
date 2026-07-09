@@ -18,6 +18,7 @@ inject('../db/pool', {
 });
 inject('../middleware/auth', {
   requireAuth: (req, _res, next) => { req.user = { id: req.headers['x-test-uid'] || 'me' }; next(); },
+  refuseBanned: (req, res, next) => (req.user?.is_banned ? res.status(403).json({ banned: true }) : next()),
 });
 inject('../lib/contentFilter', {
   // 'block' when the body carries the abuse marker, else allow.

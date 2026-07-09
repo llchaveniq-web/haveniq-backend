@@ -16,7 +16,7 @@ const { loadCertifiedModels } = require('../services/dimensionModel');
 const { buildSuites } = require('../services/suiteOptimizer');
 const { loadFeatures: loadTextInsightFeatures } = require('../services/textInsight');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
-const { safetyReport, safetyBlock } = require('../middleware/rateLimits');
+const { safetyReport, safetyBlock, aiLimiter } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
 
@@ -974,7 +974,7 @@ router.post('/:matchId/report', requireAuth, safetyReport, async (req, res) => {
 const openerCache = new Map();  // key = `${viewerId}:${targetId}` → { openers, expiresAt }
 const OPENER_TTL_MS = 24 * 60 * 60 * 1000;
 
-router.get('/:userId/openers', requireAuth, async (req, res) => {
+router.get('/:userId/openers', requireAuth, aiLimiter, async (req, res) => {
   const viewerId = req.user.id;
   // User IDs are UUIDs, not integers — parseInt() turned every real id into
   // NaN, so this endpoint 400'd for every match (and the cache key collapsed
@@ -1139,7 +1139,7 @@ Output ONLY a JSON array of 3 strings (no markdown fence, no explanation):
 const explainerCache = new Map();
 const EXPLAIN_TTL_MS = 24 * 60 * 60 * 1000;
 
-router.get('/:userId/explain', requireAuth, async (req, res) => {
+router.get('/:userId/explain', requireAuth, aiLimiter, async (req, res) => {
   const viewerId = req.user.id;
   // User IDs are UUIDs, not integers — parseInt() made this 400 for every
   // match. Keep the raw string id (matches /matched/:userId above).

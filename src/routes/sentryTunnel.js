@@ -105,7 +105,7 @@ async function tryAutoRollback(bundleHash) {
   }
 }
 
-async function trackBurstAndMaybeRollback(report) {
+async function trackBurstAndMaybeRollback(report, clientIp) {
   // Self-healing stale-bundle crashes must NOT count toward auto-rollback.
   // They originate from old tabs running PRE-deploy JS that immediately
   // auto-reloads onto the fresh bundle; the CURRENT deploy is fine. Counting
@@ -124,14 +124,21 @@ async function trackBurstAndMaybeRollback(report) {
     entry = null;
   }
   if (!entry) {
-    entry = { count: 0, firstAt: now, rolledBack: false };
+    entry = { count: 0, firstAt: now, rolledBack: false, ips: new Set() };
   }
+  if (!entry.ips) entry.ips = new Set();   // back-compat for any entry created before this field
   entry.count += 1;
+  if (clientIp) entry.ips.add(clientIp);
   errorBurst.set(bundleHash, entry);
 
-  // Trigger rollback only ONCE per bundle, when threshold crossed within window
+  // Trigger rollback only ONCE per bundle, when threshold crossed within window.
+  // Count DISTINCT client IPs, not raw reports: a real bad-deploy outage hits
+  // many users (many IPs), but a single attacker forging reports (even with
+  // randomized messages to defeat dedup) is ONE IP and can never reach the
+  // threshold — so the auto-rollback can't be weaponized to revert a good deploy.
   const withinWindow = (now - entry.firstAt) <= BURST_WINDOW_MS;
-  const overThreshold = entry.count >= BURST_THRESHOLD;
+  const distinctSources = entry.ips.size || entry.count;
+  const overThreshold = distinctSources >= BURST_THRESHOLD;
   if (!entry.rolledBack && withinWindow && overThreshold) {
     entry.rolledBack = true;
     const result = await tryAutoRollback(bundleHash);
@@ -358,10 +365,36 @@ async function dispatchAutoFix(triage, report) {
   }
 }
 
+// Per-IP cap on this UNAUTHENTICATED endpoint. It's mounted before the global
+// rate limiter, so without this an attacker could spam it — each unique report
+// costs a Claude triage call + a Discord post. A real client's ErrorBoundary
+// fires only a handful on a crash, so 10/5min/IP is generous for legit use and
+// shuts down the abuse. A dropped report is harmless (return a benign 200).
+const reportLimiter = require('express-rate-limit')({
+  windowMs: 5 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(200).json({ ok: true, throttled: true }),
+});
+
+// Global daily ceiling on PAID Claude triage calls — a hard cost cap no matter
+// how many distinct IPs report. Past the cap we still record + Discord, we just
+// skip the LLM. Rolling 24h window.
+const TRIAGE_DAILY_CAP = 200;
+let triageDay = { start: Date.now(), count: 0 };
+function triageBudgetOk() {
+  const now = Date.now();
+  if (now - triageDay.start > 24 * 60 * 60 * 1000) triageDay = { start: now, count: 0 };
+  if (triageDay.count >= TRIAGE_DAILY_CAP) return false;
+  triageDay.count += 1;
+  return true;
+}
+
 // ── Main POST handler ──────────────────────────────────────────────────
 // Accepts JSON. Returns 200 immediately, processes async. Even if the
 // triage fails, we still recorded the report.
-router.post('/__report', express.json({ limit: '512kb' }), async (req, res) => {
+router.post('/__report', reportLimiter, express.json({ limit: '512kb' }), async (req, res) => {
   const report = req.body || {};
   if (!report.message && !report.stack) {
     return res.status(400).json({ error: 'message or stack required' });
@@ -385,8 +418,10 @@ router.post('/__report', express.json({ limit: '512kb' }), async (req, res) => {
       // STEP 1 — Burst tracking + auto-rollback. Runs FIRST and in parallel
       // with triage because rollback latency matters: every second the bad
       // bundle stays live is another user potentially hitting the bug.
-      const burstP = trackBurstAndMaybeRollback(report);
-      const triage = await callClaudeTriage(report);
+      const burstP = trackBurstAndMaybeRollback(report, req.ip);
+      const triage = triageBudgetOk()
+        ? await callClaudeTriage(report)
+        : { severity: 'unknown', bug_class: 'unknown', likely_file: null, skipped: 'daily_triage_cap' };
       const fixDispatched = await dispatchAutoFix(triage, report);
       const burst = await burstP;
       await postDiscord(report, triage, fixDispatched);

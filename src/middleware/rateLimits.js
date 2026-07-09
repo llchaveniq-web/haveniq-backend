@@ -97,4 +97,21 @@ const safetyBlock = rateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { writeReview, submitRule, submitNomination, quickAction, safetyReport, safetyBlock };
+/**
+ * AI / LLM endpoints — every call spends real Claude budget, so cap per user
+ * (keyed by user_id, IP fallback). Covers the coach/assistant + the match
+ * explainer/openers. 40/hour is far above genuine human use (the explainer +
+ * openers are also 24h-cached), but stops a single account from looping paid
+ * calls to run up Anthropic cost. The global 200/15min is the outer bound; this
+ * is the tighter AI-specific one.
+ */
+const aiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 40,
+  message: { error: 'You\'re using the AI features very fast. Give it a minute and try again.' },
+  keyGenerator: userOrIpKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+module.exports = { writeReview, submitRule, submitNomination, quickAction, safetyReport, safetyBlock, aiLimiter };

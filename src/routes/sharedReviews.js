@@ -8,7 +8,7 @@
 // the 2026-05-22 migration. This file exposes them via two routers.
 
 const pool = require('../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, refuseBanned } = require('../middleware/auth');
 const { writeReview } = require('../middleware/rateLimits');
 const { screenMessage } = require('../lib/contentFilter');
 
@@ -27,7 +27,7 @@ const landlordRouter = require('express').Router();
 // POST /landlord-reviews
 // Body: { landlordName, ratingOverall, ratingResponse?, ratingMaintenance?,
 //         ratingFairness?, reviewText, isAnonymous? }
-landlordRouter.post('/', requireAuth, writeReview, async (req, res) => {
+landlordRouter.post('/', requireAuth, refuseBanned, writeReview, async (req, res) => {
   try {
     const {
       landlordName, ratingOverall, ratingResponse, ratingMaintenance,
@@ -117,7 +117,7 @@ const buildingRouter = require('express').Router();
 // Body: { buildingAddress, moveInDate?, moveOutDate?, ratingOverall,
 //         ratingNoise?, ratingPest?, ratingHvac?, ratingManagement?,
 //         recommend?, pros?, cons?, tips? }
-buildingRouter.post('/', requireAuth, writeReview, async (req, res) => {
+buildingRouter.post('/', requireAuth, refuseBanned, writeReview, async (req, res) => {
   try {
     const {
       buildingAddress, moveInDate, moveOutDate, ratingOverall,

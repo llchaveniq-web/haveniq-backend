@@ -170,10 +170,15 @@ io.use(async (socket, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const { rows } = await pool.query(
-      'SELECT id, first_name FROM users WHERE id = $1',
+      'SELECT id, first_name, is_banned FROM users WHERE id = $1',
       [decoded.userId]
     );
     if (!rows[0]) throw new Error('User not found');
+    // Banned users are refused at the socket door — same as refuseBanned on the
+    // HTTP routes. Without this a suspended account holding a valid JWT could
+    // still open a socket (and, before the write handler was removed, message
+    // through it), bypassing the ban.
+    if (rows[0].is_banned) throw new Error('Account suspended');
 
     socket.userId    = rows[0].id;
     socket.firstName = rows[0].first_name;
@@ -235,50 +240,16 @@ io.on('connection', (socket) => {
   });
 
   // Send a message
-  socket.on('send_message', async (data) => {
-    const { conversationId, body } = data || {};
-    if (!conversationId || !body?.trim()) return;
-    // Same 10K cap as the HTTP /:conversationId route. Without this a
-    // socket-connected client could bypass the HTTP-side validation.
-    if (body.length > 10000) return;
-
-    try {
-      // Verify this user belongs to the conversation
-      const { rows: convRows } = await pool.query(
-        'SELECT user_a, user_b FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2)',
-        [conversationId, socket.userId]
-      );
-      if (!convRows[0]) return;
-
-      // Save to DB
-      const { rows } = await pool.query(
-        'INSERT INTO messages (conversation_id, sender_id, body) VALUES ($1, $2, $3) RETURNING *',
-        [conversationId, socket.userId, body.trim()]
-      );
-
-      const message = rows[0];
-
-      // Broadcast to everyone in the conversation
-      io.to(`conv:${conversationId}`).emit('new_message', {
-        ...message,
-        senderName: socket.firstName,
-      });
-
-      // Push notification to the other user (fire-and-forget)
-      const otherUserId = convRows[0].user_a === socket.userId
-        ? convRows[0].user_b
-        : convRows[0].user_a;
-
-      sendPushToUser(otherUserId, {
-        title: `${socket.firstName} sent a message`,
-        body: body.trim().slice(0, 80),
-        data: { screen: 'thread', conversationId },
-      }).catch(err => console.error('[push] socket message send failed:', err));
-
-    } catch (err) {
-      console.error('send_message error:', err);
-    }
-  });
+  // NOTE: the `send_message` socket write handler was REMOVED (2026-07-09
+  // red-team pass). The client never emits it — all message creation goes
+  // through POST /messages/:conversationId, which runs contentFilter
+  // moderation (scam/harassment screening) AND refuseBanned. The socket
+  // handler did neither: it wrote straight to the messages table, so a
+  // crafted socket emit could send messages that bypassed BOTH moderation and
+  // the ban. The socket is receive-only (new_message is broadcast from the
+  // HTTP route). Do not re-add a socket write path without porting the
+  // moderation + ban checks; better to keep writes on the single guarded HTTP
+  // route.
 
   // Typing indicator
   socket.on('typing', ({ conversationId, isTyping }) => {
@@ -441,7 +412,7 @@ app.use('/', require('./routes/unsubscribe'));        // GET/POST /unsubscribe?t
 app.use('/sentry', require('./routes/sentryWebhook'));
 // Sentry tunnel is mounted ABOVE in the middleware block. See its
 // comment for the body-parser-bypass rationale.
-app.use('/assistant', require('./routes/assistant'));
+app.use('/assistant', require('./middleware/rateLimits').aiLimiter, require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
 app.use('/best-roommate', require('./routes/votes'));

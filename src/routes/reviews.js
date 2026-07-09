@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, refuseBanned } = require('../middleware/auth');
 const { screenMessage } = require('../lib/contentFilter');
 
 // ── POST /reviews ─────────────────────────────────────────────────────────
@@ -18,7 +18,7 @@ const { screenMessage } = require('../lib/contentFilter');
 //   noiseLevel:    1-5,
 //   body:          string (>=20 chars)
 // }
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, refuseBanned, async (req, res) => {
   try {
     const {
       revieweeId, overallRating, cleanliness,
