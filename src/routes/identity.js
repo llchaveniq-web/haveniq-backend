@@ -171,11 +171,18 @@ router.post('/webhook', async (req, res) => {
   try {
     if (stripe && secret && sig && req.rawBody) {
       event = stripe.webhooks.constructEvent(req.rawBody, sig, secret);
+    } else if (process.env.NODE_ENV === 'production') {
+      // Production NEVER trusts an unsigned body. Without this guard, a forged
+      // `identity.verification_session.verified` event would flip a row to
+      // verified and defeat the share-contact anti-scam gate that depends on
+      // identity_verified_at. Refuse rather than trust — mirrors how the
+      // premium webhook 503s when its signing secret is unconfigured.
+      console.error('[identity/webhook] refused: cannot verify signature in production (set STRIPE_IDENTITY_WEBHOOK_SECRET).');
+      return res.status(503).json({ error: 'Webhook signature verification unavailable' });
     } else {
-      // Sandbox / not-yet-configured fallback: trust the body. Don't ship
-      // this in production without setting STRIPE_IDENTITY_WEBHOOK_SECRET.
+      // Sandbox / dev only: trust the body so local testing works.
       event = req.body;
-      console.warn('[identity/webhook] no signature verification (sandbox or missing secret)');
+      console.warn('[identity/webhook] no signature verification (sandbox / non-production)');
     }
   } catch (err) {
     console.error('[identity/webhook] signature verification failed:', err.message);

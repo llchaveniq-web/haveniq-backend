@@ -4,7 +4,7 @@ const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const analytics = require('../services/analytics');
 const { screenMessage, CRISIS_SUPPORT } = require('../lib/contentFilter');
-const { sendNewMessageEmail } = require('../services/email');
+const { sendNewMessageEmail, sendSafetyAlertEmail } = require('../services/email');
 const { isDemoEmail, notDemo } = require('../lib/demoFilter');
 const { isFounderUser } = require('../utils/founders');
 const { recordPairingEvent } = require('../services/pairingOutcomes');
@@ -409,12 +409,38 @@ router.post('/:conversationId/:messageId/report', requireAuth, async (req, res) 
       return res.status(400).json({ error: "You can't report your own message" });
     }
 
-    await pool.query(
+    // Acute reasons (threats, hate, self-harm, sexual content) escalate to
+    // HIGH so they sort to the top of the founder triage queue and the alert
+    // subject line; everything else stays medium.
+    const HIGH_SEVERITY = new Set([
+      'Harassment or threats', 'Hate speech', 'Self-harm or crisis',
+      'Sexual / inappropriate content',
+    ]);
+    const severity = HIGH_SEVERITY.has(reason.trim()) ? 'high' : 'medium';
+
+    const { rows: repRows } = await pool.query(
       `INSERT INTO user_reports
          (reporter_id, reported_id, message_id, category, severity, reason, details)
-       VALUES ($1, $2, $3, 'message', 'medium', $4, $5)`,
-      [req.user.id, row.sender_id, row.id, reason.trim(), details?.trim() ?? null],
+       VALUES ($1, $2, $3, 'message', $4, $5, $6)
+       RETURNING id`,
+      [req.user.id, row.sender_id, row.id, severity, reason.trim(), details?.trim() ?? null],
     );
+
+    // Alert the founder for triage — mirrors the profile-report path so an
+    // in-thread harassment / threat / self-harm report doesn't sit silently
+    // in user_reports until someone happens to open the queue. This is the
+    // most in-context, most-likely-used safety report, so it's the one that
+    // most needs to page a human. Fire-and-forget: a Resend hiccup must never
+    // fail the report the student just filed.
+    sendSafetyAlertEmail({
+      reportId:   repRows[0].id,
+      category:   'message',
+      severity,
+      reason:     reason.trim(),
+      details:    details?.trim() ?? null,
+      reporterId: req.user.id,
+      reportedId: row.sender_id,
+    }).catch(err => console.error('[messages/report] safety alert email failed:', err.message));
 
     return res.json({ success: true });
   } catch (err) {

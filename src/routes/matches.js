@@ -984,6 +984,20 @@ router.get('/:userId/openers', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'invalid target user id' });
   }
 
+  // Only generate for a genuine match. A compatibility_scores row means the
+  // engine actually paired these two (a feed match or a connected thread —
+  // every legitimate caller has one). Without this gate an authenticated user
+  // could point /openers at ANY user id to burn Claude budget.
+  const { rows: relRows } = await pool.query(
+    `SELECT 1 FROM compatibility_scores
+      WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+      LIMIT 1`,
+    [viewerId, targetId],
+  );
+  if (relRows.length === 0) {
+    return res.status(403).json({ error: 'not a match' });
+  }
+
   // Cache check
   const cacheKey = `${viewerId}:${targetId}`;
   const cached = openerCache.get(cacheKey);
@@ -1132,6 +1146,21 @@ router.get('/:userId/explain', requireAuth, async (req, res) => {
   const targetId = req.params.userId;
   if (!targetId || typeof targetId !== 'string' || targetId === viewerId) {
     return res.status(400).json({ error: 'invalid target user id' });
+  }
+
+  // Only explain a genuine match. A compatibility_scores row means the engine
+  // actually paired these two — every legitimate caller (the Fit Report) has
+  // one. This is also the one path that reads another user's compatibility
+  // profile, so the gate keeps that read scoped to real matches and stops an
+  // authenticated user from burning Claude budget against arbitrary user ids.
+  const { rows: relRows } = await pool.query(
+    `SELECT 1 FROM compatibility_scores
+      WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+      LIMIT 1`,
+    [viewerId, targetId],
+  );
+  if (relRows.length === 0) {
+    return res.status(403).json({ error: 'not a match' });
   }
 
   const cacheKey = `${viewerId}:${targetId}`;
