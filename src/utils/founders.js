@@ -49,4 +49,33 @@ function isFounderUser(user) {
   return !!user && (isFounder(user.id) || isFounderEmail(user.email));
 }
 
-module.exports = { getFounderIds, getFounderEmails, isFounder, isFounderEmail, isFounderUser };
+// ── Moderators ──────────────────────────────────────────────────────────────
+// A moderator can work the trust-&-safety queue — view reports, change their
+// status, ban/unban, see a reported user's detail — but NOT the founder-only
+// ops/business surfaces (/ops/*, growth digest, demo seeding, feed demo users).
+// Designated by env: MODERATOR_EMAILS (comma-separated, practical) and/or
+// MODERATOR_USER_IDS. Founders are ALWAYS moderators, so adding a moderator only
+// ever WIDENS who can triage — it never removes founder access. No default
+// moderators: until the founder sets the env, they are the only triager.
+function getModeratorEmails() {
+  return (process.env.MODERATOR_EMAILS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+function getModeratorIds() {
+  return (process.env.MODERATOR_USER_IDS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/** Preferred check — accepts the req.user row (has id + email). Founder ⊆ moderator. */
+function isModeratorUser(user) {
+  if (!user) return false;
+  if (isFounderUser(user)) return true;   // founders can always moderate
+  if (user.id && getModeratorIds().includes(user.id)) return true;
+  if (user.email && getModeratorEmails().includes(String(user.email).toLowerCase())) return true;
+  return false;
+}
+
+module.exports = {
+  getFounderIds, getFounderEmails, isFounder, isFounderEmail, isFounderUser,
+  getModeratorEmails, getModeratorIds, isModeratorUser,
+};

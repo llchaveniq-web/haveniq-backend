@@ -1,7 +1,10 @@
-// ─── Founder-only safety triage endpoints ────────────────────────────────
+// ─── Safety triage endpoints (founder + moderators) ──────────────────────
 //
-// Power the /admin/safety screen. All routes gated behind isFounder so a
-// non-founder hitting these gets a clean 403.
+// Power the /admin/safety screen. All routes gated behind isModeratorUser
+// (founders are always moderators; extra moderators via MODERATOR_EMAILS) so a
+// non-moderator hitting these gets a clean 403. Reduces the bus-factor of one:
+// a trusted helper can work the report queue + bans without founder-only ops
+// access.
 //
 // Endpoints:
 //   GET    /admin/safety/reports             — open queue
@@ -20,19 +23,22 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-const { isFounder } = require('../utils/founders');
+const { isModeratorUser } = require('../utils/founders');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
 
-function requireFounder(req, res, next) {
-  if (!isFounder(req.user.id)) {
-    return res.status(403).json({ error: 'Founder access required.' });
+// Trust-&-safety triage is open to founders AND designated moderators (see
+// utils/founders.js — founders are always moderators). Ops/business endpoints
+// elsewhere stay founder-only via the shared requireFounder middleware.
+function requireModerator(req, res, next) {
+  if (!isModeratorUser(req.user)) {
+    return res.status(403).json({ error: 'Moderator access required.' });
   }
   next();
 }
 
 // ── GET /admin/safety/reports?status=open ────────────────────────────────
-router.get('/reports', requireAuth, requireFounder, async (req, res) => {
+router.get('/reports', requireAuth, requireModerator, async (req, res) => {
   try {
     const status = String(req.query.status || 'open');
     const limit  = Math.min(parseInt(req.query.limit, 10) || 50, 200);
@@ -74,7 +80,7 @@ router.get('/reports', requireAuth, requireFounder, async (req, res) => {
 // Auto-moderation audit: messages the content filter blocked (refused) or
 // flagged (delivered but suspicious). Lets the founder spot repeat offenders
 // and scam patterns. Tolerates the table not existing yet (returns []).
-router.get('/message-flags', requireAuth, requireFounder, async (req, res) => {
+router.get('/message-flags', requireAuth, requireModerator, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 300);
     const params = [];
@@ -111,7 +117,7 @@ router.get('/message-flags', requireAuth, requireFounder, async (req, res) => {
 
 // ── PATCH /admin/safety/reports/:id ──────────────────────────────────────
 // Body: { status?: 'reviewed' | 'actioned' | 'dismissed', note?: string }
-router.patch('/reports/:id', requireAuth, requireFounder, async (req, res) => {
+router.patch('/reports/:id', requireAuth, requireModerator, async (req, res) => {
   try {
     const { status, note } = req.body || {};
     const allowed = ['open', 'reviewed', 'actioned', 'dismissed'];
@@ -155,7 +161,7 @@ router.patch('/reports/:id', requireAuth, requireFounder, async (req, res) => {
 
 // ── POST /admin/safety/users/:id/ban ─────────────────────────────────────
 // Body: { reason: string }
-router.post('/users/:id/ban', requireAuth, requireFounder, async (req, res) => {
+router.post('/users/:id/ban', requireAuth, requireModerator, async (req, res) => {
   try {
     const reason = String((req.body && req.body.reason) || '').trim().slice(0, 500);
     if (!reason) return res.status(400).json({ error: 'reason is required' });
@@ -183,7 +189,7 @@ router.post('/users/:id/ban', requireAuth, requireFounder, async (req, res) => {
 });
 
 // ── POST /admin/safety/users/:id/unban ───────────────────────────────────
-router.post('/users/:id/unban', requireAuth, requireFounder, async (req, res) => {
+router.post('/users/:id/unban', requireAuth, requireModerator, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE users
@@ -207,7 +213,7 @@ router.post('/users/:id/unban', requireAuth, requireFounder, async (req, res) =>
 // ── GET /admin/safety/users/:id ──────────────────────────────────────────
 // Detail view for a single user — profile + their report history (both
 // directions) + block count against them.
-router.get('/users/:id', requireAuth, requireFounder, async (req, res) => {
+router.get('/users/:id', requireAuth, requireModerator, async (req, res) => {
   try {
     const userId = req.params.id;
     const [profile, reportsAgainst, reportsFiled, blockCount] = await Promise.all([
@@ -254,7 +260,7 @@ router.get('/users/:id', requireAuth, requireFounder, async (req, res) => {
 // ── GET /admin/safety/most-blocked ───────────────────────────────────────
 // Users with the most blocks against them in the last 30 days. Signal of
 // real-world bad behavior — these are the next candidates for triage.
-router.get('/most-blocked', requireAuth, requireFounder, async (req, res) => {
+router.get('/most-blocked', requireAuth, requireModerator, async (req, res) => {
   try {
     const days  = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
     const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
