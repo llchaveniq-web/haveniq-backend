@@ -295,9 +295,19 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
         category: screen.category,
         excerpt: body,
       });
+      // Even when we block the message for content, if it ALSO signals a crisis
+      // we still escalate to the safety team and return the 988 card — the person
+      // most at risk can be the one whose distressed message trips the filter,
+      // and they must not fall through BOTH safety nets. Escalation is debounced.
+      if (screen.crisis) {
+        require('../services/crisisAlert')
+          .maybeAlertCrisis(req.user, req.params.conversationId)
+          .catch(() => {});
+      }
       return res.status(422).json({
         error: "This message can't be sent — it looks like it breaks our community guidelines. Keep messages respectful and safe.",
         code: 'content_blocked',
+        ...(screen.crisis ? { support: CRISIS_SUPPORT } : {}),
       });
     }
 

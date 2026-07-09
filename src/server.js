@@ -413,7 +413,11 @@ app.use('/', require('./routes/unsubscribe'));        // GET/POST /unsubscribe?t
 app.use('/sentry', require('./routes/sentryWebhook'));
 // Sentry tunnel is mounted ABOVE in the middleware block. See its
 // comment for the body-parser-bypass rationale.
-app.use('/assistant', require('./middleware/rateLimits').aiLimiter, require('./routes/assistant'));
+// requireAuth BEFORE aiLimiter so the limiter keys per USER, not per IP — the
+// assistant routes run their own requireAuth too (harmless re-check), but the
+// limiter needs req.user populated here or co-located students behind one campus
+// NAT would share a single 40/hr bucket and throttle each other.
+app.use('/assistant', require('./middleware/auth').requireAuth, require('./middleware/rateLimits').aiLimiter, require('./routes/assistant'));
 app.use('/offers',    require('./routes/offers'));
 app.use('/stories',   require('./routes/stories'));
 app.use('/best-roommate', require('./routes/votes'));

@@ -39,6 +39,11 @@ async function maybeAlertCrisis(user, conversationId, deps = {}) {
   if (!user || !user.id) return { alerted: false, reason: 'no_user' };
 
   const t = now();
+  // Prune expired entries so the debounce map can't grow unbounded over the
+  // process lifetime (cheap + rare — only sweeps once the map is sizeable).
+  if (lastAlertAt.size > 500) {
+    for (const [k, ts] of lastAlertAt) if (t - ts >= DEBOUNCE_MS) lastAlertAt.delete(k);
+  }
   const prev = lastAlertAt.get(user.id) || 0;
   if (t - prev < DEBOUNCE_MS) return { alerted: false, reason: 'debounced' };
   lastAlertAt.set(user.id, t);

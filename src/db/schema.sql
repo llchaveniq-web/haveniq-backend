@@ -92,9 +92,15 @@ CREATE TABLE IF NOT EXISTS otp_codes (
   attempts    INTEGER DEFAULT 0,
   expires_at  TIMESTAMPTZ NOT NULL,
   used        BOOLEAN DEFAULT FALSE,
+  -- Flow tag so login ('signup'), email-change ('email_change'), and email-
+  -- verification codes can't be redeemed across flows. Login /verify-code filters
+  -- on purpose='signup', so a FRESH DB must have this column on day one or that
+  -- query 500s until the background migration runs. (Also in migrate_missing.sql.)
+  purpose     TEXT NOT NULL DEFAULT 'signup',
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email);
+CREATE INDEX IF NOT EXISTS idx_otp_email_purpose ON otp_codes(email, purpose);
 
 -- ── Quiz answers ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS quiz_answers (

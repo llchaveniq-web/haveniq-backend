@@ -7,6 +7,16 @@ function getResend() {
   return new Resend(process.env.RESEND_API_KEY);
 }
 
+// Single source of truth for escaping user-controlled text before it goes into
+// email HTML. Full entity-encoding (incl. " and ') so a value is safe even if a
+// future template moves it into an attribute — and it PRESERVES legit names
+// ("Tom & Jerry" stays intact) rather than the older strip approach.
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[<>&"']/g, (c) => (
+    { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
 // Generate a 6-digit OTP. Uses crypto.randomInt (CSPRNG), not Math.random
 // — Math.random isn't suitable for security-relevant tokens because its
 // stream is predictable from a small observed run. randomInt's upper
@@ -533,7 +543,7 @@ async function sendNewMessageEmail(toEmail, toName, fromName, userId = null) {
 // problem" submission. Sent from support@ so the student can just reply and it
 // lands back in the monitored inbox. Quotes what they wrote for context.
 async function sendSupportReplyEmail({ toEmail, toName, replyBody, originalMessage }) {
-  const safe = (s) => String(s || '').replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+  const safe = escapeHtml;
   await getResend().emails.send({
     from:     'HavenIQ Support <support@haveniq.org>',
     to:       toEmail,
@@ -576,7 +586,7 @@ async function sendSupportAckEmail(toEmail, toName) {
         <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
           <div style="background:#A33625;padding:28px;text-align:center;"><p style="font-size:26px;font-weight:800;color:#fff;margin:0;">HavenIQ ✦</p></div>
           <div style="padding:32px;">
-            <p style="color:#2D2620;font-size:16px;margin:0 0 16px;">Hi ${String(toName || 'there').replace(/[<>&]/g, '')},</p>
+            <p style="color:#2D2620;font-size:16px;margin:0 0 16px;">Hi ${escapeHtml(toName || 'there')},</p>
             <p style="color:#2D2620;font-size:15px;line-height:1.7;margin:0 0 18px;">Thanks for reaching out — we've got your message and a real person will get back to you. You can just reply to this email if you need to add anything.</p>
             <p style="color:#75695A;font-size:13px;line-height:1.6;margin:0;">If it's urgent or you feel unsafe, contact your campus safety office or call 911.</p>
           </div>
@@ -590,7 +600,7 @@ async function sendSupportAckEmail(toEmail, toName) {
 // detector is a heuristic (false positives happen), so the copy says "may need
 // support" and "use your judgment," not a diagnosis.
 async function sendCrisisAlertEmail({ to, studentName, studentEmail, studentId, conversationId }) {
-  const safe = (s) => String(s || '—').replace(/[<>&]/g, '');
+  const safe = (s) => escapeHtml(s) || '—';
   await getResend().emails.send({
     from:    'HavenIQ Safety <noreply@haveniq.org>',
     to,

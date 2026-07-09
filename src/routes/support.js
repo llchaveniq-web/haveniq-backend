@@ -70,12 +70,19 @@ router.post('/:id/reply', requireAuth, requireModerator, async (req, res) => {
       originalMessage: report.message,
     });
 
-    await pool.query(
-      `UPDATE user_problem_reports
-          SET status = 'answered', staff_reply = $1, replied_at = NOW(), handled_by = $2
-        WHERE id = $3`,
-      [message.trim(), req.user.id, report.id],
-    );
+    // The email is already out. If the status UPDATE now fails, do NOT return an
+    // error — the moderator would re-send and DOUBLE-email the student. Log the
+    // divergence (report stays 'open', re-triageable) and report success.
+    try {
+      await pool.query(
+        `UPDATE user_problem_reports
+            SET status = 'answered', staff_reply = $1, replied_at = NOW(), handled_by = $2
+          WHERE id = $3`,
+        [message.trim(), req.user.id, report.id],
+      );
+    } catch (uerr) {
+      console.error('[admin/support reply] reply SENT but status update failed for report', report.id, '-', uerr.message);
+    }
     audit(req, 'support.reply', { report: report.id, to: report.user_id }).catch(() => {});
     res.json({ success: true });
   } catch (err) {

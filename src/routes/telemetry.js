@@ -3,6 +3,53 @@ const router = express.Router();
 const pool = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 
+// One-time (per-process) setup for user_problem_reports. The original DDL
+// declared user_id BIGINT against the UUID users.id PK, so the table either
+// never created or every insert failed — reports were never persisted. This
+// self-heals safely (the table is provably empty, since inserts were failing):
+// drop-if-broken, recreate with UUID + the support-triage columns. Guarded by a
+// module flag so it runs ONCE per process — the earlier version ran this DROP/
+// ALTER sequence on EVERY report, taking ACCESS EXCLUSIVE locks and racing under
+// concurrency. Shared by POST /report and GET /reports/mine so the table always
+// exists before either touches it.
+let problemTableReady = false;
+async function ensureProblemTable() {
+  if (problemTableReady) return;
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'user_problem_reports'
+          AND column_name = 'user_id' AND data_type = 'bigint'
+      ) THEN
+        DROP TABLE user_problem_reports;
+      END IF;
+    END $$;
+  `);
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS user_problem_reports (
+       id          BIGSERIAL PRIMARY KEY,
+       user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
+       message     TEXT NOT NULL,
+       screen      TEXT,
+       user_agent  TEXT,
+       app_version TEXT,
+       status      TEXT NOT NULL DEFAULT 'open',
+       staff_reply TEXT,
+       replied_at  TIMESTAMPTZ,
+       handled_by  UUID,
+       created_at  TIMESTAMPTZ DEFAULT NOW()
+     )`
+  );
+  // Belt-and-suspenders for a pre-existing (correctly-typed) table missing cols.
+  await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS status      TEXT NOT NULL DEFAULT 'open'`);
+  await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS staff_reply TEXT`);
+  await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS replied_at  TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS handled_by  UUID`);
+  problemTableReady = true;
+}
+
 // ─── Allowed event types ─────────────────────────────────────────────────
 // Mirror of the client-side TelemetryEventType union. The DB has a CHECK
 // constraint that enforces this same list — we filter here too so that
@@ -239,55 +286,21 @@ router.post('/report', requireAuth, async (req, res) => {
   }
   recentReports.set(userId, now);
 
-  // Best-effort: log to the DB so we have a permanent audit trail
+  // Persist for a durable audit trail + the support-triage queue. `inserted`
+  // gates the ack email below so we never tell a student "we got it" when the
+  // row didn't actually save.
+  let inserted = false;
   try {
-    // The original DDL declared user_id BIGINT against the UUID users.id PK, so
-    // this table either never created or every insert failed silently — reports
-    // were never persisted (only Discord got them). Self-heal safely: the table
-    // is provably empty (inserts were failing), so drop-if-broken, then recreate
-    // with the correct UUID type + the support-triage columns. Idempotent — once
-    // fixed, the DO block finds no bigint column and does nothing.
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name = 'user_problem_reports'
-            AND column_name = 'user_id' AND data_type = 'bigint'
-        ) THEN
-          DROP TABLE user_problem_reports;
-        END IF;
-      END $$;
-    `);
-    await pool.query(
-      `CREATE TABLE IF NOT EXISTS user_problem_reports (
-         id          BIGSERIAL PRIMARY KEY,
-         user_id     UUID REFERENCES users(id) ON DELETE SET NULL,
-         message     TEXT NOT NULL,
-         screen      TEXT,
-         user_agent  TEXT,
-         app_version TEXT,
-         status      TEXT NOT NULL DEFAULT 'open',
-         staff_reply TEXT,
-         replied_at  TIMESTAMPTZ,
-         handled_by  UUID,
-         created_at  TIMESTAMPTZ DEFAULT NOW()
-       )`
-    );
-    // Belt-and-suspenders: add the support-triage columns to any pre-existing
-    // (correctly-typed) table that predates them.
-    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS status      TEXT NOT NULL DEFAULT 'open'`);
-    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS staff_reply TEXT`);
-    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS replied_at  TIMESTAMPTZ`);
-    await pool.query(`ALTER TABLE user_problem_reports ADD COLUMN IF NOT EXISTS handled_by  UUID`);
+    await ensureProblemTable();
     await pool.query(
       `INSERT INTO user_problem_reports (user_id, message, screen, user_agent, app_version)
        VALUES ($1, $2, $3, $4, $5)`,
       [userId, message.trim(), screen ?? null, userAgent ?? null, appVersion ?? null]
     );
+    inserted = true;
   } catch (err) {
     console.error('[telemetry/report] DB insert failed:', err.message);
-    // Don't block the response — still attempt Discord post below
+    // Don't block the response — still attempt Discord post below.
   }
 
   // Forward to Discord (fire-and-forget, but log failures)
@@ -326,14 +339,15 @@ router.post('/report', requireAuth, async (req, res) => {
     }
   }
 
-  // Auto-acknowledge the student so they're never left wondering if it landed.
-  // Fire-and-forget — a mail hiccup must not affect the response.
-  (async () => {
-    try {
-      const { rows } = await pool.query('SELECT email, first_name FROM users WHERE id = $1', [userId]);
-      if (rows[0]?.email) await require('../services/email').sendSupportAckEmail(rows[0].email, rows[0].first_name);
-    } catch (e) { console.error('[telemetry/report] ack email failed:', e.message); }
-  })();
+  // Auto-acknowledge the student — but ONLY if the report actually persisted, so
+  // we never promise a human follow-up on a report that doesn't exist (and won't
+  // appear in the triage queue or /reports/mine). Reuses the already-loaded
+  // req.user (no extra query). Fire-and-forget.
+  if (inserted && req.user?.email) {
+    require('../services/email')
+      .sendSupportAckEmail(req.user.email, req.user.first_name)
+      .catch((e) => console.error('[telemetry/report] ack email failed:', e.message));
+  }
 
   res.json({ received: true });
 });
@@ -342,6 +356,7 @@ router.post('/report', requireAuth, async (req, res) => {
 // any staff reply, so they can see their support thread IN-APP (not just email).
 router.get('/reports/mine', requireAuth, async (req, res) => {
   try {
+    await ensureProblemTable();   // create the table if a report was never POSTed yet (avoids a 500)
     const { rows } = await pool.query(
       `SELECT id, message, screen, status, staff_reply, replied_at, created_at
          FROM user_problem_reports
