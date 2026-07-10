@@ -554,44 +554,12 @@ async function bootstrapSchemaAsync() {
   // statement choked because `messages` exists in prod without
   // `created_at`, and the batch failed before reaching the new ALTERs.
   //
-  // Splitter is intentionally conservative — strips `--` line comments
-  // and respects single-quoted strings (with '' escape). It's not a
-  // full SQL parser; the bootstrap file is checked into the repo so
-  // we control what shapes it contains. If a future statement uses
-  // dollar-quoted strings ($$...$$) or `/* */` block comments, this
-  // function needs an upgrade.
-  function splitStatements(src) {
-    const out = [];
-    let buf = '';
-    let inSingleQuote = false;
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      const n = src[i + 1];
-      // -- line comment
-      if (!inSingleQuote && c === '-' && n === '-') {
-        const end = src.indexOf('\n', i);
-        i = end === -1 ? src.length : end + 1;
-        continue;
-      }
-      if (c === "'") {
-        // SQL '' is an escaped single quote inside a string
-        if (inSingleQuote && n === "'") { buf += "''"; i += 2; continue; }
-        inSingleQuote = !inSingleQuote;
-        buf += c; i++; continue;
-      }
-      if (c === ';' && !inSingleQuote) {
-        const stmt = buf.trim();
-        if (stmt) out.push(stmt);
-        buf = '';
-        i++; continue;
-      }
-      buf += c; i++;
-    }
-    const tail = buf.trim();
-    if (tail) out.push(tail);
-    return out;
-  }
+  // Split into individual statements, dollar-quote aware. PL/pgSQL bodies use
+  // $$…$$ (or $tag$…$tag$), and the semicolons inside them are NOT statement
+  // terminators — splitting on them shredded update_updated_at() into fragments
+  // that failed on every boot. Extracted + unit-tested in
+  // src/lib/splitSqlStatements.js so this stays correct.
+  const { splitSqlStatements: splitStatements } = require('./lib/splitSqlStatements');
 
   const statements = splitStatements(sql);
   console.log(`[bootstrap] applying ${statements.length} statements from migrate_missing.sql (background)…`);
