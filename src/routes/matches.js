@@ -8,6 +8,7 @@ const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
+const { isViable, applyCampusRanking } = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 const { loadDrift } = require('../services/pulseDrift');
 const { calculateCompatibility, topFrictionTopic } = require('../services/scoring');
@@ -152,7 +153,9 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // still saw, and scored high with, excluded genders). Empty preference or an
     // undeclared / "Prefer not to say" gender stays inclusive.
     const { rows: meUserRows } = await pool.query(
-      'SELECT gender, looking_for, match_dealbreakers FROM users WHERE id = $1',
+      `SELECT gender, looking_for, match_dealbreakers,
+              school, budget_min, budget_max, move_in_timeline
+         FROM users WHERE id = $1`,
       [userId],
     );
     const myGender     = meUserRows[0]?.gender ?? null;
@@ -270,7 +273,26 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
         : [userId, myLookingFor, myGender, smokeFree]
     );
 
-    const matches = rows.map(r => {
+    // ── Viability pre-filter (matching-v10 P1) ──────────────────────────────
+    // A high compatibility score is noise if two people can't share a lease.
+    // Drop candidates on HARD logistics conflicts BEFORE ranking — but only on
+    // real, conflicting data: both sides have non-default budgets that don't
+    // overlap, or concrete move-in windows >45 days apart. Missing / default
+    // (500–2000) / "Flexible" always passes — the pool is thin, so this fails
+    // OPEN and never empties a feed on incomplete profiles.
+    const meLogistics = {
+      budget_min:       meUserRows[0]?.budget_min,
+      budget_max:       meUserRows[0]?.budget_max,
+      move_in_timeline: meUserRows[0]?.move_in_timeline,
+    };
+    const mySchool = meUserRows[0]?.school ?? null;
+    let feedRows = rows.filter(r => isViable(meLogistics, r).viable);
+    // Campus: same-school first, cross-school only as a thin-pool fallback.
+    // Skipped when an explicit ?school= filter is already applied (every row is
+    // that school), so it can't fight the caller's chosen scope.
+    if (!school) feedRows = applyCampusRanking(feedRows, mySchool);
+
+    const matches = feedRows.map(r => {
       // Part 2 honesty gate: only surface the behavioral-validation layer when
       // the multiplier is genuinely ≠ 1.0 (BOTH users had a real validation_score
       // at score time). At a neutral 1.0 we OMIT both fields so the app renders
@@ -375,13 +397,13 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // answers and drift change; the model must train on what was actually shown.
     (async () => {
       try {
-        const driftMap = await loadDrift([userId, ...rows.map(r => r.id)]);
+        const driftMap = await loadDrift([userId, ...feedRows.map(r => r.id)]);
         const myDrift = driftMap[String(userId)] || {};
         // Deep-matching #5: snapshot LLM constructs too (consenting users only —
         // loadFeatures returns nothing for users without a stored vector).
-        const llmMap = await loadTextInsightFeatures([userId, ...rows.map(r => r.id)]);
+        const llmMap = await loadTextInsightFeatures([userId, ...feedRows.map(r => r.id)]);
         const myLlm = llmMap[String(userId)] || null;
-        const impressions = rows.map(r => ({
+        const impressions = feedRows.map(r => ({
           candidateId: r.id,
           score:       parseFloat(r.score),
           features:    buildServeFeatures(
