@@ -580,6 +580,27 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
       return res.status(404).json({ error: 'Match not found' });
     }
 
+    // Viability re-check (matching-v10 P1). The feed already pre-filters on hard
+    // logistics, but a stale feed, a direct API call, or a profile edited after
+    // the feed loaded could still land a non-viable pair here. Re-apply the SAME
+    // conservative gate. Fails OPEN — missing / default (500–2000) / 'Flexible'
+    // data never blocks; only a genuine hard conflict does.
+    const { rows: logi } = await pool.query(
+      'SELECT id, budget_min, budget_max, move_in_timeline FROM users WHERE id = $1 OR id = $2',
+      [req.user.id, toUserId],
+    );
+    const meLog   = logi.find(u => u.id === req.user.id) || {};
+    const themLog = logi.find(u => u.id === toUserId)    || {};
+    const viability = isViable(meLog, themLog);
+    if (!viability.viable) {
+      return res.status(403).json({
+        error: viability.reason === 'budget'
+          ? "Your budgets don't overlap enough to share a place."
+          : 'Your move-in timelines are too far apart to be roommates.',
+        reason: viability.reason,
+      });
+    }
+
     // Check if already connected or pending
     const { rows: existing } = await pool.query(
       `SELECT status FROM connect_requests
