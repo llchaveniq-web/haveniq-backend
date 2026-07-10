@@ -13,14 +13,15 @@ test('WEIGHTS_VERSION is exported and stamped', () => {
 });
 
 test('QUESTION_POINTS fingerprint is pinned to the current version', () => {
-  // v10 = v8 lifestyle-first prior + v9 decorrelation (57:18, 63:16) + the v10
-  // optional high-friction axes (65:20, 66:28, 67:28, 68:20). If you change
-  // QUESTION_POINTS: bump WEIGHTS_VERSION in scoring.js, then update this
-  // expected fingerprint. (The app no longer mirrors numeric weights — see the
-  // note in constants/quiz.ts — so weight VALUES are backend-only; only the
-  // scored QUESTION SET stays in app lockstep.)
-  const EXPECTED_V10 =
+  // Fingerprint of the raw QUESTION_POINTS. v11.0 did NOT change these points —
+  // its reweight is a cross-category aggregation model (CATEGORY_WEIGHTS_V11),
+  // applied only when MATCHING_V11 is on — so the point fingerprint is unchanged
+  // from v10; only the version stamp moved. If you ever change QUESTION_POINTS:
+  // bump WEIGHTS_VERSION and update this expected fingerprint. (The app no longer
+  // mirrors numeric weights — see constants/quiz.ts — so weight VALUES are
+  // backend-only; only the scored QUESTION SET stays in app lockstep.)
+  const EXPECTED_POINTS =
     '14:35,48:30,49:35,50:45,51:15,52:20,53:25,54:20,55:20,56:30,57:18,60:30,62:28,63:16,65:20,66:28,67:28,68:20';
-  assert.equal(WEIGHTS_VERSION, 'v10');
-  assert.equal(weightFingerprint(QUESTION_POINTS), EXPECTED_V10);
+  assert.equal(WEIGHTS_VERSION, 'v11.0');
+  assert.equal(weightFingerprint(QUESTION_POINTS), EXPECTED_POINTS);
 });

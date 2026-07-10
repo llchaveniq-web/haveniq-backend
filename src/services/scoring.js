@@ -41,11 +41,13 @@ const { projectIndex, convergence, HORIZON_DEFAULT_DAYS } = require('./trajector
 // this stamp in BOTH repos in the same commit, so a drift between backend and
 // app is detectable (a test here pins the fingerprint of QUESTION_POINTS to
 // this version — change the weights without bumping the stamp and it fails).
-// 'v10' = the 2026-06-24 lifestyle-first expert prior + v9 decorrelation +
-// the v10 optional high-friction axes (Q65–68, scored per-pair only when both
-// answered). The learning job proposes '*-learned-*' successors for human
-// approval, never auto-committing.
-const WEIGHTS_VERSION = 'v10';
+// 'v11.0' = v10 point priors (unchanged) PLUS the v11 evidence-grounded model,
+// behind MATCHING_V11: communication scored by ADEQUACY not similarity, and a
+// cross-category reweight (communication HIGHEST). QUESTION_POINTS is untouched
+// — the v11 change is the aggregation model, not the raw points — so flag-OFF
+// scoring is byte-identical to v10. The learning job proposes '*-learned-*'
+// successors for human approval, never auto-committing.
+const WEIGHTS_VERSION = 'v11.0';
 
 const QUESTION_POINTS = {
   // ── Lifestyle (daily-living friction) — ~54% ──
@@ -255,6 +257,61 @@ function calibrate(rawPct) {
   return Math.min(99, Math.max(5, stretched));
 }
 
+// ── Matching v11.0 — evidence-grounded two-class model (feature-flagged) ─────
+// Behind MATCHING_V11. Flag OFF ⇒ this whole block is inert and scoring is
+// byte-identical to v10. Two evidence-grounded changes, both v11-only:
+//
+//  (1) TWO-CLASS SCORING. Living-habit categories (lifestyle, control, nervous)
+//      keep SIMILARITY scoring — similarity-attraction holds SELECTIVELY, for
+//      concrete habits + reliability. Communication/conflict-resolution is an
+//      ADEQUACY axis, not a similarity one: two avoidant communicators are
+//      SIMILAR yet BAD together. So a communication question scores the pair's
+//      COMPETENCE — one strong communicator carries the dyad, two strong is
+//      best, two weak is worst. (Complementarity-over-similarity was REFUTED.)
+//
+//  (2) CATEGORY REWEIGHT. Communication is a distinct predictor of dissolution
+//      → weight it HIGHEST. Applied as cross-category weights at aggregation,
+//      so QUESTION_POINTS is untouched: flag-OFF stays byte-identical and the
+//      within-category question weights are preserved.
+//
+// All weights are PRIORS, to be corrected by real check-in outcomes later — not
+// settled constants (no claim that this beats random survived scrutiny).
+function matchingV11Enabled(opts) {
+  if (opts && opts.v11 !== undefined) return !!opts.v11;   // explicit override: tests + shadow-validation
+  return process.env.MATCHING_V11 === 'true';
+}
+
+// Cross-category evidence weights (v11). BEFORE — v10 effective point-share:
+// communication ~24%, lifestyle ~61%, control ~4%, nervous ~11%. AFTER:
+const CATEGORY_WEIGHTS_V11 = {
+  communication: 0.34, // HIGHEST — distinct dissolution predictor
+  lifestyle:     0.30, // HIGH    — similarity predicts for living habits
+  control:       0.20, // HIGH    — reliability / executive function
+  nervous:       0.16, // MODERATE
+};
+
+// Adequacy combiner: the stronger communicator carries the dyad. Symmetric in
+// (a,b); w_max on the stronger, w_min on the weaker; sum 1 ⇒ g ∈ [0,1].
+const ADEQ_W_MAX = 0.65;
+const ADEQ_W_MIN = 0.35;
+
+// Per-option COMPETENCE [0..1] for each communication question, derived from the
+// option TEXT (higher = raises issues directly / repairs conflict; lower =
+// avoids / stonewalls / lets resentment build). Non-monotonic where the text is
+// (Q62 boundary-setting peaks at "decline kindly", not at the blunt extreme).
+// A communication question with no entry here falls back to SIMILARITY even
+// under v11 — every one below has a sensible ordering, so none do.
+const COMMUNICATION_COMPETENCE = {
+  14: [0.0, 1.0],              // contempt(0, worst) → civil-and-direct(1, best); 2-opt
+  60: [1.0, 0.7, 0.4, 0.0],    // repair receptivity: accept-fully(0) → resentment-lingers(3)
+  62: [0.0, 0.4, 1.0, 0.75],   // boundary: passive-yes(0) → decline-kindly(2, best) → blunt-no(3)
+  63: [1.0, 0.75, 0.4, 0.0],   // repair initiation: always-initiates(0) → avoids(3)
+};
+function communicationCompetence(qid, idx) {
+  const row = COMMUNICATION_COMPETENCE[qid];
+  return (row && typeof row[idx] === 'number') ? row[idx] : null;
+}
+
 /**
  * @param rawA, rawB — answer maps (wire shape or flat)
  * @param opts.dealbreakers — array of dealbreaker tags from the UNION of
@@ -271,6 +328,7 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   const A = flatten(rawA);
   const B = flatten(rawB);
   const POINTS = opts.weights || QUESTION_POINTS;
+  const V11 = matchingV11Enabled(opts);  // OFF ⇒ byte-identical to v10
 
   // Deep-matching #2: per-question certified shapes. Keyed by question id;
   // absent / uncertified ⇒ the question keeps today's diffScore curve. With no
@@ -333,25 +391,41 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
       // Deep-matching #6 trajectory for this question. convergence is 0 without
       // reliable drift on BOTH sides; projection only applies when the dimension
       // earned it (shape.project) — otherwise the snapshot index is used.
-      const dA = driftA[qid], dB = driftB[qid];
-      const conv = convergence(ai, bi, dA, dB, den);
-      const project = !!(shape && shape.certified && shape.project);
-      const aIdx = project ? projectIndex(ai, dA, horizonDays, den) : ai;
-      const bIdx = project ? projectIndex(bi, dB, horizonDays, den) : bi;
-      const aN = aIdx / den, bN = bIdx / den;
+      // v11 ADEQUACY class — communication only: score the pair's COMPETENCE,
+      // not their similarity (two avoidant communicators are similar yet bad).
+      // Symmetric; the stronger communicator carries the dyad. Flag OFF or a
+      // question with no competence ordering ⇒ both null ⇒ similarity path below.
+      const compA = (V11 && cat === 'communication') ? communicationCompetence(qid, ai) : null;
+      const compB = (V11 && cat === 'communication') ? communicationCompetence(qid, bi) : null;
 
-      let g = diffFrac(Math.abs(aIdx - bIdx), numOpts);
-      if (shape && shape.certified) {
-        g = Math.min(1, Math.max(0, g + displayDelta(shape, aN, bN, conv)));
-        if (shape.type === 'complementarity' && Math.abs(aN - bN) >= COMPLEMENT_MIN_GAP) {
-          complementaryHits.push(qid);
+      let g;
+      if (compA !== null && compB !== null) {
+        g = ADEQ_W_MAX * Math.max(compA, compB) + ADEQ_W_MIN * Math.min(compA, compB);
+        // No complementary/converging notes for an adequacy dim — those are
+        // similarity concepts, and complementarity was refuted for communication.
+      } else {
+        // SIMILARITY class (lifestyle/control/nervous, and all of v10) — today's
+        // curve, byte-identical when the flag is off.
+        const dA = driftA[qid], dB = driftB[qid];
+        const conv = convergence(ai, bi, dA, dB, den);
+        const project = !!(shape && shape.certified && shape.project);
+        const aIdx = project ? projectIndex(ai, dA, horizonDays, den) : ai;
+        const bIdx = project ? projectIndex(bi, dB, horizonDays, den) : bi;
+        const aN = aIdx / den, bN = bIdx / den;
+
+        g = diffFrac(Math.abs(aIdx - bIdx), numOpts);
+        if (shape && shape.certified) {
+          g = Math.min(1, Math.max(0, g + displayDelta(shape, aN, bN, conv)));
+          if (shape.type === 'complementarity' && Math.abs(aN - bN) >= COMPLEMENT_MIN_GAP) {
+            complementaryHits.push(qid);
+          }
+          // Trajectory "converging" note: the shape rewards convergence AND this
+          // pair is closing, OR projection materially shrank the gap. Earned only.
+          const convCoef = shape.basis && shape.basis.coef ? Number(shape.basis.coef.conv) : NaN;
+          const rewardsConv = Number.isFinite(convCoef) && convCoef > CONV_COEF_MIN && conv >= CONV_MIN;
+          const projClosed = project && (Math.abs(ai - bi) - Math.abs(aIdx - bIdx)) >= PROJ_MATERIAL_GAP;
+          if (rewardsConv || projClosed) convergingHits.push(qid);
         }
-        // Trajectory "converging" note: the shape rewards convergence AND this
-        // pair is closing, OR projection materially shrank the gap. Earned only.
-        const convCoef = shape.basis && shape.basis.coef ? Number(shape.basis.coef.conv) : NaN;
-        const rewardsConv = Number.isFinite(convCoef) && convCoef > CONV_COEF_MIN && conv >= CONV_MIN;
-        const projClosed = project && (Math.abs(ai - bi) - Math.abs(aIdx - bIdx)) >= PROJ_MATERIAL_GAP;
-        if (rewardsConv || projClosed) convergingHits.push(qid);
       }
       const earned = Math.round(pts * g);
       rawScore += earned;
@@ -387,7 +461,22 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     cap = Math.min(cap, 50); capReason = capReason || 'cleanliness';
   }
 
-  const layer1Pct = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;
+  // v10: pooled point-share. v11: cross-category WEIGHTED AVERAGE of each
+  // category's own fraction (communication weighted HIGHEST), over categories
+  // where BOTH users answered ≥1 question. catScores[cat].max only accrues on
+  // both-answered questions, so a category with no shared answers is excluded
+  // from numerator AND denominator — the same invariant as v10's maxScore.
+  let layer1Pct;
+  if (V11) {
+    let wsum = 0, wtot = 0;
+    for (const [cat, w] of Object.entries(CATEGORY_WEIGHTS_V11)) {
+      const cs = catScores[cat];
+      if (cs && cs.max > 0) { wsum += w * (cs.earned / cs.max); wtot += w; }
+    }
+    layer1Pct = wtot > 0 ? (wsum / wtot) * 100 : 0;
+  } else {
+    layer1Pct = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;
+  }
 
   // Confidence cap — a sparse or straight-lined answer vector can't earn a top
   // score (without it, thin/uniform profiles hit ~99 against everyone). Pair
@@ -700,6 +789,8 @@ module.exports = {
   OPTION_COUNTS,
   QUESTION_POINTS,  // exported for the engine-analysis script (weight audit)
   WEIGHTS_VERSION,  // shared lockstep stamp — see the note by QUESTION_POINTS
+  CATEGORY_WEIGHTS_V11,     // v11 cross-category evidence weights (shadow-validation + tests)
+  COMMUNICATION_COMPETENCE, // v11 per-option competence map (tests)
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
   // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its
