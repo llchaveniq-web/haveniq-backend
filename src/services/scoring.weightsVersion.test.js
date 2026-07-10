@@ -13,11 +13,14 @@ test('WEIGHTS_VERSION is exported and stamped', () => {
 });
 
 test('QUESTION_POINTS fingerprint is pinned to the current version', () => {
-  // v8 expert prior (2026-06-24). If you change QUESTION_POINTS: bump
-  // WEIGHTS_VERSION in scoring.js AND the app in the same commit, then update
-  // this expected fingerprint. That lockstep is the whole point of the stamp.
-  const EXPECTED_V8 =
-    '14:35,48:30,49:35,50:45,51:15,52:20,53:25,54:20,55:20,56:30,57:18,60:30,62:28,63:16';
-  assert.equal(WEIGHTS_VERSION, 'v8');
-  assert.equal(weightFingerprint(QUESTION_POINTS), EXPECTED_V8);
+  // v10 = v8 lifestyle-first prior + v9 decorrelation (57:18, 63:16) + the v10
+  // optional high-friction axes (65:20, 66:28, 67:28, 68:20). If you change
+  // QUESTION_POINTS: bump WEIGHTS_VERSION in scoring.js, then update this
+  // expected fingerprint. (The app no longer mirrors numeric weights — see the
+  // note in constants/quiz.ts — so weight VALUES are backend-only; only the
+  // scored QUESTION SET stays in app lockstep.)
+  const EXPECTED_V10 =
+    '14:35,48:30,49:35,50:45,51:15,52:20,53:25,54:20,55:20,56:30,57:18,60:30,62:28,63:16,65:20,66:28,67:28,68:20';
+  assert.equal(WEIGHTS_VERSION, 'v10');
+  assert.equal(weightFingerprint(QUESTION_POINTS), EXPECTED_V10);
 });

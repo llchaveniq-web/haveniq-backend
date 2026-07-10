@@ -194,4 +194,18 @@ module.exports = [
   { id: 55, category: 'lifestyle',
     text: 'In the kitchen, your approach to food is…',
     options: ['Totally shared. Help yourself', 'Sharing basics is fine', 'Mostly separate', 'Strictly separate. Label and ask'] },
+
+  // ─── v10 additions (2026-07-09) — optional high-friction axes (Q65–68) ───
+  { id: 65, category: 'lifestyle',
+    text: 'The apartment thermostat lives at…',
+    options: ['Cool. I run warm and like it crisp', 'On the cooler side', 'On the warmer side', "Warm. I'm always cold"] },
+  { id: 66, category: 'nervous system',
+    text: 'A roommate comes in at 1 AM with the light on and some noise. You…',
+    options: ['Sleep right through it', 'Stir but fall back asleep', 'Wake up and it takes a while', "I'm up for the night. I need dark and quiet"] },
+  { id: 67, category: 'lifestyle / executive function',
+    text: "Rent and the utility split are due. Honestly, you're usually…",
+    options: ['Paid early, every time', 'On time without being reminded', 'On time if someone reminds me', "Often a few days late. Money's tight or I forget"] },
+  { id: 68, category: 'lifestyle',
+    text: "On a weekday morning you're…",
+    options: ['Up early, out fast', 'Up early but slow to get going', 'Rolling out right before I have to', 'Rushing. Every minute counts'] },
 ];

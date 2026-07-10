@@ -41,9 +41,11 @@ const { projectIndex, convergence, HORIZON_DEFAULT_DAYS } = require('./trajector
 // this stamp in BOTH repos in the same commit, so a drift between backend and
 // app is detectable (a test here pins the fingerprint of QUESTION_POINTS to
 // this version — change the weights without bumping the stamp and it fails).
-// 'v8' = the 2026-06-24 lifestyle-first expert prior; the learning job proposes
-// 'v9-learned-*' successors for human approval, never auto-committing.
-const WEIGHTS_VERSION = 'v8';
+// 'v10' = the 2026-06-24 lifestyle-first expert prior + v9 decorrelation +
+// the v10 optional high-friction axes (Q65–68, scored per-pair only when both
+// answered). The learning job proposes '*-learned-*' successors for human
+// approval, never auto-committing.
+const WEIGHTS_VERSION = 'v10';
 
 const QUESTION_POINTS = {
   // ── Lifestyle (daily-living friction) — ~54% ──
@@ -63,6 +65,12 @@ const QUESTION_POINTS = {
   62: 28,  // boundary-setting
   // ── Money — ~8% ──
   56: 30,  // spending alignment
+  // ── v10 high-friction axes (optional; per-pair, scored only when BOTH
+  //    answered, so additive to existing pairs' scores, never dilutive) ──
+  66: 28,  // sleep sensitivity — can you sleep THROUGH noise/light (≠ Q49 bedtime)
+  67: 28,  // bill reliability — pays their share on time (≠ Q56 money values)
+  65: 20,  // thermostat / temperature preference
+  68: 20,  // weekday morning / bathroom timing
 };
 
 // Category → question ids. Re-derived from the surviving v8 ids: every
@@ -72,10 +80,10 @@ const QUESTION_POINTS = {
 // stable so the existing display mappings (HABIT_LABEL, CATEGORY_DISPLAY,
 // generateWhyMatched) keep resolving without a frontend change.
 const CATEGORIES = {
-  lifestyle:     { ids: [48, 49, 50, 51, 52, 54, 55, 56], label: 'Lifestyle' },      // 215
-  communication: { ids: [14, 60, 62, 63],                 label: 'Communication' },  // 121
-  control:       { ids: [57],                             label: 'Control Style' },  //  30
-  nervous:       { ids: [53],                             label: 'Focus & Environment' }, // 25
+  lifestyle:     { ids: [48, 49, 50, 51, 52, 54, 55, 56, 65, 67, 68], label: 'Lifestyle' },      // 283
+  communication: { ids: [14, 60, 62, 63],                             label: 'Communication' },  // 121
+  control:       { ids: [57],                                         label: 'Control Style' },  //  30
+  nervous:       { ids: [53, 66],                                     label: 'Focus & Environment' }, // 53
 };
 
 // ── Dealbreaker → amplified question IDs ─────────────────────────────────
@@ -187,6 +195,7 @@ const DIMENSION_LABELS = {
   50: 'cleanliness', 49: 'sleep', 48: 'hosting', 52: 'overnight', 54: 'alcohol',
   51: 'substance', 53: 'focus', 56: 'money', 14: 'communication', 60: 'repair',
   63: 'repair', 62: 'boundary', 57: 'chore',
+  65: 'temperature', 66: 'sleep sensitivity', 67: 'bill reliability', 68: 'morning routine',
 };
 // A pair must be at least this far apart on a complementary dimension for the
 // "balance" phrasing to apply — i.e. their difference is genuinely WHY they fit.
@@ -622,6 +631,8 @@ const FRICTION_TOPICS = {
   53: 'study environment', 55: 'food & kitchen', 56: 'money & spending',
   14: 'communication', 57: 'chores', 60: 'conflict repair',
   62: 'boundaries', 63: 'conflict repair',
+  65: 'thermostat & temperature', 66: 'sleep sensitivity', 67: 'bills & paying on time',
+  68: 'morning routines',
 };
 
 /**
