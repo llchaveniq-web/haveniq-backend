@@ -29,11 +29,14 @@ function buildFrozenVector(input = {}) {
   const {
     aAnswers, bAnswers, aDrift = null, bDrift = null, aLlm = null, bLlm = null,
     aVoice = null, bVoice = null, aVouches = 0, bVouches = 0,
-    aLatency = null, bLatency = null, scoreAtMatch = null,
+    aLatency = null, bLatency = null, scoreAtMatch = null, predictedTier = null,
   } = input;
   return {
     v: 1,
+    // The v10 prediction shown at match — same vocabulary as the outcome path
+    // (predictedScore/predictedTier), so the loop can join freeze ↔ outcome.
     scoreAtMatch: Number.isFinite(scoreAtMatch) ? Math.round(scoreAtMatch) : null,
+    predictedTier: (typeof predictedTier === 'string' && predictedTier) ? predictedTier : null,
     // Scored channels (v10 shape): answer pairs, drift trajectory, text constructs.
     pair: buildServeFeatures(aAnswers, bAnswers, aDrift, bDrift, aLlm, bLlm),
     // ZERO-WEIGHT channels — captured, never scored, λ=0 until they earn it.
@@ -52,7 +55,9 @@ function buildFrozenVector(input = {}) {
  * Best-effort by contract: a failure here must never break the telemetry batch.
  *
  * @param {string} u1,u2 — the two user ids (any order; canonicalized to a<b)
- * @param {object} [meta] — { score, school } snapshotted at formation
+ * @param {object} [meta] — { predictedScore, predictedTier } from the emit (same
+ *   vocabulary as the outcome path). `school` is NOT taken from the client — it's
+ *   derived server-side from the users' own profiles (a client can't spoof it).
  */
 async function freezeFormationVector(u1, u2, meta = {}) {
   if (!u1 || !u2 || String(u1) === String(u2)) return;
@@ -67,17 +72,23 @@ async function freezeFormationVector(u1, u2, meta = {}) {
 
     const { loadDrift } = require('./pulseDrift');
     const { loadFeatures } = require('./textInsight');
-    const [ansRes, driftMap, llmMap, vouchRes] = await Promise.all([
+    const [ansRes, driftMap, llmMap, vouchRes, usersRes] = await Promise.all([
       pool.query('SELECT user_id, answers, voice_answers FROM quiz_answers WHERE user_id = ANY($1::uuid[])', [[a, b]]),
       loadDrift([a, b]),
       loadFeatures([a, b]),
       pool.query(
         "SELECT user_id, COUNT(*)::int AS n FROM vouches WHERE user_id = ANY($1::uuid[]) AND status = 'approved' GROUP BY user_id",
         [[a, b]]).catch(() => ({ rows: [] })),
+      // school is SERVER-DERIVED from the users' own profiles — never trusted
+      // from the client (a client-sent campus could be spoofed).
+      pool.query('SELECT id, school FROM users WHERE id = ANY($1::uuid[])', [[a, b]]).catch(() => ({ rows: [] })),
     ]);
-    const ans = {}, voice = {}, vouch = {};
+    const ans = {}, voice = {}, vouch = {}, schoolBy = {};
     for (const row of ansRes.rows) { ans[String(row.user_id)] = row.answers || {}; voice[String(row.user_id)] = row.voice_answers || null; }
     for (const row of vouchRes.rows) vouch[String(row.user_id)] = row.n;
+    for (const row of usersRes.rows) schoolBy[String(row.id)] = row.school || null;
+    // Canonical campus = the shared school when both match, else user_a's (a<b).
+    const derivedSchool = (schoolBy[a] && schoolBy[a] === schoolBy[b]) ? schoolBy[a] : (schoolBy[a] || schoolBy[b] || null);
 
     const frozen = buildFrozenVector({
       aAnswers: ans[a], bAnswers: ans[b],
@@ -88,7 +99,8 @@ async function freezeFormationVector(u1, u2, meta = {}) {
       // latency (deliberativeness) lives in behavioral_event payloads — a
       // zero-weight channel, captured as null until a per-user loader lands.
       aLatency: null, bLatency: null,
-      scoreAtMatch: Number.isFinite(meta.score) ? meta.score : null,
+      scoreAtMatch: Number.isFinite(meta.predictedScore) ? meta.predictedScore : null,
+      predictedTier: typeof meta.predictedTier === 'string' ? meta.predictedTier : null,
     });
 
     await pool.query(
@@ -100,7 +112,7 @@ async function freezeFormationVector(u1, u2, meta = {}) {
              school          = COALESCE(pairing_outcomes.school, EXCLUDED.school),
              score_at_match  = COALESCE(pairing_outcomes.score_at_match, EXCLUDED.score_at_match),
              updated_at      = NOW()`,
-      [a, b, meta.school ?? null, Number.isFinite(meta.score) ? int(meta.score) : null, JSON.stringify(frozen)]);
+      [a, b, derivedSchool, Number.isFinite(meta.predictedScore) ? int(meta.predictedScore) : null, JSON.stringify(frozen)]);
   } catch (e) {
     console.error('[formationCapture] freeze failed:', e.message);
   }

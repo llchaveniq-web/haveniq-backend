@@ -62,7 +62,7 @@ const ALLOWED_TYPES = new Set([
   'schedule_block', 'social_connection', 'social_group',
   'voice_recording_meta', 'integration_connected', 'time_capsule',
   'financial_profile', 'profile_update', 'validation_score',
-  'match_lifecycle',   // pair funnel: {stage:'formed'|…, otherUserId, score?, school?}
+  'match_lifecycle',   // pair funnel: {stage:'formed'|…, otherUserId, predictedScore?, predictedTier?} (school server-derived)
 ]);
 
 // ─── POST /telemetry/batch ───────────────────────────────────────────────
@@ -145,10 +145,13 @@ router.post('/batch', requireAuth, async (req, res) => {
     if (formed.length) {
       const { freezeFormationVector } = require('../services/formationCapture');
       for (const e of formed) {
-        const score = Number(e.payload.score);
+        // Same vocabulary as the outcome path (predictedScore/predictedTier).
+        // school is NOT read from the client — freezeFormationVector derives it
+        // server-side from both users' profile records.
+        const predictedScore = Number(e.payload.predictedScore);
         freezeFormationVector(userId, e.payload.otherUserId, {
-          score:  Number.isFinite(score) ? score : undefined,
-          school: typeof e.payload.school === 'string' ? e.payload.school : undefined,
+          predictedScore: Number.isFinite(predictedScore) ? predictedScore : undefined,
+          predictedTier:  typeof e.payload.predictedTier === 'string' ? e.payload.predictedTier : undefined,
         }).catch(() => {});
       }
     }

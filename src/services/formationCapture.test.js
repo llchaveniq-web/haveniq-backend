@@ -8,10 +8,11 @@ test('assembles the scored pair vector from both answer sets', () => {
   const v = buildFrozenVector({
     aAnswers: { 50: 0, 49: 1, 14: 1 },
     bAnswers: { 50: 3, 49: 1, 14: 0 },
-    scoreAtMatch: 82.4,
+    scoreAtMatch: 82.4, predictedTier: 'strong',
   });
   assert.strictEqual(v.v, 1);
   assert.strictEqual(v.scoreAtMatch, 82, 'score rounded');
+  assert.strictEqual(v.predictedTier, 'strong', 'predictedTier carried (same vocabulary as outcome path)');
   assert.ok(v.pair && v.pair.q, 'pair.q present');
   assert.ok(v.pair.q['50'] && v.pair.q['49'] && v.pair.q['14'], 'shared questions captured');
 });
