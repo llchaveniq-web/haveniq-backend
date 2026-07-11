@@ -137,8 +137,28 @@ async function ensureTable() {
       ON match_outcomes(((details->>'predictedScore')));
     CREATE INDEX IF NOT EXISTS idx_match_outcomes_stage
       ON match_outcomes(((details->>'stage')));
+    -- Promote the prediction ↔ outcome PAIR to first-class columns (was only in
+    -- the details JSONB). The validation loop reads these directly; both are
+    -- written the moment an outcome arrives so no labeled pair is ever lost.
+    ALTER TABLE match_outcomes ADD COLUMN IF NOT EXISTS predicted_score NUMERIC;
+    ALTER TABLE match_outcomes ADD COLUMN IF NOT EXISTS predicted_tier  TEXT;
+    CREATE INDEX IF NOT EXISTS idx_match_outcomes_predcol
+      ON match_outcomes(predicted_score);
   `).catch((e) => console.error('[match_outcomes] ensure table:', e.message));
+  // One-time backfill of the new columns from existing rows' details JSONB.
+  if (!_predColsBackfilled) {
+    _predColsBackfilled = true;
+    await pool.query(`
+      UPDATE match_outcomes
+         SET predicted_score = NULLIF(details->>'predictedScore','')::numeric
+       WHERE predicted_score IS NULL AND details->>'predictedScore' ~ '^[0-9.]+$'`).catch(() => {});
+    await pool.query(`
+      UPDATE match_outcomes
+         SET predicted_tier = details->>'predictedTier'
+       WHERE predicted_tier IS NULL AND details->>'predictedTier' IS NOT NULL`).catch(() => {});
+  }
 }
+let _predColsBackfilled = false;
 
 // 2a: the free-text `note` in a check-in is user-generated. Run it through the
 // safety filter (egregious content dropped, not stored) and a PII scrub
@@ -225,10 +245,15 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
 
   try {
     const sanitized = sanitizeDetails(details);
+    // Promote the prediction ↔ outcome pair into columns as it arrives (still
+    // kept in details too, for back-compat with the calibration reader).
+    const rawPred = sanitized && sanitized.predictedScore;
+    const predScore = /^[0-9.]+$/.test(String(rawPred ?? '')) ? Number(rawPred) : null;
+    const predTier  = sanitized && typeof sanitized.predictedTier === 'string' ? sanitized.predictedTier : null;
     await pool.query(
-      `INSERT INTO match_outcomes (reporter_id, other_user_id, outcome, details)
-       VALUES ($1, $2, $3, $4)`,
-      [req.user.id, otherUserId, outcome, sanitized]
+      `INSERT INTO match_outcomes (reporter_id, other_user_id, outcome, details, predicted_score, predicted_tier)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [req.user.id, otherUserId, outcome, sanitized, predScore, predTier]
     );
     res.json({ recorded: true });
     // Page on a crisis/threat note AFTER responding — best-effort, non-blocking.

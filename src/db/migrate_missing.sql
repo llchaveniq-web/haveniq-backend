@@ -543,6 +543,13 @@ CREATE INDEX IF NOT EXISTS idx_pairing_outcomes_school ON pairing_outcomes (scho
 -- beats the linear baseline on held-out data), so every served day is signal
 -- banked now, not lost.
 ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS features         JSONB;
+-- Formation-time freeze (services/formationCapture.js). Unlike `features` (the
+-- mutable serve-time snapshot, refreshed on every impression), these are
+-- WRITE-ONCE at match_lifecycle stage:'formed' — the launch-critical training
+-- anchor. formed_at stamps when the pair actually matched; frozen_features holds
+-- both users' full signal vectors (scored channels + zero-weight extras).
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS formed_at        TIMESTAMPTZ;
+ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS frozen_features  JSONB;
 ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS score_at_serve   INTEGER;
 ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS first_served_at  TIMESTAMPTZ;
 ALTER TABLE pairing_outcomes ADD COLUMN IF NOT EXISTS last_served_at   TIMESTAMPTZ;

@@ -62,6 +62,7 @@ const ALLOWED_TYPES = new Set([
   'schedule_block', 'social_connection', 'social_group',
   'voice_recording_meta', 'integration_connected', 'time_capsule',
   'financial_profile', 'profile_update', 'validation_score',
+  'match_lifecycle',   // pair funnel: {stage:'formed'|…, otherUserId, score?, school?}
 ]);
 
 // ─── POST /telemetry/batch ───────────────────────────────────────────────
@@ -130,6 +131,29 @@ router.post('/batch', requireAuth, async (req, res) => {
     }
   } catch (e) {
     console.error('[telemetry] validation_score persist failed:', e.message);
+  }
+
+  // Formation freeze: when a pair reaches match_lifecycle stage:'formed', capture
+  // BOTH users' full signal vectors keyed to the pair, WRITE-ONCE — the launch-
+  // critical training anchor we lose if we don't bank it from user #1. Pure side-
+  // channel (changes NO score; v10 matching is untouched). Idempotent per pair +
+  // fire-and-forget, so a freeze hiccup never fails the telemetry batch.
+  try {
+    const formed = valid.filter(e =>
+      e.type === 'match_lifecycle' && e.payload &&
+      e.payload.stage === 'formed' && typeof e.payload.otherUserId === 'string');
+    if (formed.length) {
+      const { freezeFormationVector } = require('../services/formationCapture');
+      for (const e of formed) {
+        const score = Number(e.payload.score);
+        freezeFormationVector(userId, e.payload.otherUserId, {
+          score:  Number.isFinite(score) ? score : undefined,
+          school: typeof e.payload.school === 'string' ? e.payload.school : undefined,
+        }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.error('[telemetry] formation freeze failed:', e.message);
   }
 
   // Deep-matching #6: persist pulse_drift (trajectory/velocity) into dedicated
