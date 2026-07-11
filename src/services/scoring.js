@@ -468,8 +468,12 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
   // from numerator AND denominator — the same invariant as v10's maxScore.
   let layer1Pct;
   if (V11) {
+    // opts.categoryWeightsV11 overrides the default set (shadow-validation weight
+    // sweeps + A/B tuning). Production passes nothing → the live weights.
+    const CW = (opts.categoryWeightsV11 && typeof opts.categoryWeightsV11 === 'object')
+      ? opts.categoryWeightsV11 : CATEGORY_WEIGHTS_V11;
     let wsum = 0, wtot = 0;
-    for (const [cat, w] of Object.entries(CATEGORY_WEIGHTS_V11)) {
+    for (const [cat, w] of Object.entries(CW)) {
       const cs = catScores[cat];
       if (cs && cs.max > 0) { wsum += w * (cs.earned / cs.max); wtot += w; }
     }
