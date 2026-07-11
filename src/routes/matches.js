@@ -11,7 +11,7 @@ const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { isViable, applyCampusRanking } = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 const { loadDrift } = require('../services/pulseDrift');
-const { calculateCompatibility, topFrictionTopic } = require('../services/scoring');
+const { calculateCompatibility, topFrictionTopic, matchingV11Enabled } = require('../services/scoring');
 const { computeFrictions } = require('../services/friction');
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { buildSuites } = require('../services/suiteOptimizer');
@@ -353,6 +353,10 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       isSoftBlocked: r.is_soft_blocked,
       shadowPenalty: parseFloat(r.shadow_penalty),
       breakdown:     r.breakdown || {},
+      // Which lens the communication category % represents, so the compat-report
+      // copy matches the math. Global (depends only on the v11 flag). Flag OFF ⇒
+      // 'similarity' ⇒ the app's default copy ⇒ no visible change until v11 is on.
+      communicationMode: matchingV11Enabled() ? 'adequacy' : 'similarity',
       whyMatched:    r.why_matched,
       // Secondary, display-only MBTI/DISC personality lens. Never affects
       // compatScore — see services/personalityPairing.js.

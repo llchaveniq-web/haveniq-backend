@@ -599,6 +599,11 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     capReason,              // 'smoking' | 'alcohol' | 'overnight' | null
     shadowPenalty: 0,       // retained for DB/back-compat; shadow scoring removed in v8
     breakdown,
+    // Tells the app which lens the communication category % represents, so its
+    // compat-report copy matches the math: 'adequacy' (v11 — can the pair resolve
+    // conflict) vs 'similarity' (v10 — how alike their styles are). Flag OFF ⇒
+    // 'similarity' ⇒ the app's default copy ⇒ no visible change until v11 is on.
+    communicationMode: V11 ? 'adequacy' : 'similarity',
   };
 }
 
@@ -794,6 +799,7 @@ module.exports = {
   QUESTION_POINTS,  // exported for the engine-analysis script (weight audit)
   WEIGHTS_VERSION,  // shared lockstep stamp — see the note by QUESTION_POINTS
   CATEGORY_WEIGHTS_V11,     // v11 cross-category evidence weights (shadow-validation + tests)
+  matchingV11Enabled,       // global v11 flag check — lets routes tag payloads with the mode
   COMMUNICATION_COMPETENCE, // v11 per-option competence map (tests)
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
