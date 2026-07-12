@@ -305,15 +305,22 @@ router.post('/submit', requireAuth, async (req, res) => {
     // the moment of completion. Powers drift analysis when they re-take
     // the quiz months later. Best-effort: failures are logged, not fatal.
     pool.query(
-      // $1 is cast to ::uuid — a bare $1 in the SELECT list deduces as text
-      // and clashes with the uuid comparison in the WHERE, which Postgres
-      // rejects ("inconsistent types deduced for parameter $1").
+      // user_profile_snapshot.user_id is TEXT in production (schema drift from
+      // an older, richer design — verified via information_schema, see the note
+      // in routes/admin.js), even though schema.sql/migrate_missing declare it
+      // UUID. Writing u.id (a uuid) straight in throws "column is of type text
+      // but expression is of type uuid", which — because this insert is
+      // best-effort/.catch()'d — silently drops EVERY snapshot: the quiz
+      // completes but nothing is ever captured, so GET /quiz/snapshots has no
+      // history to return and the "profile over time" screen stays empty.
+      // Cast the stored value to ::text (matching admin.js's working prod
+      // pattern) and keep the uuid comparison in the WHERE against users.id.
       `INSERT INTO user_profile_snapshot (user_id, trigger, snapshot)
-       SELECT $1::uuid, 'quiz_complete', jsonb_build_object(
+       SELECT u.id::text, 'quiz_complete', jsonb_build_object(
          'profile', to_jsonb(u) - 'password_hash',
          'answers', $2::jsonb
        )
-       FROM users u WHERE u.id = $1`,
+       FROM users u WHERE u.id = $1::uuid`,
       [req.user.id, JSON.stringify(merged)],
     ).catch(err => console.error('snapshot insert failed:', err));
 
@@ -662,13 +669,28 @@ function flatAnswerValue(raw) {
   return null;
 }
 
+// A snapshot's `snapshot` column is JSONB and normally arrives already parsed
+// into an object, but be tolerant of it coming back as a JSON string (double
+// encoding) or NULL (a legacy/partial row). Always hand computeDrift a plain
+// object of answers so it can never throw on a shape it didn't expect.
+function snapshotAnswers(snapshot) {
+  let s = snapshot;
+  if (typeof s === 'string') {
+    try { s = JSON.parse(s); } catch { return {}; }
+  }
+  const answers = s && typeof s === 'object' ? s.answers : null;
+  return answers && typeof answers === 'object' ? answers : {};
+}
+
 function computeDrift(prev, curr) {
-  const allIds = new Set([...Object.keys(prev || {}), ...Object.keys(curr || {})]);
+  const p = prev && typeof prev === 'object' ? prev : {};
+  const c = curr && typeof curr === 'object' ? curr : {};
+  const allIds = new Set([...Object.keys(p), ...Object.keys(c)]);
   let changed = 0, considered = 0;
   const categoryMoves = {};
   for (const id of allIds) {
-    const a = flatAnswerValue(prev[id]);
-    const b = flatAnswerValue(curr[id]);
+    const a = flatAnswerValue(p[id]);
+    const b = flatAnswerValue(c[id]);
     if (a == null || b == null) continue;
     considered += 1;
     if (a !== b) {
@@ -702,11 +724,19 @@ router.get('/snapshots', requireAuth, async (req, res) => {
     const out = [];
     let prevAnswers = null;
     for (const r of rows) {
-      const answers = r.snapshot?.answers ?? {};
-      const drift = prevAnswers ? computeDrift(prevAnswers, answers) : null;
+      const answers = snapshotAnswers(r.snapshot);
+      // The earliest snapshot has no predecessor, so its drift is always null.
+      // Never let a single malformed row 500 the whole history — the frontend
+      // treats any error status as "couldn't load," so degrade that row's
+      // drift to null and keep serving the rest.
+      let drift = null;
+      if (prevAnswers) {
+        try { drift = computeDrift(prevAnswers, answers); }
+        catch (e) { console.error('snapshot drift compute failed:', e); }
+      }
       out.push({
-        id:         r.id,
-        createdAt:  r.created_at,
+        id:         String(r.id),
+        createdAt:  r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
         // Don't ship the full answer payload to the client — only the
         // derived signals. Keeps the wire size small and avoids leaking
         // any text-answer free-form content unintentionally.
