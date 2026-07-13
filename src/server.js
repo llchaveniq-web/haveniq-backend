@@ -602,6 +602,12 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`\n🚀 HavenIQ API running on port ${PORT}`);
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+  // Echo the resolved DB HOST (never credentials) so a load-test operator can
+  // confirm at a glance that a staging instance is pointed at the STAGING
+  // Postgres — not production. Host only, parsed from DATABASE_URL.
+  let dbHost = '(DATABASE_URL unset)';
+  try { if (process.env.DATABASE_URL) dbHost = new URL(process.env.DATABASE_URL).host; } catch { dbHost = '(unparseable DATABASE_URL)'; }
+  console.log(`   Database host: ${dbHost}`);
   console.log(`   Health check: http://localhost:${PORT}/health\n`);
   // Fire the bootstrap after listen — Railway's healthcheck sees a live
   // /health within ms and won't roll back if the migration is slow.
