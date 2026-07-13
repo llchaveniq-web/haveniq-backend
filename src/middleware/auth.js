@@ -50,12 +50,19 @@ async function requireAuth(req, res, next) {
 
     // Pull fresh user from DB on every request (catches banned/deleted accounts)
     const { rows } = await pool.query(
-      'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason FROM users WHERE id = $1',
+      'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason, tokens_valid_after FROM users WHERE id = $1',
       [decoded.userId]
     );
 
     if (!rows[0]) {
       return res.status(401).json({ error: 'Account not found' });
+    }
+
+    // Session revocation: reject any token issued BEFORE the user's cutoff (set
+    // by POST /auth/logout-all). NULL cutoff ⇒ no check, so existing tokens are
+    // never invalidated by the migration. iat is in seconds; cutoff in ms.
+    if (sessionRevoked(decoded.iat, rows[0].tokens_valid_after)) {
+      return res.status(401).json({ error: 'Session ended. Please sign in again.' });
     }
 
     req.user = rows[0];
@@ -104,7 +111,7 @@ async function optionalAuth(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     if (decoded.purpose) return next();
     const { rows } = await pool.query(
-      'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason FROM users WHERE id = $1',
+      'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason, tokens_valid_after FROM users WHERE id = $1',
       [decoded.userId],
     );
     if (rows[0]) req.user = rows[0];
@@ -150,6 +157,14 @@ function csrfGuard(req, res, next) {
   return res.status(403).json({ error: 'CSRF check failed' });
 }
 
+// Pure: was this token (JWT `iat`, seconds) issued BEFORE the user's revocation
+// cutoff? Absent/NULL cutoff ⇒ never revoked, so the migration invalidates
+// nothing. Extracted so the /auth/logout-all revocation is unit-testable.
+function sessionRevoked(iat, tokensValidAfter) {
+  if (!tokensValidAfter || !iat) return false;
+  return iat * 1000 < new Date(tokensValidAfter).getTime();
+}
+
 function signToken(userId) {
   // 7-day TTL (was 30d). Combined with the /auth/refresh endpoint's
   // 7-day grace window, the maximum lifetime of a stolen JWT drops
@@ -162,4 +177,4 @@ function signToken(userId) {
   });
 }
 
-module.exports = { requireAuth, optionalAuth, refuseBanned, signToken, csrfGuard, extractSessionToken };
+module.exports = { requireAuth, optionalAuth, refuseBanned, signToken, csrfGuard, extractSessionToken, sessionRevoked };

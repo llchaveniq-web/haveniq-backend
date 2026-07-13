@@ -641,6 +641,23 @@ router.post('/logout', (req, res) => {
   res.json({ success: true });
 });
 
+// ── POST /auth/logout-all ──────────────────────────────────────────────────
+// "Sign out everywhere." Stamps tokens_valid_after=NOW() so EVERY outstanding
+// token for this user (including this one) is rejected by requireAuth from here
+// on — the way to kill a stolen bearer token before its 7-day expiry. The user
+// re-authenticates afterward. Requires a valid session to call (you can only
+// nuke your OWN sessions).
+router.post('/logout-all', requireAuth, async (req, res) => {
+  try {
+    await pool.query('UPDATE users SET tokens_valid_after = NOW() WHERE id = $1', [req.user.id]);
+    clearSessionCookie(res);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[auth/logout-all] failed:', err.message);
+    res.status(500).json({ error: 'Could not sign out all sessions' });
+  }
+});
+
 // ═══ Logged-in .edu re-verification ════════════════════════════════════════
 // Lets an already-signed-in student verify their school email and earn the
 // is_verified badge. Acts ONLY on the token-derived user + their account .edu —

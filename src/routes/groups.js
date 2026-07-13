@@ -310,9 +310,9 @@ router.post('/:id/join', requireAuth, async (req, res) => {
     await client.query('BEGIN');
 
     const { rows: groupRows } = await client.query(
-      `SELECT id, size_target, status,
+      `SELECT g.id, g.size_target, g.status, u.school AS creator_school,
               (SELECT COUNT(*)::int FROM match_group_members WHERE group_id = $1) AS member_count
-       FROM match_groups WHERE id = $1`,
+       FROM match_groups g JOIN users u ON u.id = g.creator_id WHERE g.id = $1`,
       [req.params.id],
     );
     const group = groupRows[0];
@@ -332,6 +332,17 @@ router.post('/:id/join', requireAuth, async (req, res) => {
     if (existing[0]) {
       await client.query('COMMIT');
       return res.json({ joined: true, alreadyMember: true });
+    }
+
+    // Campus scope: squads are same-campus (roommates share one place). Only a
+    // student at the squad's campus may join — this closes the "any authed user
+    // self-joins any squad by id" gap without needing an invite model. Case-
+    // insensitive; a missing school on either side passes (don't hard-block a
+    // profile that hasn't set a school yet).
+    if (group.creator_school && req.user.school &&
+        group.creator_school.trim().toLowerCase() !== req.user.school.trim().toLowerCase()) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ error: 'This squad is for a different campus.' });
     }
 
     if (group.member_count >= group.size_target) {

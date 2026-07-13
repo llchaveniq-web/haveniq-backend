@@ -29,6 +29,11 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_live ON api_keys (key_hash) WHERE revoke
 -- subscription.* events (which carry `customer` but no userId) back to a user via
 -- this column. Subscription STATE (status/plan/period) lives in `subscriptions`.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+-- Session revocation ("log out everywhere"). Tokens whose JWT `iat` predates this
+-- instant are rejected by requireAuth. NULL = never revoked (so existing tokens
+-- stay valid — no mass logout on deploy). Set to NOW() by POST /auth/logout-all,
+-- which kills a stolen bearer token before its 7-day expiry.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tokens_valid_after TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_users_stripe_customer ON users (stripe_customer_id) WHERE stripe_customer_id IS NOT NULL;
 
 -- ── Housing timing (LEGAL: public Zillow Research ZORI data, no scraping) ─────

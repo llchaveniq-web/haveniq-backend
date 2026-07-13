@@ -4,7 +4,22 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test_secret_at_least_thirty_
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { readTokenCookie, setSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
-const { extractSessionToken, csrfGuard } = require('./auth');
+const { extractSessionToken, csrfGuard, sessionRevoked } = require('./auth');
+
+// ── sessionRevoked (POST /auth/logout-all revocation) ───────────────────────
+test('sessionRevoked: token issued BEFORE the cutoff is revoked; after is not', () => {
+  const now = Date.now();
+  const iatSec = Math.floor(now / 1000);
+  // cutoff 1h in the FUTURE relative to this token → revoked
+  assert.strictEqual(sessionRevoked(iatSec, new Date(now + 3600e3).toISOString()), true);
+  // cutoff 1h in the PAST → token issued after → NOT revoked
+  assert.strictEqual(sessionRevoked(iatSec, new Date(now - 3600e3).toISOString()), false);
+  // NULL/absent cutoff → never revoked (deploy-safe: existing tokens unaffected)
+  assert.strictEqual(sessionRevoked(iatSec, null), false);
+  assert.strictEqual(sessionRevoked(iatSec, undefined), false);
+  // missing iat → don't revoke (fail-open on a malformed token; verify already ran)
+  assert.strictEqual(sessionRevoked(undefined, new Date(now + 3600e3).toISOString()), false);
+});
 
 function mkRes() {
   return {
