@@ -1,0 +1,4 @@
+# Generated per-run artifacts — contain bearer tokens / staging-specific data.
+pairs.json
+viewer-ids.txt
+tokens.txt
