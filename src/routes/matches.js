@@ -21,6 +21,35 @@ const { safetyReport, safetyBlock, aiLimiter } = require('../middleware/rateLimi
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
 
+// Access gate for the AI-narrative / detail match endpoints (openers, explain,
+// score-history). A bare compatibility_scores row was too broad — one exists
+// for ANY quiz-completed pair, so an authed user could pull Claude-narrated fit
+// reports (and score timelines) on strangers at other schools: cheap
+// enumeration. The legitimate audience is people you'd actually room with:
+// someone on YOUR campus (the pre-connect feed already shows their fit report),
+// or anyone you've opened a connect request with (the path a thin-pool
+// cross-school match takes next). Returns true iff the viewer may see match
+// detail about targetId. Cheap (indexed lookups), and both branches only ever
+// match pairs the engine actually scored, so nothing legitimate is lost.
+async function mayViewMatchDetail(viewerId, viewerSchool, targetId) {
+  if (viewerSchool && viewerSchool.trim()) {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM users
+        WHERE id = $1 AND school IS NOT NULL
+          AND lower(trim(school)) = lower(trim($2)) LIMIT 1`,
+      [targetId, viewerSchool],
+    );
+    if (rows.length) return true;
+  }
+  const { rows: cr } = await pool.query(
+    `SELECT 1 FROM connect_requests
+      WHERE (from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1)
+      LIMIT 1`,
+    [viewerId, targetId],
+  );
+  return cr.length > 0;
+}
+
 // Best-effort parent notification on a student's FIRST accepted match.
 // Called twice — once for each side of the pair. Each user's row has
 // `parent_notified` which gates against repeat sends. Wrapped in its own
@@ -823,6 +852,13 @@ router.get('/:userId/score-history', requireAuth, async (req, res) => {
     const otherId = req.params.userId;
     const meId    = req.user.id;
 
+    // Same gate as openers/explain: only a same-campus or connected pair may
+    // read this pairing's score timeline (was ungated — any authed user could
+    // pull the score history for an arbitrary pair by id).
+    if (!(await mayViewMatchDetail(meId, req.user.school, otherId))) {
+      return res.status(403).json({ error: 'not a match' });
+    }
+
     const { rows } = await pool.query(
       `SELECT score, calculated_at
        FROM compatibility_scores
@@ -1031,17 +1067,10 @@ router.get('/:userId/openers', requireAuth, aiLimiter, async (req, res) => {
     return res.status(400).json({ error: 'invalid target user id' });
   }
 
-  // Only generate for a genuine match. A compatibility_scores row means the
-  // engine actually paired these two (a feed match or a connected thread —
-  // every legitimate caller has one). Without this gate an authenticated user
-  // could point /openers at ANY user id to burn Claude budget.
-  const { rows: relRows } = await pool.query(
-    `SELECT 1 FROM compatibility_scores
-      WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
-      LIMIT 1`,
-    [viewerId, targetId],
-  );
-  if (relRows.length === 0) {
+  // Only generate for someone the viewer could actually room with: same campus,
+  // or a pair they've opened a connect request with. Blocks cross-school
+  // stranger enumeration (and Claude-budget abuse against arbitrary user ids).
+  if (!(await mayViewMatchDetail(viewerId, req.user.school, targetId))) {
     return res.status(403).json({ error: 'not a match' });
   }
 
@@ -1195,18 +1224,11 @@ router.get('/:userId/explain', requireAuth, aiLimiter, async (req, res) => {
     return res.status(400).json({ error: 'invalid target user id' });
   }
 
-  // Only explain a genuine match. A compatibility_scores row means the engine
-  // actually paired these two — every legitimate caller (the Fit Report) has
-  // one. This is also the one path that reads another user's compatibility
-  // profile, so the gate keeps that read scoped to real matches and stops an
-  // authenticated user from burning Claude budget against arbitrary user ids.
-  const { rows: relRows } = await pool.query(
-    `SELECT 1 FROM compatibility_scores
-      WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
-      LIMIT 1`,
-    [viewerId, targetId],
-  );
-  if (relRows.length === 0) {
+  // Scope to someone the viewer could actually room with: same campus, or a
+  // pair they've opened a connect request with. This is also the one path that
+  // reads another user's compatibility profile, so the gate keeps that read off
+  // cross-school strangers and stops Claude-budget abuse against arbitrary ids.
+  if (!(await mayViewMatchDetail(viewerId, req.user.school, targetId))) {
     return res.status(403).json({ error: 'not a match' });
   }
 
