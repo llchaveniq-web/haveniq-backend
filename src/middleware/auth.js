@@ -33,7 +33,7 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Missing or invalid authorization' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
 
     // Reject tokens with a `purpose` claim. The 2FA login flow issues a
     // short-lived JWT with `purpose: '2fa-challenge'` that must ONLY be
@@ -101,7 +101,7 @@ async function optionalAuth(req, res, next) {
   try {
     const token = extractSessionToken(req);
     if (!token) return next();
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     if (decoded.purpose) return next();
     const { rows } = await pool.query(
       'SELECT id, email, school, first_name, last_name, is_verified, is_paused, quiz_completed, is_premium, trust_score, is_banned, ban_reason FROM users WHERE id = $1',

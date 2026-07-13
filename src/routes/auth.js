@@ -90,6 +90,17 @@ const verifyLimitIp = rateLimit({
   message: { error: 'Too many verification attempts from this network.' },
 });
 
+// /auth/verify-email is authed (the OTP is tied to req.user.email from the token,
+// not the body), so key the limiter on the user id. A per-user cap alongside the
+// per-code 3-attempt cap, matching the /verify-code posture (was relying only on
+// the attempt cap + the global limiter).
+const verifyEmailLimit = rateLimit({
+  windowMs: 10 * 60 * 1000,  // 10 min
+  max: 10,
+  message: { error: 'Too many verification attempts.' },
+  keyGenerator: (req) => (req.user?.id ? `uid:${req.user.id}` : ipKeyGenerator(req)),
+});
+
 const refreshLimitIp = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
@@ -584,7 +595,7 @@ router.post('/refresh', refreshLimitIp, async (req, res) => {
     if (!token) return res.status(400).json({ error: 'token required' });
 
     const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true });
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { ignoreExpiration: true, algorithms: ['HS256'] });
 
     // SECURITY: reject typed tokens. A 2FA challenge JWT (purpose='2fa-challenge',
     // 5-min TTL, embedded userId) would otherwise round-trip through this endpoint
@@ -692,7 +703,7 @@ router.post('/resend-verification', requireAuth, resendVerifyLimit, async (req, 
 
 // ── POST /auth/verify-email (auth; body: { code }) ─────────────────────────
 // The ONLY place is_verified may be set to true post-signup.
-router.post('/verify-email', requireAuth, async (req, res) => {
+router.post('/verify-email', requireAuth, verifyEmailLimit, async (req, res) => {
   try {
     const userId = req.user.id;
     const email  = (req.user.email || '').toLowerCase().trim();

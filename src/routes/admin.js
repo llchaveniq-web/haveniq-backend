@@ -102,7 +102,7 @@ router.post('/review/:userId/approve', requireAuth, requireFounder, async (req, 
       [req.params.userId],
     );
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    console.log(`[admin/review] APPROVED ${rows[0].email} by founder ${req.user.id}`);
+    console.log(`[admin/review] APPROVED user ${rows[0].id} by founder ${req.user.id}`);
     res.json({ ok: true, userId: rows[0].id });
   } catch (err) {
     console.error('[admin/review/approve] failed:', err);
@@ -124,7 +124,7 @@ router.post('/review/:userId/reject', requireAuth, requireFounder, async (req, r
       [req.params.userId, reason],
     );
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
-    console.log(`[admin/review] REJECTED ${rows[0].email} by founder ${req.user.id}: ${reason}`);
+    console.log(`[admin/review] REJECTED user ${rows[0].id} by founder ${req.user.id}: ${reason}`);
     res.json({ ok: true, userId: rows[0].id });
   } catch (err) {
     console.error('[admin/review/reject] failed:', err);

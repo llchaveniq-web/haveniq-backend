@@ -375,7 +375,7 @@ router.post('/challenge', challengeLimit, async (req, res) => {
 
     let decoded;
     try {
-      decoded = jwt.verify(challenge, process.env.JWT_SECRET);
+      decoded = jwt.verify(challenge, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     } catch {
       return res.status(401).json({ error: 'Challenge expired. Sign in again.' });
     }

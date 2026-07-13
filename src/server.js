@@ -167,7 +167,7 @@ io.use(async (socket, next) => {
     if (!token) throw new Error('No token');
 
     const jwt    = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
 
     const { rows } = await pool.query(
       'SELECT id, first_name, is_banned FROM users WHERE id = $1',
