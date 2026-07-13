@@ -22,7 +22,7 @@
  *   • Self-migrating table; failures never touch other flows.
  */
 const router    = require('express').Router();
-const rateLimit = require('express-rate-limit');
+const rateLimit = require('../lib/rateLimit');
 const pool      = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { screenMessage } = require('../lib/contentFilter');

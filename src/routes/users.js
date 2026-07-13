@@ -10,8 +10,8 @@ const { notDemo } = require('../lib/demoFilter');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const { screenMessage } = require('../lib/contentFilter');
 const crypto    = require('crypto');
-const rateLimit = require('express-rate-limit');
-const { ipKeyGenerator } = require('express-rate-limit');
+const rateLimit = require('../lib/rateLimit');
+const { ipKeyGenerator } = require('../lib/rateLimit');
 const { sendParentInviteEmail, generateOTP, sendOTPEmail } = require('../services/email');
 const { reportServerError } = require('./sentryTunnel');
 

@@ -140,6 +140,10 @@ CREATE TABLE IF NOT EXISTS compatibility_scores (
 );
 CREATE INDEX IF NOT EXISTS idx_scores_user_a ON compatibility_scores(user_a);
 CREATE INDEX IF NOT EXISTS idx_scores_user_b ON compatibility_scores(user_b);
+-- Composite (user, score DESC): covers the /matches/feed WHERE + ORDER BY score
+-- DESC in one index scan (no sort). See migrate_missing.sql launch-capacity note.
+CREATE INDEX IF NOT EXISTS idx_scores_user_a_score ON compatibility_scores(user_a, score DESC);
+CREATE INDEX IF NOT EXISTS idx_scores_user_b_score ON compatibility_scores(user_b, score DESC);
 
 -- ── Connect requests ──────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS connect_requests (
@@ -152,6 +156,7 @@ CREATE TABLE IF NOT EXISTS connect_requests (
   UNIQUE(from_user, to_user)
 );
 CREATE INDEX IF NOT EXISTS idx_requests_to ON connect_requests(to_user);
+CREATE INDEX IF NOT EXISTS idx_requests_from ON connect_requests(from_user);
 
 -- ── Conversations ─────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS conversations (

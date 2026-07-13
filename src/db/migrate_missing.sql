@@ -644,3 +644,23 @@ CREATE TABLE IF NOT EXISTS text_insight_models (
   reason      TEXT,
   updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- ── Launch-capacity indexes (2026-07 University of Ohio load-test) ───────────
+-- Serve GET /matches/feed — the heaviest endpoint — without a sequential scan
+-- degrading first under load. The feed's driving query is:
+--     FROM compatibility_scores cs
+--     JOIN users u ON (CASE WHEN cs.user_a=$1 THEN cs.user_b ELSE cs.user_a END)
+--     LEFT JOIN connect_requests cr ON (from=$1 AND to=u.id) OR (to=$1 AND from=u.id)
+--     WHERE (cs.user_a=$1 OR cs.user_b=$1) AND ... ORDER BY cs.score DESC LIMIT 50
+--
+-- (1) connect_requests.from_user had NO index (only to_user did), so the feed's
+--     LEFT JOIN and the /connect + match-detail lookups seq-scanned it. Add it.
+CREATE INDEX IF NOT EXISTS idx_requests_from ON connect_requests(from_user);
+--
+-- (2) Composite (user, score DESC) covers the WHERE (user_a=$1 / user_b=$1) plus
+--     the ORDER BY cs.score DESC in one index scan — no post-filter sort. The OR
+--     is planned as a BitmapOr of the two. These SUPERSEDE the single-column
+--     idx_scores_user_a / idx_scores_user_b (kept for now; drop once EXPLAIN
+--     ANALYZE on staging confirms the composites are the chosen plan).
+CREATE INDEX IF NOT EXISTS idx_scores_user_a_score ON compatibility_scores(user_a, score DESC);
+CREATE INDEX IF NOT EXISTS idx_scores_user_b_score ON compatibility_scores(user_b, score DESC);

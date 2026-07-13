@@ -1,6 +1,6 @@
 const router = require('express').Router();
-const rateLimit = require('express-rate-limit');
-const { ipKeyGenerator } = require('express-rate-limit');
+const rateLimit = require('../lib/rateLimit');
+const { ipKeyGenerator } = require('../lib/rateLimit');
 const crypto = require('crypto');
 const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail, sendWelcomeEmail, sendFounderSignupAlert } = require('../services/email');

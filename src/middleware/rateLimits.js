@@ -16,8 +16,8 @@
 // ~5-10 house rules during onboarding, ~5 nominations/semester. Anything
 // dramatically above that pattern is almost certainly broken UX or abuse.
 
-const rateLimit = require('express-rate-limit');
-const { ipKeyGenerator } = require('express-rate-limit');
+const rateLimit = require('../lib/rateLimit');
+const { ipKeyGenerator } = require('../lib/rateLimit');
 
 function userOrIpKey(req) {
   // req.user is set by requireAuth before these limiters run.

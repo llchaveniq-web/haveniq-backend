@@ -370,7 +370,7 @@ async function dispatchAutoFix(triage, report) {
 // costs a Claude triage call + a Discord post. A real client's ErrorBoundary
 // fires only a handful on a crash, so 10/5min/IP is generous for legit use and
 // shuts down the abuse. A dropped report is harmless (return a benign 200).
-const reportLimiter = require('express-rate-limit')({
+const reportLimiter = require('../lib/rateLimit')({
   windowMs: 5 * 60 * 1000,
   max: 10,
   standardHeaders: true,
