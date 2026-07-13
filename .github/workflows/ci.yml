@@ -1,0 +1,30 @@
+name: CI (unit tests)
+
+# Pre-merge gate: runs the Node test suite on every pull request and on
+# pushes to any branch. Unlike smoke-test.yml (which verifies the LIVE
+# production deploy after a push to main), this validates the code IN the
+# PR before it merges — no network, DB, or external services required.
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]   # main is covered by the post-deploy smoke test
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # The auth module refuses to boot without a >=32-char JWT_SECRET.
+      # Tests don't verify real tokens, so any throwaway value works.
+      JWT_SECRET: ci-test-secret-not-used-for-real-tokens-0123456789
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
