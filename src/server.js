@@ -374,6 +374,7 @@ app.use('/groups',   require('./routes/groups'));
 app.use('/feature-state', require('./routes/featureState')); // generic per-feature persistence
 app.use('/walkscore', require('./routes/walkscore')); // Walk/Transit/Bike Score proxy (key stays server-side)
 app.use('/referrals', require('./routes/referrals')); // unique invite codes + referral attribution
+app.use('/circle',    require('./routes/circle'));    // your referred users + compatibility to each
 app.use('/vouches',  require('./routes/vouches'));    // past-roommate vouches (public submit → pending → owner approves)
 app.use('/feature-usage', require('./routes/featureUsage')); // real "popular with students" aggregate (distinct users)
 app.use('/search',   require('./routes/search'));
