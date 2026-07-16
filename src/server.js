@@ -358,6 +358,7 @@ app.use('/auth',     require('./routes/auth'));
 // finishes a 2FA-required sign-in.
 app.use('/auth/2fa', require('./routes/twoFactor'));
 app.use('/users',    require('./routes/users'));
+app.use('/users',    require('./routes/userPhotos')); // multi-photo gallery: /users/:id/photos, /users/me/photos
 app.use('/quiz',     require('./routes/quiz'));
 app.use('/matches',  require('./routes/matches'));
 app.use('/matches',  require('./routes/matchOfTheDay'));  // /matches/today + /matches/today/action

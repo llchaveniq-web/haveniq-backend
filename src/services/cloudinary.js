@@ -9,6 +9,7 @@
 // error rather than silently failing — early-launch we'd rather surface
 // "storage not configured" to the dev than save photos to /dev/null.
 
+const crypto     = require('crypto');
 const cloudinary = require('cloudinary').v2;
 const analytics  = require('./analytics');
 
@@ -64,6 +65,22 @@ if (!MODERATION_ENABLED) {
   console.warn('[cloudinary] AI moderation DISABLED. Set ENABLE_CLOUDINARY_MODERATION=true on Railway after enabling the AWS Rekognition add-on in the Cloudinary dashboard.');
 }
 
+// Shared: inspect the (synchronous, aws_rek) moderation verdict on an upload
+// result. If rejected, best-effort delete the blob and return a
+// ModerationRejectedError for the caller to throw; otherwise return null.
+async function rejectIfModerated(result, publicId, userId, source) {
+  const verdict = Array.isArray(result?.moderation) ? result.moderation[0] : null;
+  if (verdict?.status !== 'rejected') return null;
+  try { await cloudinary.uploader.destroy(publicId); }
+  catch { /* swallow; the rejection itself is what matters */ }
+  const labels = verdict.response?.moderation_labels || verdict.response?.moderationLabels || [];
+  const topLabel = labels[0]?.name || labels[0]?.Name || 'inappropriate content';
+  analytics.track(analytics.EVENTS.photo_flagged_nsfw, userId, { source });
+  return new ModerationRejectedError(
+    `Photo blocked (${topLabel}). Please upload a clear, family-friendly photo of your face.`,
+  );
+}
+
 function uploadProfilePhoto(userId, buffer) {
   return new Promise((resolve, reject) => {
     if (!ensureConfigured()) {
@@ -95,20 +112,8 @@ function uploadProfilePhoto(userId, buffer) {
         //   'pending'  — async review (shouldn't happen for aws_rek but
         //                handled defensively — treat as approved for now,
         //                rely on a webhook later if we add async paths)
-        const verdict = Array.isArray(result?.moderation) ? result.moderation[0] : null;
-        if (verdict?.status === 'rejected') {
-          // Best-effort cleanup of the rejected blob — no point storing it.
-          try { await cloudinary.uploader.destroy(`haveniq/users/${userId}`); }
-          catch { /* swallow; the rejection itself is what matters */ }
-          const labels = verdict.response?.moderation_labels || verdict.response?.moderationLabels || [];
-          const topLabel = labels[0]?.name || labels[0]?.Name || 'inappropriate content';
-          analytics.track(analytics.EVENTS.photo_flagged_nsfw, userId, {
-            source: 'profile_photo',
-          });
-          return reject(new ModerationRejectedError(
-            `Photo blocked (${topLabel}). Please upload a clear, family-friendly photo of your face.`,
-          ));
-        }
+        const modErr = await rejectIfModerated(result, `haveniq/users/${userId}`, userId, 'profile_photo');
+        if (modErr) return reject(modErr);
         resolve(result.secure_url);
       },
     );
@@ -129,4 +134,62 @@ async function deleteProfilePhoto(userId) {
   }
 }
 
-module.exports = { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError };
+/**
+ * Upload a GALLERY photo (multi-photo profiles). Unlike uploadProfilePhoto's
+ * deterministic per-user public_id (single photo, overwrites), each gallery
+ * photo gets a UNIQUE public_id so several coexist. Returns { url, publicId }
+ * (the caller stores public_id so it can delete this specific asset later).
+ * Runs the same AI moderation gate.
+ */
+function uploadUserGalleryPhoto(userId, buffer) {
+  return new Promise((resolve, reject) => {
+    if (!ensureConfigured()) {
+      reject(new Error('Cloudinary not configured (missing CLOUDINARY_* env vars)'));
+      return;
+    }
+    const publicId = `haveniq/users/${userId}/gallery/${crypto.randomUUID()}`;
+    const uploadOptions = {
+      public_id:     publicId,
+      overwrite:     false,
+      resource_type: 'image',
+      transformation: [
+        { width: 512, height: 512, gravity: 'face', crop: 'fill' },
+        { quality: 'auto', fetch_format: 'auto' },
+      ],
+    };
+    if (MODERATION_ENABLED) {
+      uploadOptions.moderation = 'aws_rek';
+    }
+    const stream = cloudinary.uploader.upload_stream(
+      uploadOptions,
+      async (err, result) => {
+        if (err) return reject(err);
+        const modErr = await rejectIfModerated(result, publicId, userId, 'gallery_photo');
+        if (modErr) return reject(modErr);
+        resolve({ url: result.secure_url, publicId: result.public_id });
+      },
+    );
+    stream.end(buffer);
+  });
+}
+
+/**
+ * Delete one Cloudinary asset by its exact public_id (a single gallery photo).
+ * Idempotent + best-effort — never throws.
+ */
+async function deleteByPublicId(publicId) {
+  if (!ensureConfigured() || !publicId) return;
+  try {
+    await cloudinary.uploader.destroy(publicId);
+  } catch {
+    // Best-effort — a DB row removal shouldn't fail on an orphaned blob.
+  }
+}
+
+module.exports = {
+  uploadProfilePhoto,
+  deleteProfilePhoto,
+  uploadUserGalleryPhoto,
+  deleteByPublicId,
+  ModerationRejectedError,
+};

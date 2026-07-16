@@ -664,3 +664,18 @@ CREATE INDEX IF NOT EXISTS idx_requests_from ON connect_requests(from_user);
 --     ANALYZE on staging confirms the composites are the chosen plan).
 CREATE INDEX IF NOT EXISTS idx_scores_user_a_score ON compatibility_scores(user_a, score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_user_b_score ON compatibility_scores(user_b, score DESC);
+
+-- ── Multi-photo profiles (user_photos) — 2026-07-13 ─────────────────────────
+-- Per-user photo gallery (cap of 6 enforced in the route). position 0 = primary;
+-- the routes keep users.photo_url synced to the position-0 photo so legacy
+-- consumers are unchanged. gen_random_uuid() needs pgcrypto.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS user_photos (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  public_id  TEXT,
+  position   SMALLINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_photos_user_pos ON user_photos (user_id, position);

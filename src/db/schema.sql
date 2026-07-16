@@ -204,6 +204,22 @@ CREATE TABLE IF NOT EXISTS profile_views (
 );
 CREATE INDEX IF NOT EXISTS idx_views_viewed ON profile_views(viewed_id, viewed_at DESC);
 
+-- ── Multi-photo profiles ─────────────────────────────────────────────────
+-- Per-user photo gallery (cap of 6, enforced in the route). position 0 is the
+-- primary photo; the /users/me/photos routes keep users.photo_url synced to
+-- the position-0 url so legacy consumers of photo_url are unchanged.
+-- gen_random_uuid() needs pgcrypto (rest of the schema uses uuid-ossp).
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE IF NOT EXISTS user_photos (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  url        TEXT NOT NULL,
+  public_id  TEXT,
+  position   SMALLINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_user_photos_user_pos ON user_photos (user_id, position);
+
 -- ── User profile snapshots ───────────────────────────────────────────────
 -- Frozen point-in-time captures of a user's profile + quiz state. Powers
 -- longitudinal drift analysis ("how has this person changed since freshman
