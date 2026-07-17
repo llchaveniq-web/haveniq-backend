@@ -20,8 +20,16 @@ test('QUESTION_POINTS fingerprint is pinned to the current version', () => {
   // bump WEIGHTS_VERSION and update this expected fingerprint. (The app no longer
   // mirrors numeric weights — see constants/quiz.ts — so weight VALUES are
   // backend-only; only the scored QUESTION SET stays in app lockstep.)
+  //
+  // v11.1 — ids 65, 66, 67 REMOVED from this fingerprint. They were the v10
+  // thermostat / sleep-sensitivity / bill-reliability axes, which the app never
+  // shipped: no user ever answered them, and a qid only reaches rawScore/maxScore
+  // when BOTH users answered, so they could never move a score (verified against
+  // production: 0 quiz_answers rows contain keys 65/66/67). They are now the
+  // STRESS questions the app stages at those ids, scored categorically by the
+  // clash matrix — deliberately NOT here, because this set is the ORDINAL scorer.
   const EXPECTED_POINTS =
-    '14:35,48:30,49:35,50:45,51:15,52:20,53:25,54:20,55:20,56:30,57:18,60:30,62:28,63:16,65:20,66:28,67:28,68:20';
-  assert.equal(WEIGHTS_VERSION, 'v11.0');
+    '14:35,48:30,49:35,50:45,51:15,52:20,53:25,54:20,55:20,56:30,57:18,60:30,62:28,63:16,68:20';
+  assert.equal(WEIGHTS_VERSION, 'v11.1');
   assert.equal(weightFingerprint(QUESTION_POINTS), EXPECTED_POINTS);
 });

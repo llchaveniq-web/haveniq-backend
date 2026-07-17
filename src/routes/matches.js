@@ -218,6 +218,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          cs.complementary_dims,
          cs.converging_dims,
          cs.confidence,
+         cs.under_pressure,
          dq.answers AS candidate_answers,
          u.id,
          u.first_name,
@@ -379,6 +380,11 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // two" instead of a hard figure that looks as certain as a full-data one.
       confidence:    r.confidence != null ? parseFloat(r.confidence) : 1,
       isProvisional: r.confidence != null && parseFloat(r.confidence) < 1,
+      // Stress dimension (spec §4): { score, pattern, headline, pactSuggestion }.
+      // Spread so the key is ABSENT (not null) when the pair has no stress read —
+      // the frontend gates the "Under pressure" row on presence, so it stays
+      // unrendered until the app flips STRESS_IDS into SCORED_IDS.
+      ...(r.under_pressure ? { underPressure: r.under_pressure } : {}),
       isSoftBlocked: r.is_soft_blocked,
       shadowPenalty: parseFloat(r.shadow_penalty),
       breakdown:     r.breakdown || {},

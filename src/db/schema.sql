@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS compatibility_scores (
   shadow_penalty    NUMERIC(4,2) DEFAULT 0,
   breakdown         JSONB,                    -- { "attachment": 88, "emotional": 91, ... }
   why_matched       TEXT,
+  under_pressure    JSONB,           -- stress dimension: {score,pattern,headline,pactSuggestion} (spec §4)
   calculated_at     TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_a, user_b),
   CHECK (user_a < user_b)  -- canonical ordering prevents duplicate pairs

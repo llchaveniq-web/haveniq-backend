@@ -679,3 +679,10 @@ CREATE TABLE IF NOT EXISTS user_photos (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_user_photos_user_pos ON user_photos (user_id, position);
+
+-- ── Stress dimension (docs/specs/stress-response-dimension.md §4) ────────────
+-- Per-pair "under pressure" read: { score, pattern, headline, pactSuggestion }.
+-- Written by the scorer (services/scoring.js scoreStress + stressInsight), served
+-- on the match payload. NULL for every pair until the app flips STRESS_IDS into
+-- SCORED_IDS, so the frontend's presence-gate keeps the row unrendered until then.
+ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS under_pressure JSONB;

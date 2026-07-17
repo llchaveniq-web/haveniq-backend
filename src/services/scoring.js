@@ -47,7 +47,12 @@ const { projectIndex, convergence, HORIZON_DEFAULT_DAYS } = require('./trajector
 // — the v11 change is the aggregation model, not the raw points — so flag-OFF
 // scoring is byte-identical to v10. The learning job proposes '*-learned-*'
 // successors for human approval, never auto-committing.
-const WEIGHTS_VERSION = 'v11.0';
+// v11.1 — the stress dimension. Two changes vs v11.0: ids 65/66/67 left the
+// ordinal QUESTION_POINTS set (they were unreachable dead entries — see the note
+// there), and they re-enter as the categorical `stress` category scored by the
+// clash matrix. The scored QUESTION SET is what stays in app lockstep, so this
+// bump IS the lockstep signal for flipping STRESS_IDS into SCORED_IDS.
+const WEIGHTS_VERSION = 'v11.1';
 
 const QUESTION_POINTS = {
   // ── Lifestyle (daily-living friction) — ~54% ──
@@ -69,10 +74,17 @@ const QUESTION_POINTS = {
   56: 30,  // spending alignment
   // ── v10 high-friction axes (optional; per-pair, scored only when BOTH
   //    answered, so additive to existing pairs' scores, never dilutive) ──
-  66: 28,  // sleep sensitivity — can you sleep THROUGH noise/light (≠ Q49 bedtime)
-  67: 28,  // bill reliability — pays their share on time (≠ Q56 money values)
-  65: 20,  // thermostat / temperature preference
   68: 20,  // weekday morning / bathroom timing
+  // NOTE — ids 65/66/67 were RECLAIMED for the stress dimension (see STRESS_*
+  // below). They previously sat here as thermostat (65) / sleep-sensitivity (66)
+  // / bill-reliability (67), but the app never shipped those questions, so no
+  // user ever answered them and — because a qid only accrues to rawScore/maxScore
+  // when BOTH users answered — they could never affect a score. Verified against
+  // production: 0 quiz_answers rows contain keys 65, 66, 67, or 68. Removing them
+  // is therefore a no-op for every existing pair, and frees the ids for the
+  // stress questions the app has staged at those exact ids (constants/quiz.ts).
+  // Stress is NOT scored here: it is categorical, not ordinal, so it never uses
+  // the |Δindex| diffScore curve — see the clash matrix below.
 };
 
 // Category → question ids. Re-derived from the surviving v8 ids: every
@@ -81,12 +93,141 @@ const QUESTION_POINTS = {
 // surviving QUESTION_POINTS; the breakdown guards against 0/0. Keys are kept
 // stable so the existing display mappings (HABIT_LABEL, CATEGORY_DISPLAY,
 // generateWhyMatched) keep resolving without a frontend change.
+// NOTE: `stress` (ids 65/66/67) is deliberately NOT here. This map drives the
+// ORDINAL loop (diffScore over |Δindex|); stress is categorical and is scored by
+// the clash matrix instead, then merged into catScores/breakdown as its own
+// category. See scoreStress() below.
 const CATEGORIES = {
-  lifestyle:     { ids: [48, 49, 50, 51, 52, 54, 55, 56, 65, 67, 68], label: 'Lifestyle' },      // 283
+  lifestyle:     { ids: [48, 49, 50, 51, 52, 54, 55, 56, 68],         label: 'Lifestyle' },      // 235
   communication: { ids: [14, 60, 62, 63],                             label: 'Communication' },  // 121
   control:       { ids: [57],                                         label: 'Control Style' },  //  30
-  nervous:       { ids: [53, 66],                                     label: 'Focus & Environment' }, // 53
+  nervous:       { ids: [53],                                         label: 'Focus & Environment' }, // 25
 };
+
+// ═══ Stress-Response dimension (docs/specs/stress-response-dimension.md) ═══
+// Roommate conflict happens under load, not on a good day. These three items
+// measure how each person behaves when overwhelmed, and we score the CLASH
+// between coping styles, not their similarity.
+//
+// Categorical, NOT ordinal: the risk is a specific PAIRING (pursue×withdraw),
+// not |Δindex|. So these never touch QUESTION_POINTS/diffScore — they are
+// scored by the matrices below and merged in as the `stress` category.
+//
+// INERT until the lockstep flip: the app stages these ids but keeps them out of
+// SCORED_IDS, so no user has answers at 65/66/67. scoreStress() returns null
+// unless BOTH users answered, so every existing pair scores bit-for-bit as
+// before. The moment the app flips STRESS_IDS into SCORED_IDS, this lights up.
+const STRESS_IDS = [65, 66, 67];
+
+// option index → style, mirroring constants/quiz.ts exactly (the `// comments`
+// in the staged defs ARE this mapping; they must not drift).
+const STRESS_STYLES = {
+  65: ['withdraw', 'reactive', 'pursue', 'suppress', 'control'],       // coping
+  66: ['solitude', 'co-regulate', 'parallel', 'sequenced'],            // recovery
+  67: ['pursue', 'withdraw', 'accommodate', 'suppress'],               // conflict
+};
+
+// Friction weights, 1 = harmonious … 5 = high friction. Symmetric by
+// construction. TUNABLE v1 — these are the spec's suggested values, not learned
+// ones; the outcome loop (§5) is what earns the right to change them.
+//
+// Key reads: pursue×withdraw = 5 (the classic demand-withdraw resentment loop);
+// suppress×anything >= 4 (issues fester); both-suppress = the quiet blowup;
+// control pairs are calm.
+const STRESS_CLASH = {
+  withdraw:   { withdraw: 2, reactive: 3, pursue: 5, suppress: 3, control: 2, accommodate: 3 },
+  reactive:   { withdraw: 3, reactive: 4, pursue: 3, suppress: 4, control: 3, accommodate: 4 },
+  pursue:     { withdraw: 5, reactive: 3, pursue: 2, suppress: 4, control: 2, accommodate: 3 },
+  suppress:   { withdraw: 3, reactive: 4, pursue: 4, suppress: 4, control: 3, accommodate: 4 },
+  control:    { withdraw: 2, reactive: 3, pursue: 2, suppress: 3, control: 3, accommodate: 3 },
+  // SPEC GAP, filled: Q67 option 2 emits `accommodate`, but the spec's §2 matrix
+  // has no accommodate row/col. v1 values below, same tunable status as the rest.
+  // Rationale: accommodating pairs badly with styles that never surface the issue
+  // (reactive/suppress → one caves, resentment banks) and is imbalanced-but-quiet
+  // against pursue.
+  accommodate:{ withdraw: 3, reactive: 4, pursue: 3, suppress: 4, control: 3, accommodate: 3 },
+};
+
+// Q66 recovery-need mismatch. solitude×co-regulate is the named clash (one needs
+// silence, the other needs to vent AT them); `sequenced` (space then talk) is the
+// flexible one and pairs low with everything.
+const RECOVERY_CLASH = {
+  solitude:      { solitude: 2, 'co-regulate': 5, parallel: 3, sequenced: 2 },
+  'co-regulate': { solitude: 5, 'co-regulate': 2, parallel: 3, sequenced: 2 },
+  parallel:      { solitude: 3, 'co-regulate': 3, parallel: 2, sequenced: 2 },
+  sequenced:     { solitude: 2, 'co-regulate': 2, parallel: 2, sequenced: 1 },
+};
+
+// Per-item weight, from the staged defs (Q65 high / Q66 medium / Q67 high).
+const STRESS_WEIGHTS = { 65: 0.4, 67: 0.4, 66: 0.2 };
+// The `stress` category's points, for its breakdown row + its share of the score.
+const STRESS_POINTS = 60;
+
+const STRESS_PACTS = {
+  pursue_withdraw:  'When one of us is overwhelmed: the person who needs space says so and names a time to come back to it, and we both hold that time.',
+  both_suppress:    "When something is bothering either of us: we say it within 24 hours, even badly. Silence isn't agreement.",
+  reactive_suppress:'When one of us snaps: we take 20 minutes, then the other says the thing they were holding back.',
+  recovery_mismatch:'After a rough day: quiet first, no questions. We check in once the door has been closed for a bit.',
+  complementary:    'When one of us is overwhelmed: we name it out loud early, before it turns into a thing.',
+};
+
+/**
+ * Score the stress dimension for a pair. PURE.
+ *
+ * Returns null unless BOTH users answered at least one stress item (so this is
+ * additive to existing pairs, never dilutive — the same invariant as every other
+ * optional axis). Otherwise:
+ *   { score, pattern, earned, max, clashes }
+ * where `score` is 0-100 and 100 = complementary / low-risk.
+ */
+function scoreStress(A, B) {
+  const styleOf = (X, qid) => {
+    const i = optIdx(X, qid);
+    if (i === null) return null;
+    return STRESS_STYLES[qid][i] ?? null;
+  };
+
+  const parts = [];   // { qid, w, clash } for items BOTH answered
+  const s = {};       // qid -> { a, b }
+  for (const qid of STRESS_IDS) {
+    const a = styleOf(A, qid), b = styleOf(B, qid);
+    if (!a || !b) continue;
+    s[qid] = { a, b };
+    const table = qid === 66 ? RECOVERY_CLASH : STRESS_CLASH;
+    const clash = table[a]?.[b];
+    if (!Number.isFinite(clash)) continue;   // unknown style ⇒ skip, never guess
+    parts.push({ qid, w: STRESS_WEIGHTS[qid], clash });
+  }
+  if (parts.length === 0) return null;
+
+  // Weighted mean of the answered items only, then renormalize — a pair that
+  // answered 2 of 3 is scored on those 2, not penalized for the third.
+  const wtot = parts.reduce((t, p) => t + p.w, 0);
+  const ws   = parts.reduce((t, p) => t + p.w * p.clash, 0) / wtot;   // ∈[1,5]
+  const friction = (ws - 1) / 4;                                       // ∈[0,1]
+  const score = Math.round((1 - friction) * 100);                      // 100 = low risk
+
+  // Pattern — most actionable first. pursue×withdraw is the marquee read and can
+  // surface on EITHER the coping item or the in-conflict item.
+  const pairIs = (qid, x, y) =>
+    s[qid] && ((s[qid].a === x && s[qid].b === y) || (s[qid].a === y && s[qid].b === x));
+  const bothAre = (qid, x) => s[qid] && s[qid].a === x && s[qid].b === x;
+
+  let pattern = null;
+  if (pairIs(65, 'pursue', 'withdraw') || pairIs(67, 'pursue', 'withdraw')) pattern = 'pursue_withdraw';
+  else if (bothAre(65, 'suppress') || bothAre(67, 'suppress'))              pattern = 'both_suppress';
+  else if (pairIs(65, 'reactive', 'suppress') || pairIs(67, 'reactive', 'suppress')) pattern = 'reactive_suppress';
+  else if (pairIs(66, 'solitude', 'co-regulate'))                           pattern = 'recovery_mismatch';
+  else if (score >= 70)                                                     pattern = 'complementary';
+
+  return {
+    score,
+    pattern,
+    earned: Math.round((score / 100) * STRESS_POINTS),
+    max: STRESS_POINTS,
+    clashes: parts.map(p => ({ qid: p.qid, clash: p.clash })),
+  };
+}
 
 // ── Dealbreaker → amplified question IDs ─────────────────────────────────
 // Each student picks up to 3 "what matters most to you" tags during
@@ -286,6 +427,12 @@ function matchingV11Enabled(opts) {
 const CATEGORY_WEIGHTS_V11 = {
   communication: 0.34, // HIGHEST — distinct dissolution predictor
   lifestyle:     0.30, // HIGH    — similarity predicts for living habits
+  stress:        0.20, // HIGH    — conflict happens under load, not on a good day.
+                       //           PRIOR, like the rest: earns its value from the
+                       //           §5 check-in loop, not from this line. The v11
+                       //           loop renormalizes over categories with max>0,
+                       //           so while stress is unanswered (today) this
+                       //           entry is inert and weights are unchanged.
   control:       0.20, // HIGH    — reliability / executive function
   nervous:       0.16, // MODERATE
 };
@@ -461,6 +608,18 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     cap = Math.min(cap, 50); capReason = capReason || 'cleanliness';
   }
 
+  // ── Stress dimension (spec §2) ──────────────────────────────────────────
+  // Categorical clash, scored outside the ordinal loop, then merged in as its own
+  // category so it earns a breakdown row and its honest share of the score.
+  // null unless BOTH answered ⇒ additive, never dilutive. Today no user has these
+  // answers (staged, not in SCORED_IDS), so this is a no-op until the flip.
+  const stress = scoreStress(A, B);
+  if (stress) {
+    catScores.stress = { earned: stress.earned, max: stress.max };
+    rawScore += stress.earned;
+    maxScore += stress.max;
+  }
+
   // v10: pooled point-share. v11: cross-category WEIGHTED AVERAGE of each
   // category's own fraction (communication weighted HIGHEST), over categories
   // where BOTH users answered ≥1 question. catScores[cat].max only accrues on
@@ -604,6 +763,14 @@ function calculateCompatibility(rawA, rawB, opts = {}) {
     // conflict) vs 'similarity' (v10 — how alike their styles are). Flag OFF ⇒
     // 'similarity' ⇒ the app's default copy ⇒ no visible change until v11 is on.
     communicationMode: V11 ? 'adequacy' : 'similarity',
+    // Spec §4. NULL unless both users answered the stress items, which is the
+    // gate the app's frontend renders on — so this stays absent (and the "Under
+    // pressure" row stays unrendered) until the lockstep flip. `headline` is
+    // added by the route layer from the Claude inference (§3); the scorer stays
+    // pure and offline-safe.
+    underPressure: stress
+      ? { score: stress.score, pattern: stress.pattern, pactSuggestion: STRESS_PACTS[stress.pattern] || null }
+      : null,
   };
 }
 
@@ -806,4 +973,11 @@ module.exports = {
   // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its
   // map from the canonical source instead of duplicating ids by hand.
   CATEGORIES,
+  // ── Stress dimension (spec) ──
+  scoreStress,      // pure pair scorer (unit tests + the inference's input)
+  STRESS_IDS,       // [65,66,67] — the lockstep id set the app stages
+  STRESS_STYLES,    // option index → style; MUST mirror constants/quiz.ts
+  STRESS_CLASH,     // tunable v1 friction matrix (tests + tuning sweeps)
+  RECOVERY_CLASH,
+  STRESS_PACTS,     // pattern → pre-filled agreement item (§4 pactSuggestion)
 };

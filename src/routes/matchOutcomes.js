@@ -19,6 +19,10 @@
  */
 
 const router = require('express').Router();
+// Spec §5 — the stress check-in item: "How did the last stressful stretch go?"
+// Closed vocab; anything else is dropped rather than stored.
+const STRESS_STRETCH_VALUES = new Set(['smooth', 'bumpy', 'clashed']);
+
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { screenMessage } = require('../lib/contentFilter');
@@ -144,6 +148,17 @@ async function ensureTable() {
     ALTER TABLE match_outcomes ADD COLUMN IF NOT EXISTS predicted_tier  TEXT;
     CREATE INDEX IF NOT EXISTS idx_match_outcomes_predcol
       ON match_outcomes(predicted_score);
+    -- Stress dimension validation (spec §5). Same prediction↔outcome shape as
+    -- predicted_score/predicted_tier above: stress_stretch is what the pair
+    -- REPORTED ('smooth' | 'bumpy' | 'clashed'), predicted_pattern is what the
+    -- clash matrix PREDICTED for them at check-in time. Storing both as columns
+    -- is what lets the cohort query answer the only question that matters:
+    -- did flagged-and-pacted pairs actually clash less?
+    ALTER TABLE match_outcomes ADD COLUMN IF NOT EXISTS stress_stretch    TEXT;
+    ALTER TABLE match_outcomes ADD COLUMN IF NOT EXISTS predicted_pattern TEXT;
+    CREATE INDEX IF NOT EXISTS idx_match_outcomes_stress
+      ON match_outcomes(predicted_pattern, stress_stretch)
+      WHERE predicted_pattern IS NOT NULL;
   `).catch((e) => console.error('[match_outcomes] ensure table:', e.message));
   // One-time backfill of the new columns from existing rows' details JSONB.
   if (!_predColsBackfilled) {
@@ -250,10 +265,37 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
     const rawPred = sanitized && sanitized.predictedScore;
     const predScore = /^[0-9.]+$/.test(String(rawPred ?? '')) ? Number(rawPred) : null;
     const predTier  = sanitized && typeof sanitized.predictedTier === 'string' ? sanitized.predictedTier : null;
+
+    // Stress validation (spec §5): "How did the last stressful stretch go?"
+    // Enum-guarded — anything else is dropped rather than stored, so the cohort
+    // query never has to clean free-text. Absent today (the app ships the item in
+    // the same lockstep release), which is why this is optional, not required.
+    const rawStretch = sanitized && sanitized.stressStretch;
+    const stressStretch = STRESS_STRETCH_VALUES.has(String(rawStretch))
+      ? String(rawStretch) : null;
+
+    // The prediction this outcome is scored against. Read server-side from the
+    // pair's stored row — NEVER from the payload, so a client can't relabel what
+    // we predicted and quietly launder the validation loop.
+    // Matched either direction rather than assuming the stored row is sorted —
+    // JS .sort() and Postgres LEAST() need not agree on collation, and a missed
+    // row here would silently label the outcome "unpredicted".
+    let predPattern = null;
+    if (stressStretch) {
+      const { rows: up } = await pool.query(
+        `SELECT under_pressure->>'pattern' AS pattern
+           FROM compatibility_scores
+          WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+          LIMIT 1`,
+        [req.user.id, otherUserId],
+      ).catch(() => ({ rows: [] }));
+      predPattern = up[0]?.pattern || null;
+    }
+
     await pool.query(
-      `INSERT INTO match_outcomes (reporter_id, other_user_id, outcome, details, predicted_score, predicted_tier)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [req.user.id, otherUserId, outcome, sanitized, predScore, predTier]
+      `INSERT INTO match_outcomes (reporter_id, other_user_id, outcome, details, predicted_score, predicted_tier, stress_stretch, predicted_pattern)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [req.user.id, otherUserId, outcome, sanitized, predScore, predTier, stressStretch, predPattern]
     );
     res.json({ recorded: true });
     // Page on a crisis/threat note AFTER responding — best-effort, non-blocking.

@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth, optionalAuth } = require('../middleware/auth');
 const { calculateCompatibility, generateWhyMatched, topFrictionTopic } = require('../services/scoring');
+const { fallbackHeadline } = require('../services/stressInsight');
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { loadDrift } = require('../services/pulseDrift');
 const { horizonFromMoveIn } = require('../services/trajectory');
@@ -487,13 +488,24 @@ async function scoreNewMatches(userId, newAnswers) {
       // Stored so the feed can render a low-confidence score as "still learning"
       // rather than a hard number that looks as certain as a full-data one.
       result.confidence,
+      // Stress dimension (spec §4). NULL unless BOTH answered the stress items,
+      // i.e. NULL for every pair until the app flips STRESS_IDS into SCORED_IDS.
+      // The headline stored here is the DETERMINISTIC per-pattern sentence: this
+      // path scores every candidate pair on quiz submit, so a Claude call here
+      // would be one API call per pair. The pair-specific narrative is generated
+      // lazily on the match-detail surface (where /explain already does cached
+      // per-pair Claude work) and overwrites this. Storing the fallback keeps
+      // §4's `headline: string` contract satisfied from the first write.
+      result.underPressure
+        ? JSON.stringify({ ...result.underPressure, headline: fallbackHeadline(result.underPressure.pattern) })
+        : null,
     ]);
   }
 
   if (rows.length === 0) return;
 
-  // Flatten into a single $1...$N param list. 13 columns per row.
-  const COLS = 13;
+  // Flatten into a single $1...$N param list. 14 columns per row.
+  const COLS = 14;
   const valuePlaceholders = rows
     .map((_, rowIdx) => {
       const base = rowIdx * COLS;
@@ -505,7 +517,7 @@ async function scoreNewMatches(userId, newAnswers) {
 
   await pool.query(
     `INSERT INTO compatibility_scores
-       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims, converging_dims, confidence)
+       (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims, converging_dims, confidence, under_pressure)
      VALUES ${valuePlaceholders}
      ON CONFLICT (user_a, user_b) DO UPDATE
      SET score          = EXCLUDED.score,
@@ -518,6 +530,7 @@ async function scoreNewMatches(userId, newAnswers) {
          validation_multiplier = EXCLUDED.validation_multiplier,
          complementary_dims    = EXCLUDED.complementary_dims,
          converging_dims       = EXCLUDED.converging_dims,
+         under_pressure        = EXCLUDED.under_pressure,
          confidence      = EXCLUDED.confidence,
          calculated_at   = NOW()`,
     params,
