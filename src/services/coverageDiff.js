@@ -27,7 +27,9 @@ const sentry = require('../utils/sentry');
 // Coverage quality ordering. A move to a LOWER rank is a regression.
 const LEVEL_RANK = { city: 3, metro: 2, county: 1, '404': 0 };
 
-const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+// Shared reader: a BLANK env var falls back to the guardrail, not to 0 —
+// Number('') is 0, which would silently zero a safety threshold.
+const { envNum: num } = require('../lib/envNum');
 function thresholds(over = {}) {
   return {
     rentMove:    num(process.env.WATCH_COVERAGE_RENT_MOVE, 0.10),     // material MoM move

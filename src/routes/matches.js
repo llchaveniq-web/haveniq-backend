@@ -75,7 +75,9 @@ async function maybeNotifyParent(studentId, matchUserId) {
       studentName:      row.first_name || 'Your student',
       matchName:        `${row.match_first} ${(row.match_last || '').charAt(0)}.`,
       matchSchool:      row.match_school,
-      compatibilityPct: Math.round(Number(row.compatibility) || 0),
+      // null when the pair has no score row (the join is a LEFT JOIN). Passing
+      // 0 here would have the email tell a parent "0% compatibility".
+      compatibilityPct: row.compatibility == null ? null : Math.round(Number(row.compatibility)),
       userId:           studentId,
     });
 

@@ -112,6 +112,13 @@ async function sendMatchEmail(toEmail, toName, matchName, score, userId = null) 
 // `compatibilityPct` — the algorithm's score (0-100)
 async function sendParentMatchEmail({ parentEmail, studentName, matchName, matchSchool, compatibilityPct, userId = null }) {
   try {
+    // Omit the percentage entirely when we don't have one. The score comes from
+    // a LEFT JOIN, so it can be null, and Number(null) is 0 — which used to tell
+    // a parent their child matched at "0% compatibility". Saying less is the
+    // honest option; stating a fabricated zero about someone's kid is not.
+    const pctLine = Number.isFinite(Number(compatibilityPct)) && compatibilityPct !== null
+      ? `${Math.round(Number(compatibilityPct))}% compatibility · ${matchSchool}`
+      : `${matchSchool}`;
     await getResend().emails.send({
       from:    'HavenIQ <noreply@haveniq.org>',
       to:      parentEmail,
@@ -132,7 +139,7 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
               </p>
               <div style="background:#FBF1EA; border-left:4px solid #A33625; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
                 <p style="font-size:18px; color:#2D2620; margin:0 0 6px; font-weight:600;">${studentName} just matched with ${matchName}.</p>
-                <p style="font-size:14px; color:#75695A; margin:0;">${compatibilityPct}% compatibility · ${matchSchool}</p>
+                <p style="font-size:14px; color:#75695A; margin:0;">${pctLine}</p>
               </div>
               <p style="color:#2D2620; font-size:14px; line-height:1.7; margin:0 0 18px;">
                 <strong>Why we tell you:</strong> Roommate decisions are big. We want you in the loop, not by sharing ${studentName}'s private profile, but by letting you know that the person they matched with is:

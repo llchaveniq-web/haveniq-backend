@@ -26,7 +26,9 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const MODEL = process.env.WATCH_DIGEST_MODEL || 'claude-haiku-4-5-20251001';
 
-const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+// Shared reader: a BLANK env var falls back to the guardrail, not to 0 —
+// Number('') is 0, which would silently zero a safety threshold.
+const { envNum: num } = require('../lib/envNum');
 function cfg() {
   return {
     enabled:   process.env.WATCH_DIGEST_ENABLED === 'true', // default OFF

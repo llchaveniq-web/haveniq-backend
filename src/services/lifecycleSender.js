@@ -44,7 +44,9 @@ function unsubFor(userId) {
   };
 }
 
-const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+// Shared reader: a BLANK env var falls back to the guardrail, not to 0 —
+// Number('') is 0, which would silently zero a safety threshold.
+const { envNum: num } = require('../lib/envNum');
 const cfg = () => ({
   enabled:      process.env.WATCH_LIFECYCLE_ENABLED === 'true', // default OFF
   maxFraction:  num(process.env.WATCH_LIFECYCLE_MAX_FRACTION, 0.10),
