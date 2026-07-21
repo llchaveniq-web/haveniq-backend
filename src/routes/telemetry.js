@@ -221,9 +221,14 @@ router.post('/batch', requireAuth, async (req, res) => {
     console.error('[telemetry] pair_event persist failed:', e.message);
   }
 
+  // `dropped` must not count pair_events: they never take the ALLOWED_TYPES
+  // path, so counting them there would report events as lost that were in fact
+  // stored — the one number a human debugging this stream would trust.
+  const pairEventCount = events.filter(e => e && e.type === 'pair_event').length;
+
   res.json({
     accepted: valid.length,
-    dropped: events.length - valid.length,
+    dropped: events.length - valid.length - pairEventCount,
     // Reported separately because pair_events bypasses the ALLOWED_TYPES path —
     // folding it into `accepted` would misreport what landed in telemetry_events.
     pairEvents,
