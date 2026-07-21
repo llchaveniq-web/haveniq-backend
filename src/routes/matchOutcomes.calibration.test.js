@@ -186,3 +186,44 @@ test('GET /match-outcomes/calibration: failed aggregation → 404 { ok:false }',
   assert.equal(res.status, 404);
   assert.deepEqual(res.body, { ok: false });
 });
+
+// ── SQL-null shapes (regression) ────────────────────────────────────────────
+// The route feeds this function rows straight from `details->>'key'`, where a
+// missing key is SQL NULL → JS null, NOT undefined. Number(null) === 0, so a
+// missing rating used to read as a rating of ZERO: counted as answered, scored
+// as a failure, dragging the published success rate down. The fixtures above
+// omit keys entirely, which is why they never caught it.
+test('computeCalibration: a NULL rating is unresolved, not a zero', () => {
+  const r = computeCalibration([
+    { predictedScore: '90', stage: 'day30', answer: null, rating: null },
+    { predictedScore: '90', stage: 'day30', answer: 'notyet', rating: null },
+  ]);
+  assert.deepEqual(r, { ok: false }, 'no resolved outcome ⇒ nothing to report');
+});
+
+test('computeCalibration: NULL ratings never inflate the denominator', () => {
+  const r = computeCalibration([
+    { predictedScore: '90', stage: 'day30', answer: null, rating: '5' },   // resolved success
+    { predictedScore: '90', stage: 'day30', answer: null, rating: null },  // unresolved
+    { predictedScore: '90', stage: 'day30', answer: null, rating: '' },    // unresolved
+  ]);
+  assert.equal(r.totalSample, 1);
+  assert.equal(r.bands[0].sampleSize, 1);
+  assert.equal(r.bands[0].actualSuccess, 1, 'must not be dragged to 0.33 by two non-answers');
+});
+
+test('computeCalibration: a genuine rating of 0 is still not a success', () => {
+  // 0 is outside the 1–5 scale, but if one ever arrives it must not be read as
+  // success — the guard above must not accidentally admit it as one.
+  const r = computeCalibration([{ predictedScore: '90', stage: 'day30', answer: null, rating: 0 }]);
+  assert.equal(r.ok, true);
+  assert.equal(r.bands[0].actualSuccess, 0);
+});
+
+test('computeCalibration: a NULL predictedScore is skipped, not bucketed as 0', () => {
+  const r = computeCalibration([
+    { predictedScore: null, stage: 'day30', answer: null, rating: '5' },
+    { predictedScore: '',   stage: 'day30', answer: null, rating: '5' },
+  ]);
+  assert.deepEqual(r, { ok: false }, 'null must not land in the "Below 55" band');
+});

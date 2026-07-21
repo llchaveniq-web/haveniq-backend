@@ -27,7 +27,7 @@ const store = require('../services/weightProposalStore');
 const analyst = require('../services/weightAnalyst');
 const metrics = require('../services/calibrationMetrics');
 const snapshots = require('../services/learningSnapshots');
-const { computeCalibration, isAnswered, isSuccess } = require('./matchOutcomes')._calibration;
+const { computeCalibration, isAnswered, isSuccess, ratingOf } = require('./matchOutcomes')._calibration;
 
 // Bot token gate — same inline fallback used by routes/matchOutcomes.js
 // (there is no middleware/botAuth module).
@@ -51,13 +51,16 @@ const { requireBotToken } = (() => {
 // calibration bands and the per-outcome (p, y) points for Brier/AUC. Shared by
 // the proof + metrics endpoints. Success mirrors the calibration definition.
 async function readCalibration() {
+  // Prefer the promoted predicted_score column, fall back to the JSONB — same
+  // read as /match-outcomes/calibration, so the proof headline and the report
+  // can never be computed over different row sets.
   const { rows } = await pool.query(`
-    SELECT details->>'predictedScore' AS predicted_score,
+    SELECT COALESCE(predicted_score::text, details->>'predictedScore') AS predicted_score,
            details->>'stage'          AS stage,
            details->>'answer'         AS answer,
            details->>'rating'         AS rating
       FROM match_outcomes
-     WHERE details->>'predictedScore' ~ '^[0-9.]+$'`);
+     WHERE COALESCE(predicted_score::text, details->>'predictedScore') ~ '^[0-9.]+$'`);
   const mapped = rows.map((r) => ({
     predictedScore: r.predicted_score, stage: r.stage, answer: r.answer, rating: r.rating,
   }));
@@ -65,7 +68,10 @@ async function readCalibration() {
   // Points for Brier/AUC: p = predicted/100, y = success(1/0), answered only.
   const points = [];
   for (const r of mapped) {
-    const rating = Number.isFinite(Number(r.rating)) ? Number(r.rating) : undefined;
+    // Shared with computeCalibration: a missing rating is SQL NULL, and
+    // Number(null) === 0 would score it as answered-and-failed, pushing a
+    // fabricated y=0 into the Brier/AUC points behind the PUBLIC proof headline.
+    const rating = ratingOf(r.rating);
     const item = { stage: r.stage, answer: r.answer, rating };
     if (!isAnswered(item)) continue;
     const score = Number(r.predictedScore);

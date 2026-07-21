@@ -61,6 +61,16 @@ const CALIBRATION_BANDS = [
 ];
 const RETENTION_STAGES = new Set(['day30', 'day60', 'day90', 'month6']);
 
+// These rows come from `details->>'key'`, so a MISSING key is SQL NULL → JS
+// null, not undefined. Number(null) and Number('') are both 0 rather than NaN,
+// so a plain Number.isFinite(Number(x)) check reads a missing value as a real
+// zero. For a rating that means an unresolved check-in scores as
+// answered-and-failed, biasing every published success rate downward. Shared
+// (via router._calibration) so the outcome readers can't drift apart on it.
+const isBlank = (v) => v === null || v === undefined || v === '';
+/** A 1–5 rating, or undefined when genuinely absent. Never 0-by-coercion. */
+const ratingOf = (v) => (!isBlank(v) && Number.isFinite(Number(v)) ? Number(v) : undefined);
+
 // A RESOLVED response we can score. Pending ('notyet') and rows without a
 // decisive answer are excluded from the denominator — an unresolved check-in
 // is not evidence for OR against the prediction (mirrors the existing summary
@@ -94,9 +104,10 @@ function computeCalibration(rows) {
   const buckets = new Map(); // band label -> { total, success }
   let totalSample = 0;
   for (const r of rows || []) {
+    if (isBlank(r.predictedScore)) continue;          // null must not bucket as 0
     const score = Number(r.predictedScore);
     if (!Number.isFinite(score)) continue;            // must carry a prediction
-    const rating = Number.isFinite(Number(r.rating)) ? Number(r.rating) : undefined;
+    const rating = ratingOf(r.rating);
     const item = { stage: r.stage, answer: r.answer, rating };
     if (!isAnswered(item)) continue;                  // only resolved outcomes
     totalSample++;
@@ -335,13 +346,19 @@ router.get('/me/match-outcomes', requireAuth, async (req, res) => {
 router.get('/match-outcomes/calibration', requireAuth, async (req, res) => {
   await ensureTable();
   try {
+    // Prefer the promoted predicted_score COLUMN, falling back to the details
+    // JSONB. The column was added precisely so the validation loop wouldn't
+    // depend on a JSON path, but this reader still only looked at the JSONB —
+    // so a row carrying the column without the JSON key would have been
+    // invisible to the very report it exists to feed. Identical results today
+    // (one writer populates both from the same value); robust if that changes.
     const { rows } = await pool.query(`
-      SELECT details->>'predictedScore' AS predicted_score,
+      SELECT COALESCE(predicted_score::text, details->>'predictedScore') AS predicted_score,
              details->>'stage'          AS stage,
              details->>'answer'         AS answer,
              details->>'rating'         AS rating
         FROM match_outcomes
-       WHERE details->>'predictedScore' ~ '^[0-9.]+$'`);
+       WHERE COALESCE(predicted_score::text, details->>'predictedScore') ~ '^[0-9.]+$'`);
     const result = computeCalibration(rows.map((r) => ({
       predictedScore: r.predicted_score,
       stage: r.stage,
@@ -707,6 +724,6 @@ router.post('/bot-admin/train-text-insights', requireBotToken, async (req, res) 
 });
 
 // Pure calibration internals, exposed for unit tests (no DB required).
-router._calibration = { computeCalibration, isAnswered, isSuccess, bandFor, CALIBRATION_BANDS };
+router._calibration = { computeCalibration, isAnswered, isSuccess, bandFor, CALIBRATION_BANDS, ratingOf, isBlank };
 
 module.exports = router;
