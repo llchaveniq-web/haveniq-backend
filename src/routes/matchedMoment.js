@@ -52,7 +52,11 @@ async function ensureTable() {
 // hash so existing cached rows invalidate on next read.
 // v2 (2026-06-01): full question text + chosen option text instead of
 // bare Q-ids. Forbids Q-numbers in output. Stops hallucination.
-const MATCHED_MOMENT_PROMPT_VERSION = 'v2';
+// v3 — computeSharedAnswers was comparing NaN to NaN for the production answer
+// shape, so every cached reveal was built from an EMPTY shared-answers list.
+// The prompt text is unchanged; the input to it was wrong, and the cache key is
+// the answers, so only a version bump clears them.
+const MATCHED_MOMENT_PROMPT_VERSION = 'v3';
 
 function hashAnswers(a1, a2) {
   return crypto.createHash('sha1')

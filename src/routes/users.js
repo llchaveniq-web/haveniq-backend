@@ -912,7 +912,13 @@ async function ensureAboutYouTable() {
 // "explosive anger response in Q40" hallucination.
 // v3 (2026-06-19): shorter reveal — sections cut from 70-120 to 40-60 words
 // for a quicker, punchier post-quiz read. Same 5 sections + pull quotes.
-const ABOUT_YOU_PROMPT_VERSION = 'v3';
+// v4 — the answer READER changed, not the prompt text. Every cached portrait
+// before this was generated from "(option NaN)" lines (see the flatten fix), so
+// they describe a user whose answers we appeared not to have: prod held a
+// portrait reading "we're missing your cleanliness data" for an account with 33
+// complete answers. Bumping the version is what invalidates them, since the
+// cache key is the answer set and that has not changed.
+const ABOUT_YOU_PROMPT_VERSION = 'v4';
 
 function hashAnswers(rows) {
   // Deterministic FNV-1a-style hash of the user's quiz answer set +
