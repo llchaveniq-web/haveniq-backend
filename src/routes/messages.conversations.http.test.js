@@ -30,6 +30,7 @@ let row = {
   last_sender_id: 'user-b',
   unread_count: '2',
   compat_score: '84.5',
+  profile_complete: true,
   breakdown: { lifestyle: 91, communication: 78, control: 64, nervous: 88 },
 };
 let selectSql = '';
@@ -123,4 +124,35 @@ test('the envelope the inbox list renders is intact', async () => {
   assert.equal(c.unreadCount, 2);
   assert.equal(c.compatScore, 84.5);
   assert.equal(c.isLastSenderMe, false);
+});
+
+// ── profileComplete (descriptive only) ──────────────────────────────────────
+// Why a row renders as "Your match" + a silhouette: the partner never finished
+// the setup screen. The flag reports that; it filters and reorders nothing.
+test('a complete partner is flagged complete', async () => {
+  const u = (await get()).body[0].otherUser;
+  assert.equal(u.profileComplete, true);
+});
+
+test('a nameless/photoless partner is flagged INCOMPLETE, and still returned', async () => {
+  const saved = row;
+  row = { ...row, first_name: null, photo_url: null, profile_complete: false };
+  const c = (await get()).body[0];
+  assert.equal(c.otherUser.profileComplete, false);
+  assert.equal(c.conversationId, 'conv-1', 'nobody is hidden — the flag is descriptive');
+  row = saved;
+});
+
+test('the flag is computed in SQL from the app\'s own setup requirements', async () => {
+  await get();
+  // Name + photo only: the fields whose absence yields the silhouette.
+  assert.match(selectSql, /btrim\(u\.first_name\)/);
+  assert.match(selectSql, /btrim\(u\.photo_url\)/);
+  assert.match(selectSql, /AS profile_complete/);
+  // A blank last initial or a missing age renders fine ("Jackson", no age chip)
+  // and must NOT read as incomplete — the founder's own profile is exactly that.
+  const expr = selectSql.slice(0, selectSql.indexOf('AS profile_complete'));
+  const tail = expr.slice(expr.lastIndexOf('(u.first_name'));
+  assert.ok(!/u\.age/.test(tail), 'age must not gate completeness');
+  assert.ok(!/btrim\(u\.last_name\)/.test(tail), 'last initial must not gate completeness');
 });

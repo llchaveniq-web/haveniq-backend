@@ -97,6 +97,12 @@ router.get('/conversations', requireAuth, async (req, res) => {
          CASE WHEN c.user_a = $1 THEN c.user_b ELSE c.user_a END AS other_user_id,
          u.first_name, u.last_name, u.school, u.school_year, u.major,
          u.photo_url, u.is_verified, u.trust_score, u.identity_verified_at, u.last_active_at,
+         -- Same descriptive flag the match feed returns (name + photo — the two
+         -- fields whose absence yields "Your match" + a silhouette), so the
+         -- inbox can treat a nameless partner deliberately instead of falling
+         -- back without knowing why. Filters nothing.
+         (u.first_name IS NOT NULL AND btrim(u.first_name) <> ''
+          AND u.photo_url IS NOT NULL AND btrim(u.photo_url) <> '') AS profile_complete,
          m.body AS last_message,
          m.created_at AS last_message_at,
          m.sender_id AS last_sender_id,
@@ -161,6 +167,10 @@ router.get('/conversations', requireAuth, async (req, res) => {
         // contact info). Non-null = ID-verified.
         identityVerifiedAt: r.identity_verified_at,
         lastActiveAt: r.last_active_at,
+        // FALSE means this partner never finished the setup screen — which is
+        // WHY firstName/photoUrl come back null and the row renders as "Your
+        // match". Lets the inbox distinguish "no data yet" from a bug.
+        profileComplete: r.profile_complete === true,
       },
       lastMessage:   r.last_message,
       lastMessageAt: r.last_message_at,

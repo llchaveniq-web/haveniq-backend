@@ -239,6 +239,17 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          u.trust_score,
          u.identity_verified_at,
          u.last_active_at,
+         -- Can this candidate be rendered as a PERSON? Exactly the two fields
+         -- whose absence produces the "Your match" + grey-silhouette card.
+         -- Deliberately NOT gated on last initial or age: the founder's own
+         -- account has a real name and photo but a blank last_name, and it
+         -- renders perfectly as "Jackson" — calling that incomplete would make
+         -- the flag lie about a good profile.
+         -- DESCRIPTIVE ONLY: changes no filtering and no ordering, so nobody
+         -- disappears. The earlier attempt to GATE discovery on completeness
+         -- silently hid real people (see the NOTE on the WHERE clause below).
+         (u.first_name IS NOT NULL AND btrim(u.first_name) <> ''
+          AND u.photo_url IS NOT NULL AND btrim(u.photo_url) <> '') AS profile_complete,
          pp.mbti  AS pairing_mbti,
          pp.disc  AS pairing_disc,
          cr.id     AS connect_request_id,
@@ -375,6 +386,11 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // Last time this candidate was active in the app — drives the
       // "Active today / Active Nd ago" presence label on their match card.
       lastActiveAt:  r.last_active_at,
+      // Did they finish the setup screen (name + last initial + age + photo)?
+      // FALSE is why a card renders as "Your match" + a grey silhouette: the
+      // person is real and matchable, they just never filled their profile in.
+      // Purely descriptive — the feed still returns them, in the same order.
+      profileComplete: r.profile_complete === true,
       compatScore:   parseFloat(r.score),
       // Confidence coefficient (0–1). <1 when either side's quiz answers are
       // thin/uniform — the scorer already multiplied compatScore down by it.
