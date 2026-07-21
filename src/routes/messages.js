@@ -106,7 +106,8 @@ router.get('/conversations', requireAuth, async (req, res) => {
              AND sender_id != $1
              AND read = FALSE
          ) AS unread_count,
-         cs.score AS compat_score
+         cs.score AS compat_score,
+         cs.breakdown
        FROM conversations c
        JOIN users u ON u.id = (
          CASE WHEN c.user_a = $1 THEN c.user_b ELSE c.user_a END
@@ -166,6 +167,12 @@ router.get('/conversations', requireAuth, async (req, res) => {
       isLastSenderMe: r.last_sender_id === req.user.id,
       unreadCount:   parseInt(r.unread_count),
       compatScore:   r.compat_score ? parseFloat(r.compat_score) : null,
+      // Category percentages for THIS pair — the same { lifestyle, communication,
+      // control, nervous } object /matches/feed returns, emitted identically
+      // (`|| {}`) so the inbox's new-match card can build its one-line fit read
+      // without a second round-trip to the feed. Empty object when the pair was
+      // never scored; the card is expected to stay silent rather than invent one.
+      breakdown:     r.breakdown || {},
     })));
   } catch (err) {
     console.error(err);
