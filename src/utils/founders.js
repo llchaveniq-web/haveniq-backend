@@ -75,7 +75,36 @@ function isModeratorUser(user) {
   return false;
 }
 
+// ── Researchers ─────────────────────────────────────────────────────────────
+// A researcher can read the longitudinal pair dataset (/research/*) — the ONLY
+// surface that may join both sides of a pairing, because cohort analysis needs
+// signal→intervention→outcome across both roommates. It grants nothing else: no
+// triage, no ops, no product data.
+//
+// Designated by env: RESEARCH_EMAILS (comma-separated) and/or RESEARCH_USER_IDS.
+// Founders are always researchers. Deliberately NO defaults beyond the founder —
+// until the env is set, the founder is the only account that can export, so an
+// unset variable fails CLOSED rather than opening the dataset.
+function getResearchEmails() {
+  return (process.env.RESEARCH_EMAILS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+function getResearchIds() {
+  return (process.env.RESEARCH_USER_IDS || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/** Preferred check — accepts the req.user row (has id + email). Founder ⊆ researcher. */
+function isResearchUser(user) {
+  if (!user) return false;
+  if (isFounderUser(user)) return true;
+  if (user.id && getResearchIds().includes(user.id)) return true;
+  if (user.email && getResearchEmails().includes(String(user.email).toLowerCase())) return true;
+  return false;
+}
+
 module.exports = {
   getFounderIds, getFounderEmails, isFounder, isFounderEmail, isFounderUser,
   getModeratorEmails, getModeratorIds, isModeratorUser,
+  getResearchEmails, getResearchIds, isResearchUser,
 };

@@ -208,7 +208,26 @@ router.post('/batch', requireAuth, async (req, res) => {
     console.error('[telemetry] pulse_drift persist failed:', e.message);
   }
 
-  res.json({ accepted: valid.length, dropped: events.length - valid.length });
+  // Longitudinal pair dataset (signal → intervention → outcome per pair). Like
+  // pulse_drift above, `pair_event` is NOT in ALLOWED_TYPES — it goes to its own
+  // table straight from the raw batch rather than into the generic
+  // telemetry_events blob, so the research export reads typed columns instead of
+  // digging through JSON. Best-effort: a research-stream hiccup must never fail
+  // a student's telemetry batch.
+  let pairEvents = { stored: 0, dropped: 0 };
+  try {
+    pairEvents = await require('../services/pairEvents').persistBatch(events, userId);
+  } catch (e) {
+    console.error('[telemetry] pair_event persist failed:', e.message);
+  }
+
+  res.json({
+    accepted: valid.length,
+    dropped: events.length - valid.length,
+    // Reported separately because pair_events bypasses the ALLOWED_TYPES path —
+    // folding it into `accepted` would misreport what landed in telemetry_events.
+    pairEvents,
+  });
 });
 
 // ─── GET /telemetry/my-data ──────────────────────────────────────────────
@@ -225,7 +244,24 @@ router.get('/my-data', requireAuth, async (req, res) => {
        LIMIT 50000`,
       [userId]
     );
-    res.json({ userId, eventCount: rows.length, events: rows });
+    // pair_events lives outside telemetry_events, so it would silently escape
+    // this export — Article 15 covers everything we hold about them, not just
+    // the rows in one table. Their OWN emitted events only; the other side of a
+    // pairing is that person's data and stays with the research export.
+    let pairEvents = [];
+    try {
+      const pe = require('../services/pairEvents');
+      await pe.ensureTable();
+      const { rows: pr } = await pool.query(
+        `SELECT id, pair_id, pair_key, t, kind, subtype, topic, value, meta, created_at
+           FROM pair_events WHERE user_id = $1 ORDER BY t DESC LIMIT 50000`,
+        [userId],
+      );
+      pairEvents = pr;
+    } catch (e) {
+      console.error('[telemetry/my-data] pair_events export failed:', e.message);
+    }
+    res.json({ userId, eventCount: rows.length, events: rows, pairEvents });
   } catch (err) {
     console.error('Telemetry export failed:', err);
     res.status(500).json({ error: 'export failed' });
@@ -249,8 +285,21 @@ router.delete('/my-data', requireAuth, async (req, res) => {
       'DELETE FROM user_profile_snapshot WHERE user_id = $1',
       [userId]
     );
+    // Erasure has to reach pair_events too, or a user who exercised Article 17
+    // would still sit in the research dataset. This DOES leave a hole in a
+    // longitudinal pairing — the other side's rows remain, since they are that
+    // person's data — and an honest hole is the correct outcome here: the
+    // alternative is retaining data someone asked us to delete.
+    let pairEventsDeleted = 0;
+    try {
+      const r = await client.query('DELETE FROM pair_events WHERE user_id = $1', [userId]);
+      pairEventsDeleted = r.rowCount;
+    } catch (e) {
+      // Table may not exist yet on a fresh DB — nothing to erase in that case.
+      if (e.code !== '42P01') throw e;
+    }
     await client.query('COMMIT');
-    res.json({ deleted: true, eventsDeleted });
+    res.json({ deleted: true, eventsDeleted, pairEventsDeleted });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Telemetry deletion failed:', err);

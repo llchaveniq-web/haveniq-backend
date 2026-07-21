@@ -686,3 +686,33 @@ CREATE INDEX IF NOT EXISTS idx_user_photos_user_pos ON user_photos (user_id, pos
 -- on the match payload. NULL for every pair until the app flips STRESS_IDS into
 -- SCORED_IDS, so the frontend's presence-gate keeps the row unrendered until then.
 ALTER TABLE compatibility_scores ADD COLUMN IF NOT EXISTS under_pressure JSONB;
+
+-- ── Longitudinal pair telemetry (pair_events) — 2026-07-21 ──────────────────
+-- The ground-truth roommate dataset: signal → intervention → outcome, per pair.
+-- Written from the /telemetry/batch side-channel; read only by /research/*.
+--
+-- ids are TEXT, not UUID with an FK to users, on purpose: pair_id may be an
+-- unlinked roommate who has no account, so a foreign key would reject exactly
+-- the one-sided pairings the brief says to keep.
+--
+-- pair_key is the UNORDERED pair — sorted([user_id, pair_id]) joined by ':' —
+-- derived server-side on insert. Each side emits keyed on the OTHER person
+-- (A sends pairId=B, B sends pairId=A), so without this the two halves of the
+-- same roommate relationship would never group together.
+CREATE TABLE IF NOT EXISTS pair_events (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  pair_id    TEXT NOT NULL,
+  pair_key   TEXT NOT NULL,
+  t          BIGINT NOT NULL,
+  kind       TEXT NOT NULL,
+  subtype    TEXT NOT NULL,
+  topic      TEXT,
+  value      DOUBLE PRECISION,
+  meta       JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pair_events_pair_t ON pair_events (pair_key, t);
+-- Bulk cohort export (?since=) and the GDPR per-user export/erasure paths.
+CREATE INDEX IF NOT EXISTS idx_pair_events_t       ON pair_events (t);
+CREATE INDEX IF NOT EXISTS idx_pair_events_user    ON pair_events (user_id);
