@@ -28,6 +28,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const crypto = require('crypto');
 const { NO_DASH_RULE, stripDashes } = require('../lib/textStyle');
+const { flatten } = require('../services/scoring');
 
 const env = (k) => (process.env[k] ?? '').replace(/[^!-~]/g, '');
 const ANTHROPIC_KEY = env('ANTHROPIC_API_KEY');
@@ -69,17 +70,24 @@ function hashAnswers(a1, a2) {
  */
 function computeSharedAnswers(answersA, answersB) {
   const shared = [];
-  for (const [qid, valA] of Object.entries(answersA)) {
-    const valB = answersB[qid];
+  // Read both sides through the scorer's flatten — the ONE correct reader.
+  // Production stores answers as { type:'option', index:N }, for which the old
+  // `Number(valA) === Number(valB)` compared NaN to NaN. That is ALWAYS false,
+  // so two users with byte-identical answers shared nothing and this reveal
+  // reported zero overlap for every pair on the platform.
+  const flatA = flatten(answersA);
+  const flatB = flatten(answersB);
+  for (const [qid, valA] of Object.entries(flatA)) {
+    const valB = flatB[qid];
     if (valB === undefined) continue;
     // EXACT MATCH ONLY — same option index. Anything else (even
     // adjacent on a 4-option Likert) carries weak signal: two people
     // could differ enough on one step to genuinely disagree about
     // sleep schedule, contempt patterns, etc.
-    if (Number(valA) === Number(valB)) {
+    if (valA === valB) {
       shared.push({
         question_id: parseInt(qid, 10),
-        index: Number(valA),
+        index: valA,
       });
     }
   }

@@ -970,6 +970,13 @@ module.exports = {
   COMMUNICATION_COMPETENCE, // v11 per-option competence map (tests)
   DEALBREAKER_QUESTIONS,
   DEALBREAKER_MULTIPLIER,
+  // The ONE correct way to read the stored answers map. Production stores every
+  // answer as { type:'option', index:N }, but plain numbers and numeric strings
+  // also occur, so any consumer that re-implements this coercion gets it wrong:
+  // Number({index:0}) is NaN, which silently became "(option NaN)" in the About
+  // You prompt and made NaN === NaN comparisons fail in the Matched Moment.
+  // Read answers through this, never by hand.
+  flatten,
   // Exported so SNAPSHOT_CATEGORIES in routes/quiz.js can derive its
   // map from the canonical source instead of duplicating ids by hand.
   CATEGORIES,

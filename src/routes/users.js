@@ -971,7 +971,7 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
     // lockstep). A profile made only of REMOVED-id answers must NOT read as
     // ready (otherwise the app shows "composing…" forever or builds a portrait
     // from questions we no longer score). >=10 live answers = the core is done.
-    const { QUESTION_POINTS } = require('../services/scoring');
+    const { QUESTION_POINTS, flatten: flattenAnswers } = require('../services/scoring');
     const LIVE_IDS = new Set(Object.keys(QUESTION_POINTS).map(Number));
     const liveAnswers = answers.filter(a => LIVE_IDS.has(a.question_id));
     if (liveAnswers.length < 10) {
@@ -1025,9 +1025,17 @@ router.get('/me/about-you', requireAuth, async (req, res) => {
       .map(r => {
         const q = questionsById[r.question_id];
         if (!q) return null;
-        // answer_value is the option index (a number); map to the actual chosen-option text
-        const chosenIndex = typeof r.answer_value === 'number' ? r.answer_value : Number(r.answer_value);
-        const chosen = q.options?.[chosenIndex] ?? '(option ' + chosenIndex + ')';
+        // Read the stored answer through the scorer's flatten — the ONE correct
+        // reader. Production stores every answer as { type:'option', index:N },
+        // and the old inline `Number(answer_value)` produced NaN for that shape,
+        // so this prompt told Claude the user chose "(option NaN)" for EVERY
+        // question while instructing it to treat those as ground truth. An
+        // unreadable answer is now dropped rather than described wrongly.
+        const flatOne = flattenAnswers({ [r.question_id]: r.answer_value });
+        const chosenIndex = flatOne[r.question_id];
+        if (chosenIndex === undefined) return null;
+        const chosen = q.options?.[chosenIndex];
+        if (chosen === undefined) return null;
         return `  • [${q.category}] "${q.text}"\n      → user chose: "${chosen}"`;
       })
       .filter(Boolean)

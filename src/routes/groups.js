@@ -1,22 +1,18 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-const { calculateGroupCompatibility } = require('../services/scoring');
+const { calculateGroupCompatibility, flatten } = require('../services/scoring');
 const { isFounder } = require('../utils/founders');
 const { isDemo } = require('../lib/demoFilter');
 
 // Normalize the wire shape of quiz answers into the flat
 // { questionId: number } map the scoring engine expects.
+// Delegates to the scorer's flatten — the ONE correct reader of the stored
+// answers map. This used to be a near-copy that handled the object form but
+// dropped numeric strings ("2"), which the scorer accepts; a third divergent
+// copy is how the About You and Matched Moment readers silently broke.
 function normalizeAnswers(raw) {
-  const flat = {};
-  for (const [k, v] of Object.entries(raw || {})) {
-    if (typeof v === 'number') { flat[k] = v; continue; }
-    if (v && typeof v === 'object') {
-      if (typeof v.index === 'number') flat[k] = v.index;
-      else if (typeof v.value === 'number') flat[k] = v.value;
-    }
-  }
-  return flat;
+  return flatten(raw || {});
 }
 
 // Two integer ranges overlap if neither is entirely left or right of the
