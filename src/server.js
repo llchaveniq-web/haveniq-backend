@@ -205,6 +205,25 @@ function notifyPresence(uid) {
   for (const s of set) s.emit('presence', payload);
 }
 
+// Is this authenticated socket actually a participant of the conversation?
+// The socket is authenticated, but authentication is not authorization: without
+// this, any logged-in user could join conv:<id>, emit/receive typing + read
+// receipts, and mark_read messages in a conversation they aren't part of.
+// Mirrors the REST membership check in messages.js. Any error (e.g. a non-uuid
+// id) fails closed to `false`.
+async function socketInConversation(conversationId, userId) {
+  if (!conversationId || typeof conversationId !== 'string') return false;
+  try {
+    const { rows } = await pool.query(
+      'SELECT 1 FROM conversations WHERE id = $1 AND (user_a = $2 OR user_b = $2) LIMIT 1',
+      [conversationId, userId],
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 io.on('connection', (socket) => {
   console.log(`⚡ Socket connected: ${socket.firstName || socket.userId}`);
 
@@ -234,8 +253,9 @@ io.on('connection', (socket) => {
     if (set) { set.delete(socket); if (set.size === 0) presenceWatchers.delete(watchedId); }
   });
 
-  // Join a conversation room
-  socket.on('join_conversation', (conversationId) => {
+  // Join a conversation room — only if the socket's user is a participant.
+  socket.on('join_conversation', async (conversationId) => {
+    if (!(await socketInConversation(conversationId, socket.userId))) return;
     socket.join(`conv:${conversationId}`);
   });
 
@@ -251,8 +271,9 @@ io.on('connection', (socket) => {
   // moderation + ban checks; better to keep writes on the single guarded HTTP
   // route.
 
-  // Typing indicator
-  socket.on('typing', ({ conversationId, isTyping }) => {
+  // Typing indicator — only broadcast into conversations the user belongs to.
+  socket.on('typing', async ({ conversationId, isTyping } = {}) => {
+    if (!(await socketInConversation(conversationId, socket.userId))) return;
     socket.to(`conv:${conversationId}`).emit('user_typing', {
       userId: socket.userId,
       isTyping,
@@ -265,6 +286,10 @@ io.on('connection', (socket) => {
   // the socket connection (mirrors the send_message try/catch above).
   socket.on('mark_read', async ({ conversationId } = {}) => {
     if (!conversationId) return;
+    // Authorization: only a participant may mark this conversation's messages
+    // read. Without this, any authed user could flip B↔C's messages to read
+    // and silently clear the other party's unread badge.
+    if (!(await socketInConversation(conversationId, socket.userId))) return;
     try {
       const readAt = new Date().toISOString();
       await pool.query(

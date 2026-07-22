@@ -5,14 +5,15 @@ mix (feed + connect writes + conversations + quiz), on **staging**, never prod.
 
 ## ⚠️ Before anything: know your DB hosts
 Railway `talented-peace` project. **Verify with `railway variables -e <env> -s Postgres`.**
-- **PRODUCTION Postgres** = `yamanote.proxy.rlwy.net:35621` — NEVER seed/load-test this.
-- **STAGING Postgres** = `hayabusa.proxy.rlwy.net:29697` — use this. (Get its full
-  public URL from `railway variables -e staging -s Postgres` → `DATABASE_PUBLIC_URL`,
-  or build it: `postgresql://postgres:<POSTGRES_PASSWORD>@hayabusa.proxy.rlwy.net:29697/railway`.)
+- **PRODUCTION Postgres** — NEVER seed/load-test this. Get its host from
+  `railway variables -e production -s Postgres`.
+- **STAGING Postgres** — use this. Get its full public URL from
+  `railway variables -e staging -s Postgres` → `DATABASE_PUBLIC_URL`
+  (`postgresql://postgres:<POSTGRES_PASSWORD>@<staging-db-host>:<port>/railway`).
 
 Set once (used by the node steps below):
 ```bash
-export STAGING_URL='postgresql://postgres:<pw>@hayabusa.proxy.rlwy.net:29697/railway'
+export STAGING_URL='postgresql://postgres:<pw>@<staging-db-host>:<port>/railway'
 export STAGING_BASE='https://haveniq-backend-staging.up.railway.app'
 ```
 
