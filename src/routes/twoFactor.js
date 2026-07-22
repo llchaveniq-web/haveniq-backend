@@ -69,6 +69,7 @@ const { authenticator } = require('otplib');
 const pool    = require('../db/pool');
 const { requireAuth, signToken } = require('../middleware/auth');
 const { setSessionCookie } = require('../lib/sessionCookie');
+const { encryptSecret, decryptSecret, isEncrypted } = require('../lib/totpCrypto');
 
 // ── Rate limiters ────────────────────────────────────────────────────
 // Without these the 2FA routes are a brute-force surface:
@@ -248,7 +249,9 @@ router.post('/setup', requireAuth, setupLimit, async (req, res) => {
               totp_recovery_codes = $2,
               totp_enabled = FALSE
         WHERE id = $3`,
-      [secret, recoveryHashes, userId],
+      // Store encrypted at rest; the plaintext `secret` is still returned below
+      // (QR / otpauth) so the user can enroll their authenticator app.
+      [encryptSecret(secret), recoveryHashes, userId],
     );
 
     const url = otpauthUrl(req.user.email, secret);
@@ -291,7 +294,8 @@ router.post('/verify-setup', requireAuth, verifySetupLimit, async (req, res) => 
       return res.status(409).json({ error: '2FA is already enabled.' });
     }
 
-    const ok = authenticator.check(code.trim(), row.totp_secret);
+    const secret = decryptSecret(row.totp_secret);
+    const ok = !!secret && authenticator.check(code.trim(), secret);
     if (!ok) {
       return res.status(400).json({ error: 'Incorrect code. Check the app and try the current 6 digits.' });
     }
@@ -327,7 +331,8 @@ router.post('/disable', requireAuth, disableLimit, async (req, res) => {
     let viaRecovery = false;
 
     if (code) {
-      authorized = authenticator.check(String(code).trim(), row.totp_secret);
+      const secret = decryptSecret(row.totp_secret);
+      authorized = !!secret && authenticator.check(String(code).trim(), secret);
     }
     if (!authorized && recoveryCode) {
       // Atomic + constant-time (see consumeRecoveryCodeAtomic). The
@@ -451,7 +456,18 @@ router.post('/challenge', challengeLimit, async (req, res) => {
     let authorized = false;
 
     if (code) {
-      authorized = authenticator.check(String(code).trim(), u.totp_secret);
+      const secret = decryptSecret(u.totp_secret);
+      authorized = !!secret && authenticator.check(String(code).trim(), secret);
+      // Lazy migration: the first successful 2FA login after TOTP_ENC_KEY is
+      // deployed upgrades a legacy plaintext secret to ciphertext — one write
+      // per user, ever, so existing enrollments don't need a batch migration.
+      if (authorized && !isEncrypted(u.totp_secret)) {
+        const enc = encryptSecret(u.totp_secret);
+        if (enc !== u.totp_secret) {
+          pool.query('UPDATE users SET totp_secret = $1 WHERE id = $2', [enc, userId])
+            .catch(err => console.error('[2fa] lazy re-encrypt failed:', err.message));
+        }
+      }
     }
     if (!authorized && recoveryCode) {
       // consumeRecoveryCodeAtomic does the row-level lock, constant-time
