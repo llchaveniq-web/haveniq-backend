@@ -525,7 +525,7 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     }
 
     const token = signToken(user.id);
-    setSessionCookie(res, token);   // no-op until COOKIE_AUTH_ENABLED (staged migration)
+    setSessionCookie(res, token);   // also sets hq_session cookie (active unless COOKIE_AUTH_ENABLED=false)
     logSignIn(pool, user.id, 'otp', req);
 
     res.json({
@@ -623,7 +623,7 @@ router.post('/refresh', refreshLimitIp, async (req, res) => {
 
     logSignIn(pool, decoded.userId, 'refresh', req);
     const fresh = signToken(decoded.userId);
-    setSessionCookie(res, fresh);   // no-op until COOKIE_AUTH_ENABLED (staged migration)
+    setSessionCookie(res, fresh);   // also sets hq_session cookie (active unless COOKIE_AUTH_ENABLED=false)
     res.json({ token: fresh });
   } catch {
     res.status(401).json({ error: 'Invalid token' });

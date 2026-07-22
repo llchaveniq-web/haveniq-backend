@@ -324,10 +324,17 @@ io.on('connection', (socket) => {
 app.use(helmet());
 app.use(cors({
   origin: corsOrigin,
-  // Credentials only meaningful when origin is reflected (not '*'). We
-  // don't use cookies (bearer-token auth) so this is mostly defensive
-  // hygiene for the day someone adds them.
+  // Credentialed cookie auth (httpOnly hq_session): the browser only sends the
+  // cookie when the response echoes the EXACT origin (never '*') together with
+  // Allow-Credentials. corsOrigin reflects the specific allowed origin, so this
+  // is safe. Credentials are disabled only in the dev '*' mode.
   credentials: !allowedOrigins.includes('*'),
+  // The web client sends X-HavenIQ-CSRF on every authenticated request; a custom
+  // header forces a CORS preflight, which is exactly what makes it a valid CSRF
+  // defense — so it MUST be allow-listed here or every cookie-authed request
+  // fails preflight. Authorization stays for bearer/native + the transition.
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-HavenIQ-CSRF'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
 
 // Stripe webhook MUST consume the raw body (not the JSON-parsed one) so
@@ -370,9 +377,9 @@ app.use(rateLimit({
   },
 }));
 
-// CSRF guard for cookie-authenticated mutations. Inert unless COOKIE_AUTH_ENABLED
-// (the staged httpOnly-cookie migration). Auto-skips webhooks, pre-login OTP, and
-// native bearer clients — anything carrying no hq_session cookie. See
+// CSRF guard for cookie-authenticated mutations. Active by default (disable with
+// COOKIE_AUTH_ENABLED=false). Auto-skips webhooks, pre-login OTP, and native
+// bearer clients — anything carrying no hq_session cookie. See
 // middleware/auth.js and docs/COOKIE_AUTH_MIGRATION.md.
 app.use(require('./middleware/auth').csrfGuard);
 

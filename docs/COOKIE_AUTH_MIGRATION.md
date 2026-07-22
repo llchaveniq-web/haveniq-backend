@@ -4,9 +4,12 @@
 so an XSS could steal it) into an **httpOnly + Secure cookie** the browser will
 not expose to JavaScript at all. After this, a stolen-token XSS is off the table.
 
-**Status:** the plumbing is built and shipped **inert**, gated on
-`COOKIE_AUTH_ENABLED` (backend) and `EXPO_PUBLIC_COOKIE_AUTH` (frontend), both
-default OFF. Nothing changes in production until you complete the steps below.
+**Status:** the API is now on the same-site subdomain `api.haveniq.org`, so the
+backend cookie support is **active by default** — every login also `Set-Cookie`s
+`hq_session` and the CSRF guard is live. It ships **additively**: the body token
+is still returned and bearer is still accepted, so **nothing changes for anyone
+until the web client opts in** with `EXPO_PUBLIC_COOKIE_AUTH=true` (frontend, the
+only remaining flip). Backend kill-switch: `COOKIE_AUTH_ENABLED=false`.
 
 ---
 
@@ -24,20 +27,29 @@ requires the API to be on a **same-site subdomain of the app**:
 
 ---
 
-## What's already built (shipped, inert)
+## What's implemented (active on the backend)
 
 **Backend**
 - `src/lib/sessionCookie.js` — `setSessionCookie` / `clearSessionCookie` /
-  `readTokenCookie`. `setSessionCookie` is a **no-op unless `COOKIE_AUTH_ENABLED=true`**.
-- `src/middleware/auth.js` — `requireAuth`/`optionalAuth` now read the token from
-  the `Authorization` header **or** the `hq_session` cookie (header always wins).
-  New `csrfGuard` (mounted globally in `server.js`) — inert unless the flag is on.
-- Cookie is set at **every** token-issuing point: `POST /auth` (OTP login),
-  `POST /auth/refresh`, and both 2FA-completion paths in `routes/twoFactor.js`.
-- New `POST /auth/logout` — clears the cookie (an httpOnly cookie can only be
-  cleared server-side).
-- Tests: `src/middleware/authCookie.test.js` (token precedence, CSRF gating,
-  cookie attributes).
+  `readTokenCookie`. `setSessionCookie` sets `hq_session` (`HttpOnly; Secure;
+  SameSite=Lax; Path=/`, host-only unless `COOKIE_DOMAIN` is set) **by default**;
+  no-op only if `COOKIE_AUTH_ENABLED=false`.
+- `src/middleware/auth.js` — `requireAuth`/`optionalAuth` read the token from the
+  `Authorization` header **or** the `hq_session` cookie (header always wins;
+  invalid/expired → **401**, never 403). `csrfGuard` (mounted globally in
+  `server.js`) is **active by default**: a state-changing request that carries the
+  cookie must also send `X-HavenIQ-CSRF` or it's 403. Bearer/webhook/GET exempt.
+- `server.js` CORS: `credentials:true`, exact-origin reflection (never `*`), and
+  `allowedHeaders` includes `X-HavenIQ-CSRF` so the preflight the custom header
+  forces succeeds for our origin and fails for others.
+- Cookie is set at **every** token-issuing point: `POST /auth/verify-code` (OTP
+  login **and** signup completion), `POST /auth/refresh`, and both 2FA-challenge
+  paths in `routes/twoFactor.js`.
+- `POST /auth/logout` — clears the cookie (idempotent 200; an httpOnly cookie can
+  only be cleared server-side).
+- Tests: `src/middleware/authCookie.test.js` (unit) + `src/routes/authCookie.http.test.js`
+  (end-to-end: cookie login/attrs, cookie-only `/users/me`, CSRF 403/allow,
+  garbage→401, logout, bearer-still-works, CORS preflight allow/deny).
 
 **Frontend**
 - `services/api.ts` — when `EXPO_PUBLIC_COOKIE_AUTH=true`, the central API client
@@ -58,12 +70,15 @@ requires the API to be on a **same-site subdomain of the app**:
 - Verify: `curl https://api.haveniq.org/health` returns `{"ok":true,...}`.
 
 ### 2. Backend env (Railway)
-- `COOKIE_AUTH_ENABLED=true`
-- `COOKIE_DOMAIN=.haveniq.org`  (leading dot → shared across app + api subdomains)
+- `COOKIE_AUTH_ENABLED` — **leave unset** (cookie auth is on by default). Set to
+  `false` only as an emergency backend revert.
+- `COOKIE_DOMAIN` — **leave unset** (preferred: host-only cookie scoped to
+  `api.haveniq.org`). Set to `.haveniq.org` only if you actually need the cookie
+  shared across other subdomains.
 - `CLIENT_URL=https://app.haveniq.org` (and any other exact app origins, comma-
   separated). **Must not be `*`** — credentialed CORS requires an exact origin.
-- Redeploy. The CORS block already sets `credentials:true` when the origin list
-  isn't `*`.
+- The CORS block sets `credentials:true` when the origin list isn't `*` and
+  allow-lists `X-HavenIQ-CSRF`.
 
 ### 3. Frontend cutover (the part NOT pre-built — needs live testing)
 Do these **with the subdomain live** so you can test on real Safari + Chrome:
@@ -92,9 +107,11 @@ Do these **with the subdomain live** so you can test on real Safari + Chrome:
 - A cross-site `fetch` from another origin can't read any authed response (CORS).
 
 ### Rollback
-Set `COOKIE_AUTH_ENABLED=false` (backend) and ship a frontend build with
-`EXPO_PUBLIC_COOKIE_AUTH` unset. The header-based bearer path never went away, so
-this reverts cleanly.
+Ship a frontend build with `EXPO_PUBLIC_COOKIE_AUTH` unset — the web client goes
+back to sending the bearer token and stops sending the cookie/CSRF header, so the
+backend's Set-Cookie is simply ignored. The header-based bearer path never went
+away, so this reverts cleanly with no backend change. (If you also want the
+backend to stop setting the cookie entirely, set `COOKIE_AUTH_ENABLED=false`.)
 
 ---
 

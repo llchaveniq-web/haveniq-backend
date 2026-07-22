@@ -6,22 +6,26 @@
 //  cookie the browser will not expose to JS at all, so a stolen-token XSS is off
 //  the table.
 //
-//  FLAG-GATED (COOKIE_AUTH_ENABLED, default off) and INERT until enabled, because
-//  it is only SAFE once the API is on a SAME-SITE subdomain of the app
-//  (api.haveniq.org ↔ haveniq.org). A cookie set from the current cross-site
-//  Railway domain would be a THIRD-PARTY cookie — blocked by Safari ITP and
-//  Chrome's phase-out — and would break login. So: stand up api.haveniq.org,
-//  set COOKIE_DOMAIN=.haveniq.org, point the app at api.haveniq.org, THEN flip
-//  the flag. Full runbook: docs/COOKIE_AUTH_MIGRATION.md.
+//  ACTIVE BY DEFAULT. The precondition is now met: the API lives on
+//  api.haveniq.org, a SAME-SITE subdomain of the app (shared registrable domain
+//  haveniq.org), so hq_session is a first-party cookie (SameSite=Lax works; no
+//  third-party-cookie blocking). This ships ADDITIVELY — the body token is still
+//  returned and bearer is still accepted, so nothing changes for native/bearer
+//  clients until the WEB client opts in (EXPO_PUBLIC_COOKIE_AUTH). A browser
+//  that isn't in cookie mode never sends credentials, so the Set-Cookie it
+//  receives is simply never used. Full runbook: docs/COOKIE_AUTH_MIGRATION.md.
 //
-//  The READ side (readTokenCookie) is always active and harmless pre-migration:
-//  no cookie is ever set until the flag is on, so it simply returns null.
+//  Kill-switch: set COOKIE_AUTH_ENABLED=false to disable cookie-setting and the
+//  CSRF guard server-side (emergency backend revert). Default (unset) = ON.
+//  The READ side (readTokenCookie) is always active.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const COOKIE_NAME  = 'hq_session';
 const MAX_AGE_MS   = 7 * 24 * 60 * 60 * 1000;   // mirrors the JWT 7-day TTL
 
-const cookieAuthEnabled = () => process.env.COOKIE_AUTH_ENABLED === 'true';
+// ON unless explicitly disabled. Inverted from the original opt-in default now
+// that the same-site-API precondition holds — see the header note.
+const cookieAuthEnabled = () => process.env.COOKIE_AUTH_ENABLED !== 'false';
 
 // Parse the session token out of the raw Cookie header. No cookie-parser dep —
 // this is the only cookie we ever read. Returns null when absent/blank.
@@ -50,9 +54,9 @@ function cookieOptions() {
   };
 }
 
-// Set the session cookie alongside the JSON token response. No-op unless the
-// flag is on, so wiring this into every token-issuing route is safe to deploy
-// long before the migration is switched on.
+// Set the session cookie alongside the JSON token response. Active by default;
+// no-op only if COOKIE_AUTH_ENABLED=false (kill-switch). Harmless for bearer
+// clients — they don't send credentials, so they never return this cookie.
 function setSessionCookie(res, token) {
   if (!cookieAuthEnabled()) return;
   res.cookie(COOKIE_NAME, token, { ...cookieOptions(), maxAge: MAX_AGE_MS });
