@@ -391,6 +391,22 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       // person is real and matchable, they just never filled their profile in.
       // Purely descriptive — the feed still returns them, in the same order.
       profileComplete: r.profile_complete === true,
+      // Is this candidate from a DIFFERENT school than the viewer? Cross-school
+      // rows only appear at all when the viewer's own campus pool is below
+      // THIN_POOL (applyCampusRanking above), and they are appended AFTER the
+      // same-school block.
+      //
+      // That grouping is currently lost: the app re-sorts the feed purely by
+      // compatibility % ("rather than trusting the feed's order"), so a
+      // cross-school 99 outranks a same-school 80 on screen. Exposing the fact
+      // lets the client sort by (crossSchool, score) and get the intended
+      // order back.
+      //
+      // Deliberately NOT done by penalizing the score: compatScore is shown to
+      // students as a real compatibility number, and shading it by 15 points to
+      // win an argument about sort order would make the displayed figure a lie.
+      // Rank on the flag; keep the number true.
+      crossSchool: !!(mySchool && r.school !== mySchool),
       compatScore:   parseFloat(r.score),
       // Confidence coefficient (0–1). <1 when either side's quiz answers are
       // thin/uniform — the scorer already multiplied compatScore down by it.

@@ -84,3 +84,46 @@ test('applyCampusRanking: unknown viewer school is a no-op (never strands)', () 
 test('THIN_POOL is the documented 5', () => {
   assert.strictEqual(THIN_POOL, 5);
 });
+
+// ── The cross-school bridge, end to end (spec §10) ──────────────────────────
+// Grouping is how campus preference is expressed: same-school first, and
+// cross-school appended ONLY when the home campus is thin. Note this is a
+// GROUPING, not a score penalty — the displayed compatibility % stays true.
+test('applyCampusRanking: a thin campus bridges to cross-school', () => {
+  const rows = [
+    { id: 'a', school: 'Ohio University', score: 80 },
+    { id: 'b', school: 'Ohio State',      score: 99 },
+    { id: 'c', school: 'Ohio State',      score: 70 },
+  ];
+  const out = applyCampusRanking(rows, 'Ohio University');
+  assert.equal(out.length, 3, 'a thin campus must not be left with an empty feed');
+  assert.equal(out[0].id, 'a', 'the same-school candidate leads even at a LOWER score');
+  assert.ok(out.slice(1).every(r => r.school !== 'Ohio University'));
+});
+
+test('applyCampusRanking: a healthy campus never bridges', () => {
+  const rows = [];
+  for (let i = 0; i < THIN_POOL; i++) rows.push({ id: 's' + i, school: 'Ohio University', score: 60 + i });
+  rows.push({ id: 'x', school: 'Ohio State', score: 100 });
+  const out = applyCampusRanking(rows, 'Ohio University');
+  assert.equal(out.length, THIN_POOL);
+  assert.ok(!out.some(r => r.school === 'Ohio State'), 'a 100 elsewhere must not enter a healthy pool');
+});
+
+test('applyCampusRanking: scores are never modified, only grouped', () => {
+  // The alternative design (subtract N from cross-school scores) would make the
+  // compatibility % shown to a student a fiction. Ranking must not rewrite it.
+  const rows = [
+    { id: 'a', school: 'Ohio University', score: 80 },
+    { id: 'b', school: 'Ohio State',      score: 99 },
+  ];
+  const out = applyCampusRanking(rows, 'Ohio University');
+  assert.equal(out.find(r => r.id === 'b').score, 99, 'cross-school score must be untouched');
+  assert.equal(out.find(r => r.id === 'a').score, 80);
+});
+
+test('applyCampusRanking: an unknown viewer school strands nobody', () => {
+  const rows = [{ id: 'a', school: 'Ohio University', score: 80 }];
+  assert.deepEqual(applyCampusRanking(rows, null), rows);
+  assert.deepEqual(applyCampusRanking(rows, undefined), rows);
+});
