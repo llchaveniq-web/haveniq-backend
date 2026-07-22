@@ -24,6 +24,7 @@
 
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const crypto = require('crypto');
 
 // Demo / test accounts must NEVER receive a bot-drafted email or count as a
 // real signup to triage. Two flavors exist in production:
@@ -47,10 +48,20 @@ function requireBotToken(req, res, next) {
   }
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token || token !== expected) {
+  if (!token || !constantTimeEqual(token, expected)) {
     return res.status(401).json({ error: 'Invalid bot token.' });
   }
   next();
+}
+
+// Constant-time string compare so token verification doesn't leak length/prefix
+// information through response timing. Length-mismatch short-circuits (that only
+// reveals the length, which is fixed for our token), otherwise timingSafeEqual.
+function constantTimeEqual(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
 }
 
 // Ensure audit table exists. Best-effort; we don't fail the request if

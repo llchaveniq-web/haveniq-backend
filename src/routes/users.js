@@ -10,6 +10,7 @@ const { isFounder } = require('../utils/founders');
 const { notDemo } = require('../lib/demoFilter');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const { screenMessage } = require('../lib/contentFilter');
+const { stripSensitiveUser } = require('../lib/userSafe');
 const crypto    = require('crypto');
 const rateLimit = require('../lib/rateLimit');
 const { ipKeyGenerator } = require('../lib/rateLimit');
@@ -415,6 +416,10 @@ router.patch('/me', requireAuth, async (req, res) => {
       `UPDATE users SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${idx} RETURNING *`,
       values
     );
+    // RETURNING * carries every column — strip secrets (totp_secret, stripe id,
+    // etc.) before it reaches the client. Shape is otherwise unchanged so the
+    // app still gets every legitimate profile field it reads today.
+    const safeUser = stripSensitiveUser(rows[0]);
 
     // Audit which fields changed (names only, never values — keeps PII
     // out of the audit log).
@@ -427,7 +432,7 @@ router.patch('/me', requireAuth, async (req, res) => {
       require('../services/textInsight').extractForUser(req.user.id).catch(() => {});
     }
 
-    res.json({ success: true, user: rows[0] });
+    res.json({ success: true, user: safeUser });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update profile' });
@@ -464,15 +469,21 @@ router.get('/me/export', requireAuth, async (req, res) => {
     ]);
 
     // Strip security-sensitive secrets from the user's own row before export.
-    // A downloadable JSON shouldn't carry the bcrypt password hash or the TOTP
-    // 2FA secret — a synced/shared/leaked export would otherwise expose them,
-    // and they aren't personal data the user needs. Everything else is kept.
-    const profileRow = profile.rows[0] ? { ...profile.rows[0] } : null;
-    if (profileRow) {
-      delete profileRow.password_hash;
-      delete profileRow.totp_secret;
-      delete profileRow.totp_recovery_codes;
-    }
+    // A downloadable JSON shouldn't carry the TOTP 2FA secret, Stripe id, etc.
+    // — a synced/shared/leaked export would otherwise expose them, and they
+    // aren't personal data the user needs. Everything else is kept.
+    const profileRow = profile.rows[0] ? stripSensitiveUser(profile.rows[0]) : null;
+
+    // Each profile snapshot embeds a near-full copy of the users row at quiz
+    // time (older rows still contain secrets even after the writer was fixed),
+    // so redact the embedded `profile` on read too — otherwise the strip above
+    // is defeated by the snapshot copy.
+    const safeSnapshots = snapshots.rows.map((r) => {
+      if (r && r.snapshot && typeof r.snapshot === 'object' && r.snapshot.profile) {
+        return { ...r, snapshot: { ...r.snapshot, profile: stripSensitiveUser(r.snapshot.profile) } };
+      }
+      return r;
+    });
 
     const out = {
       exported_at:           new Date().toISOString(),
@@ -480,7 +491,7 @@ router.get('/me/export', requireAuth, async (req, res) => {
       user_id:               userId,
       profile:               profileRow,
       quiz_answers:          quiz.rows,
-      profile_snapshots:     snapshots.rows,
+      profile_snapshots:     safeSnapshots,
       consent_log:           consent.rows,
       telemetry_events:      telemetry.rows,
       connect_requests:      requests.rows,

@@ -318,7 +318,12 @@ router.post('/submit', requireAuth, async (req, res) => {
       // pattern) and keep the uuid comparison in the WHERE against users.id.
       `INSERT INTO user_profile_snapshot (user_id, trigger, snapshot)
        SELECT u.id::text, 'quiz_complete', jsonb_build_object(
-         'profile', to_jsonb(u) - 'password_hash',
+         -- Never persist secrets into the snapshot blob (it's shipped in the
+         -- data export). Subtract every sensitive column, not just password_hash.
+         'profile', to_jsonb(u)
+                    - 'password_hash' - 'totp_secret' - 'totp_recovery_codes'
+                    - 'stripe_customer_id' - 'tokens_valid_after'
+                    - 'ban_reason' - 'parent_email',
          'answers', $2::jsonb
        )
        FROM users u WHERE u.id = $1::uuid`,
