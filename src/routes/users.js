@@ -559,6 +559,13 @@ router.get('/:id', requireAuth, suspicious.track('profile.lookup', 50), async (r
 
     if (!rows[0]) return res.status(404).json({ error: 'User not found' });
 
+    // Privacy (policy §3): never expose more than another student's last
+    // INITIAL. Full surnames live only on founder-gated admin screens. The app
+    // renders "First L." from this field, so truncate it in place — closes the
+    // cross-school surname-scrape without changing the payload shape the client
+    // reads. (Own profile is fetched via GET /users/me, which keeps the name.)
+    rows[0].last_name = (rows[0].last_name || '').trim().charAt(0).toUpperCase();
+
     // Record profile view (for "who viewed you" premium feature)
     if (req.user.id !== req.params.id) {
       pool.query(
@@ -603,7 +610,11 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
       [req.user.id]
     );
 
-    res.json(rows);
+    // Peer list → last INITIAL only (policy §3), same as everywhere else.
+    res.json(rows.map(r => ({
+      ...r,
+      last_name: (r.last_name || '').trim().charAt(0).toUpperCase(),
+    })));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch viewers' });
   }
