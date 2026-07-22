@@ -56,11 +56,18 @@ test('extractSessionToken: cookie is used only when there is no bearer header', 
 });
 
 // ── setSessionCookie / clearSessionCookie ───────────────────────────────────
-test('setSessionCookie: no-op while COOKIE_AUTH_ENABLED is off (deploy-safe)', () => {
+test('setSessionCookie: active by default (unset env) — sets the cookie', () => {
   delete process.env.COOKIE_AUTH_ENABLED;
   const res = mkRes();
   setSessionCookie(res, 'tok');
-  assert.strictEqual(res.cookieCalls.length, 0, 'must not set a cookie until the flag is flipped');
+  assert.strictEqual(res.cookieCalls.length, 1, 'cookie set by default now the API is same-site');
+});
+test('setSessionCookie: kill-switch — COOKIE_AUTH_ENABLED=false disables it', () => {
+  process.env.COOKIE_AUTH_ENABLED = 'false';
+  const res = mkRes();
+  setSessionCookie(res, 'tok');
+  assert.strictEqual(res.cookieCalls.length, 0, 'explicit =false is a no-op (emergency revert)');
+  delete process.env.COOKIE_AUTH_ENABLED;
 });
 test('setSessionCookie: when enabled, sets httpOnly + Secure + SameSite=Lax', () => {
   process.env.COOKIE_AUTH_ENABLED = 'true';
@@ -83,13 +90,14 @@ test('clearSessionCookie: always clears hq_session (server-side logout)', () => 
 });
 
 // ── csrfGuard ───────────────────────────────────────────────────────────────
-test('csrfGuard: fully inert while the flag is off', () => {
-  delete process.env.COOKIE_AUTH_ENABLED;
+test('csrfGuard: kill-switch (COOKIE_AUTH_ENABLED=false) makes it inert', () => {
+  process.env.COOKIE_AUTH_ENABLED = 'false';
   const { nexted } = runGuard({ method: 'POST', headers: { cookie: 'hq_session=x' } });
-  assert.strictEqual(nexted, true, 'no CSRF enforcement until cookie auth is enabled');
+  assert.strictEqual(nexted, true, 'explicit disable → no CSRF enforcement');
+  delete process.env.COOKIE_AUTH_ENABLED;
 });
-test('csrfGuard (enabled): GET and cookieless mutations pass; cookie mutation needs the header', () => {
-  process.env.COOKIE_AUTH_ENABLED = 'true';
+test('csrfGuard (default on): GET and cookieless mutations pass; cookie mutation needs the header', () => {
+  delete process.env.COOKIE_AUTH_ENABLED;   // default = enabled
 
   // GET always passes
   assert.strictEqual(runGuard({ method: 'GET', headers: { cookie: 'hq_session=x' } }).nexted, true);
@@ -105,6 +113,4 @@ test('csrfGuard (enabled): GET and cookieless mutations pass; cookie mutation ne
   // POST riding the cookie WITH the custom header → allowed
   const ok = runGuard({ method: 'POST', headers: { cookie: 'hq_session=x', 'x-haveniq-csrf': '1' } });
   assert.strictEqual(ok.nexted, true);
-
-  delete process.env.COOKIE_AUTH_ENABLED;
 });

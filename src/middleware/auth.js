@@ -140,7 +140,8 @@ function refuseBanned(req, res, next) {
   next();
 }
 
-// CSRF guard for cookie-authenticated mutations. Inert unless COOKIE_AUTH_ENABLED.
+// CSRF guard for cookie-authenticated mutations. Active by default (disable with
+// COOKIE_AUTH_ENABLED=false).
 // The session cookie is SameSite=Lax (so browsers don't send it on cross-site
 // POSTs at all) — this is belt-and-suspenders: any state-changing request that
 // rides the cookie must ALSO carry a custom header (X-HavenIQ-CSRF) that a
