@@ -61,36 +61,48 @@ const withEnv = async (vars, fn) => {
 
 test.beforeEach(() => { inserted = []; });
 
-// ── Production must never expose this ──
-test('PROD: 404 even with ALLOW_DEMO_SESSION=true', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'production', ALLOW_DEMO_SESSION: 'true' }, async () => {
-    const res = await post();
-    assert.equal(res.status, 404, 'a stray flag on prod must not open an auth bypass');
-    assert.equal(inserted.length, 0, 'and must not create a user');
-  });
-});
-
-test('PROD: 404 even if NODE_ENV is wrong', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'production', NODE_ENV: 'staging', ALLOW_DEMO_SESSION: 'true' },
-    async () => assert.equal((await post()).status, 404));
-});
-
-test('404 (not 403) — prod looks like a build without the feature', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'production', ALLOW_DEMO_SESSION: 'true' }, async () => {
+// ── The switch: OFF means the route does not exist, in ANY environment ──
+test("flag unset ⇒ 404 on PRODUCTION", async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: "production", DEMO_SESSION_ENABLED: undefined }, async () => {
     const res = await post();
     assert.equal(res.status, 404);
-    assert.ok(!/demo/i.test(JSON.stringify(res.body)), 'the 404 must not advertise the feature');
+    assert.equal(inserted.length, 0, "and no user is created");
   });
 });
 
-test('STAGING without the flag: still 404', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: undefined },
+test("flag unset ⇒ 404 on staging too (default off everywhere)", async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: "staging", DEMO_SESSION_ENABLED: undefined },
     async () => assert.equal((await post()).status, 404));
+});
+
+test("only the exact string \"true\" opens it", async () => {
+  for (const v of ["false", "1", "yes", "", "TRUE"]) {
+    await withEnv({ RAILWAY_ENVIRONMENT: "production", DEMO_SESSION_ENABLED: v }, async () => {
+      const expected = v.trim().toLowerCase() === "true" ? 200 : 404;
+      assert.equal((await post()).status, expected, JSON.stringify(v));
+    });
+  }
+});
+
+test("404 (not 403) — an off deployment is indistinguishable from one without the feature", async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: "production", DEMO_SESSION_ENABLED: undefined }, async () => {
+    const res = await post();
+    assert.equal(res.status, 404);
+    assert.ok(!/demo/i.test(JSON.stringify(res.body)), "the 404 must not advertise the feature");
+  });
+});
+
+test("flag ON works on PRODUCTION — the authorized reviewer path", async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: "production", DEMO_SESSION_ENABLED: "true" }, async () => {
+    const res = await post();
+    assert.equal(res.status, 200);
+    assert.ok(res.body.token);
+  });
 });
 
 // ── Staging, enabled ──
 test('STAGING + flag: returns a token and the verify-code user shape', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: 'true' }, async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', DEMO_SESSION_ENABLED: 'true' }, async () => {
     const res = await post();
     assert.equal(res.status, 200);
     assert.equal(typeof res.body.token, 'string');
@@ -109,7 +121,7 @@ test('STAGING + flag: returns a token and the verify-code user shape', async () 
 });
 
 test('the token is a normal session token for that user', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: 'true' }, async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', DEMO_SESSION_ENABLED: 'true' }, async () => {
     const { token } = (await post()).body;
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
     assert.equal(payload.userId, 'demo-user-1', 'identical claim shape to a real login');
@@ -118,7 +130,7 @@ test('the token is a normal session token for that user', async () => {
 });
 
 test('each call creates a DISTINCT throwaway user', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: 'true' }, async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', DEMO_SESSION_ENABLED: 'true' }, async () => {
     await post(); await post();
     assert.equal(inserted.length, 2);
     assert.notEqual(inserted[0].params[0], inserted[1].params[0], 'emails must not collide');
@@ -126,7 +138,7 @@ test('each call creates a DISTINCT throwaway user', async () => {
 });
 
 test('the demo user is a .test address (kept out of other reviewers\' feeds)', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: 'true' }, async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', DEMO_SESSION_ENABLED: 'true' }, async () => {
     await post();
     const email = inserted[0].params[0];
     assert.match(email, /^demo\+[0-9a-f]+@haveniq\.test$/);
@@ -138,7 +150,7 @@ test('the demo user is a .test address (kept out of other reviewers\' feeds)', a
 });
 
 test('the demo user is created verified, quiz-incomplete, with open preferences', async () => {
-  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: 'true' }, async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', DEMO_SESSION_ENABLED: 'true' }, async () => {
     await post();
     const sql = inserted[0].sql;
     assert.match(sql, /is_verified/);
@@ -153,7 +165,7 @@ test('the demo session sets the httpOnly cookie a real login sets', async () => 
   // Cookie auth is active (PR #6), so /auth/verify-code sets hq_session. A demo
   // session that skipped it would not be "identical to a real login" and any
   // cookie-authenticated path would behave differently for a reviewer.
-  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: 'true' }, async () => {
+  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', DEMO_SESSION_ENABLED: 'true' }, async () => {
     const cookie = String((await post()).headers['set-cookie'] || '');
     assert.match(cookie, /hq_session=/);
     assert.match(cookie, /HttpOnly/);

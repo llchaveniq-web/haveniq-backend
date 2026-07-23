@@ -835,8 +835,20 @@ router.get('/me', requireAuth, async (req, res) => {
 // not a special demo path.
 const DEMO_SCHOOL = process.env.DEMO_SEED_SCHOOL || 'University of Southern California';
 
+// GATE: one env var, any environment, default OFF. Unset/false ⇒ 404, so the
+// endpoint behaves exactly as if it were never deployed. Turning it off is the
+// entire revert for this route — no code change, no redeploy.
+//
+// Deliberately NOT routed through lib/stagingGuard: that gate hard-denies
+// production by design (it protects the .edu relax and the fixed OTP, which
+// must stay staging-only). This endpoint is the one bypass the founder
+// explicitly authorized on prod for a reviewer, so it carries its own switch
+// and touches no other auth path.
+const demoSessionEnabled = () =>
+  String(process.env.DEMO_SESSION_ENABLED || '').trim().toLowerCase() === 'true';
+
 router.post('/demo-session', async (req, res) => {
-  if (!stagingFlag('ALLOW_DEMO_SESSION')) return res.status(404).json({ error: 'Not found' });
+  if (!demoSessionEnabled()) return res.status(404).json({ error: 'Not found' });
   try {
     // `.test` is a reserved TLD (RFC 2606) and is what lib/demoFilter treats as
     // a demo account. That is intentional here: it keeps one reviewer's
