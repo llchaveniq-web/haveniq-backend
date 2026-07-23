@@ -716,3 +716,28 @@ CREATE INDEX IF NOT EXISTS idx_pair_events_pair_t ON pair_events (pair_key, t);
 -- Bulk cohort export (?since=) and the GDPR per-user export/erasure paths.
 CREATE INDEX IF NOT EXISTS idx_pair_events_t       ON pair_events (t);
 CREATE INDEX IF NOT EXISTS idx_pair_events_user    ON pair_events (user_id);
+
+-- ── Close the Loop: counterfactual columns + consent (2026-07-23) ────────────
+-- pair_events already exists (the longitudinal ledger). These two columns are
+-- what turn it from "this pair improved" into a comparable claim: every event in
+-- a conflict episode carries the episode it belongs to and the arm that episode
+-- was assigned, so intervened pairs can be diffed against held-back controls.
+--
+-- arm is stamped SERVER-SIDE at conflict_flagged and copied onto every later
+-- event in the episode. NULL for non-episode events (ordinary pulses etc.).
+ALTER TABLE pair_events ADD COLUMN IF NOT EXISTS arm        TEXT;
+ALTER TABLE pair_events ADD COLUMN IF NOT EXISTS episode_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_pair_events_episode ON pair_events (episode_id)
+  WHERE episode_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_pair_events_arm     ON pair_events (arm, pair_key)
+  WHERE arm IS NOT NULL;
+
+-- Explicit per-pair consent. No pair is tracked without a row here — the ledger
+-- is a record of two real people's conflict, so v1 is a small consented cohort.
+CREATE TABLE IF NOT EXISTS pair_consent (
+  pair_id      TEXT PRIMARY KEY,          -- the sorted unordered pair (= pair_events.pair_key)
+  consented_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  scope        TEXT,                      -- what they agreed to, in words
+  revoked_at   TIMESTAMPTZ,               -- consent is withdrawable; NULL = active
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -12,6 +12,7 @@
  * answer (did the intervention help, and did the pair stay?).
  */
 
+const crypto = require('crypto');
 const pool = require('../db/pool');
 
 // The analytical axis. Strict — an event with an unrecognized `kind` can't be
@@ -25,9 +26,25 @@ const KINDS = new Set(['signal', 'intervention', 'outcome']);
 // for this dataset. Unknown subtypes are stored and surfaced by the export's
 // `subtypes` summary, so vocabulary drift is visible instead of invisible.
 const KNOWN_SUBTYPES = new Set([
-  'pulse', 'early_warning_fired', 'nudge_shown', 'repair_completed',
-  'agreement_made', 'checkin', 'moved_in', 'ended',
+  // signal
+  'pulse', 'early_warning_fired', 'conflict_flagged',
+  // intervention
+  'nudge_shown', 'repair_opened', 'repair_completed',
+  'agreement_made', 'agreement_revisited', 'forecast_viewed',
+  // outcome
+  'checkin', 'moved_in', 'room_change', 'lease_break', 'ended',
 ]);
+
+// The two arms of the Level-1 counterfactual. `control` pairs are NOT denied
+// help — they keep the standard passive support every pair gets; they just
+// don't receive the active nudge/repair coaching. That distinction is what
+// makes holding some episodes back ethically defensible, and it is the reason
+// the comparison can be run at all.
+const ARMS = Object.freeze(['intervention', 'control']);
+
+// The signal that OPENS an episode. Only this subtype mints a new arm; every
+// later event in the episode inherits the arm already stored for it.
+const EPISODE_OPENER = 'conflict_flagged';
 
 const MAX_STR  = 64;     // topic / subtype
 const MAX_META = 2000;   // serialized meta bytes
@@ -95,7 +112,56 @@ function normalize(evt, userId) {
     topic:   str(p.topic, MAX_STR),
     value,
     meta,
+    // Which conflict episode this event belongs to. Client-supplied, because
+    // only the client knows which flagged conflict a later nudge relates to.
+    episodeId: str(p.episodeId, MAX_STR),
+    // `arm` is deliberately NOT read from the payload — see resolveArm(). A
+    // client that could name its own arm could put every pair it liked into the
+    // intervention group, and the comparison would measure nothing.
   };
+}
+
+/**
+ * Deterministically assign an arm to an episode.
+ *
+ * Deterministic on the episode id rather than random: a retried or replayed
+ * `conflict_flagged` must resolve to the SAME arm, or a pair could flip from
+ * control to intervention part-way through and silently contaminate the
+ * comparison. Even 50/50 split on the low bit of a hash.
+ */
+function assignArm(episodeId) {
+  const h = crypto.createHash('sha256').update(String(episodeId)).digest();
+  return ARMS[h[0] & 1];
+}
+
+/**
+ * The arm for an episode: whatever was already stored for it, else a fresh
+ * assignment. Every event in an episode therefore carries the same arm, which
+ * is what the export groups on.
+ */
+async function resolveArm(episodeId, db = pool) {
+  if (!episodeId) return null;
+  const { rows } = await db.query(
+    `SELECT arm FROM pair_events
+      WHERE episode_id = $1 AND arm IS NOT NULL
+      ORDER BY created_at ASC LIMIT 1`,
+    [episodeId],
+  ).catch(() => ({ rows: [] }));
+  return rows[0]?.arm || assignArm(episodeId);
+}
+
+/**
+ * Is this pair consented to be tracked? The ledger records two real people's
+ * conflict, so v1 is an explicitly consented cohort — no row, no tracking.
+ * Revoking sets revoked_at, which stops future tracking without deleting the
+ * history already gathered while consent was active.
+ */
+async function hasConsent(pairKey, db = pool) {
+  const { rows } = await db.query(
+    'SELECT 1 FROM pair_consent WHERE pair_id = $1 AND revoked_at IS NULL LIMIT 1',
+    [pairKey],
+  ).catch(() => ({ rows: [] }));
+  return rows.length > 0;
 }
 
 // Self-healing table create, cached per process (same shape as the other
@@ -118,6 +184,9 @@ async function ensureTable(db = pool) {
       meta       JSONB,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
+  await db.query('ALTER TABLE pair_events ADD COLUMN IF NOT EXISTS episode_id TEXT');
+  await db.query('ALTER TABLE pair_events ADD COLUMN IF NOT EXISTS arm TEXT');
+  await db.query(`CREATE TABLE IF NOT EXISTS pair_consent (pair_id TEXT PRIMARY KEY, consented_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), scope TEXT, revoked_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await db.query('CREATE INDEX IF NOT EXISTS idx_pair_events_pair_t ON pair_events (pair_key, t)');
   await db.query('CREATE INDEX IF NOT EXISTS idx_pair_events_t    ON pair_events (t)');
   await db.query('CREATE INDEX IF NOT EXISTS idx_pair_events_user ON pair_events (user_id)');
@@ -140,11 +209,14 @@ async function persistBatch(events, userId, db = pool) {
   let stored = 0;
   for (const r of rows) {
     const { rowCount } = await db.query(
-      `INSERT INTO pair_events (id, user_id, pair_id, pair_key, t, kind, subtype, topic, value, meta)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `INSERT INTO pair_events (id, user_id, pair_id, pair_key, t, kind, subtype, topic, value, meta, episode_id, arm)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (id) DO NOTHING`,
       [r.id, r.userId, r.pairId, r.pairKey, r.t, r.kind, r.subtype, r.topic, r.value,
-       r.meta === null ? null : JSON.stringify(r.meta)],
+       r.meta === null ? null : JSON.stringify(r.meta),
+       r.episodeId ?? null,
+       // Resolved server-side per episode, never taken from the client.
+       r.episodeId ? await resolveArm(r.episodeId, db) : null],
     );
     stored += rowCount;
   }
@@ -166,6 +238,8 @@ const toRow = (r) => ({
   topic: r.topic,
   value: r.value === null ? null : Number(r.value),
   meta: r.meta,
+  episodeId: r.episode_id ?? null,
+  arm: r.arm ?? null,
   createdAt: r.created_at,
 });
 
@@ -173,7 +247,7 @@ const toRow = (r) => ({
 async function timeline(pairKey, db = pool) {
   await ensureTable(db);
   const { rows } = await db.query(
-    `SELECT id, user_id, pair_id, pair_key, t, kind, subtype, topic, value, meta, created_at
+    `SELECT id, user_id, pair_id, pair_key, t, kind, subtype, topic, value, meta, episode_id, arm, created_at
        FROM pair_events WHERE pair_key = $1 ORDER BY t ASC, created_at ASC`,
     [pairKey],
   );
@@ -184,7 +258,7 @@ async function timeline(pairKey, db = pool) {
 async function since(sinceMs, limit, db = pool) {
   await ensureTable(db);
   const { rows } = await db.query(
-    `SELECT id, user_id, pair_id, pair_key, t, kind, subtype, topic, value, meta, created_at
+    `SELECT id, user_id, pair_id, pair_key, t, kind, subtype, topic, value, meta, episode_id, arm, created_at
        FROM pair_events WHERE t >= $1 ORDER BY t ASC, created_at ASC LIMIT $2`,
     [sinceMs, limit],
   );
@@ -193,6 +267,7 @@ async function since(sinceMs, limit, db = pool) {
 
 module.exports = {
   pairKeyFor, normalize, persistBatch, timeline, since, ensureTable,
-  KINDS, KNOWN_SUBTYPES,
+  KINDS, KNOWN_SUBTYPES, ARMS,
+  assignArm, resolveArm, hasConsent,
   _resetTableReady: () => { tableReady = false; },   // tests only
 };

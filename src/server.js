@@ -412,6 +412,10 @@ app.use('/telemetry', require('./routes/telemetry'));
 // Longitudinal pair dataset export. Research-role only — it is the one surface
 // that joins both sides of a pairing (see routes/research.js).
 app.use('/research', require('./routes/research'));
+// Close the Loop — per-pair event ledger. Ingest is pair-member or internal-key;
+// the TIMELINE is research/internal only (it is a record of two real people's
+// conflict, so it is never returned to a normal user). See routes/pairs.js.
+app.use('/pairs', require('./routes/pairs'));
 app.use('/reviews',  require('./routes/reviews'));
 app.use('/pulses',   require('./routes/pulses'));
 app.use('/checklists', require('./routes/checklists'));

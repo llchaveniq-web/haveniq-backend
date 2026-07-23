@@ -308,6 +308,51 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [req.user.id, otherUserId, outcome, sanitized, predScore, predTier, stressStretch, predPattern]
     );
+    // W2 — mirror every recurring check-in into the pair ledger as an `outcome`
+    // event, so the longitudinal record and the check-in survey are ONE dataset
+    // rather than two that have to be reconciled later. Best-effort and
+    // consent-gated inside the service: a pair outside the consented cohort
+    // records nothing here, and a ledger hiccup never fails the check-in itself.
+    //
+    // `hardStatus` is the terminal read (still_together | room_change |
+    // lease_break | ended); `rating` is the 1-5 self-report. Both ride the same
+    // event so the trajectory and the terminal outcome share a timestamp.
+    (async () => {
+      try {
+        const pe = require('../services/pairEvents');
+        const pairKey = [String(req.user.id), String(otherUserId)].sort().join(':');
+        await pe.ensureTable();
+        if (!(await pe.hasConsent(pairKey))) return;
+        const raw = sanitized || {};
+        const HARD = new Set(['still_together', 'room_change', 'lease_break', 'ended']);
+        const hardStatus = HARD.has(String(raw.hardStatus)) ? String(raw.hardStatus) : null;
+        const rating = Number.isFinite(Number(raw.rating)) ? Number(raw.rating) : null;
+        // A terminal status is its own subtype so the North Star query can find
+        // it directly; anything else is an ordinary recurring check-in.
+        const subtype = hardStatus && hardStatus !== 'still_together' ? hardStatus : 'checkin';
+        await pe.persistBatch([{
+          // Deterministic id ⇒ a retried check-in dedups instead of double-counting.
+          id: `mo:${req.user.id}:${otherUserId}:${outcome}:${raw.stage || 'na'}`,
+          type: 'pair_event',
+          payload: {
+            pairId: String(otherUserId),
+            t: Date.now(),
+            kind: 'outcome',
+            subtype,
+            value: rating,
+            episodeId: typeof raw.episodeId === 'string' ? raw.episodeId : undefined,
+            meta: {
+              stage: raw.stage ?? null,
+              hardStatus,
+              ...(typeof raw.reason === 'string' ? { reason: raw.reason.slice(0, 120) } : {}),
+            },
+          },
+        }], String(req.user.id));
+      } catch (e) {
+        console.error('[match-outcomes] pair-ledger mirror failed:', e.message);
+      }
+    })();
+
     res.json({ recorded: true });
     // Page on a crisis/threat note AFTER responding — best-effort, non-blocking.
     maybePageSafety(req.user.id, details, sanitized);
