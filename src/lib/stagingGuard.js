@@ -33,11 +33,30 @@ function isProdEnvironment() {
 }
 
 /**
+ * TEMPORARY, DELIBERATE production override (founder-authorized 2026-07-22 for
+ * an advisor review under time pressure).
+ *
+ * When ALLOW_PROD_DEMO_BYPASS=true, production stops hard-denying the bypasses
+ * below — i.e. anyone who can reach the API can mint a session with no email
+ * and no OTP, and non-.edu addresses are accepted. That is a full signup
+ * bypass on the live app and it contradicts the "verified students only"
+ * promise in the TOS/privacy policy.
+ *
+ * It is a SEPARATE variable from the feature flags on purpose: turning a single
+ * flag on can never do this by accident — you have to set this one too, and its
+ * name says exactly what it does. TURN IT OFF the moment the review is over:
+ *   railway variables -e production -s haveniq-backend --set ALLOW_PROD_DEMO_BYPASS=false
+ */
+function prodBypassAuthorized() {
+  return String(process.env.ALLOW_PROD_DEMO_BYPASS || '').trim().toLowerCase() === 'true';
+}
+
+/**
  * Is `name` an enabled staging bypass? Always false on production, whatever
  * the variable says.
  */
 function stagingFlag(name) {
-  if (isProdEnvironment()) return false;
+  if (isProdEnvironment() && !prodBypassAuthorized()) return false;
   return String(process.env[name] || '').trim().toLowerCase() === 'true';
 }
 
@@ -47,7 +66,7 @@ function stagingFlag(name) {
  * into a trivially guessable master code.
  */
 function stagingOtp() {
-  if (isProdEnvironment()) return null;
+  if (isProdEnvironment() && !prodBypassAuthorized()) return null;
   const v = String(process.env.STAGING_LOGIN_OTP || '').trim();
   return /^\d{6}$/.test(v) ? v : null;
 }
@@ -71,4 +90,4 @@ function logStagingBypasses(log = console) {
   log.warn('[staging-guard] auth bypasses ACTIVE (non-production):', configured.join(', '));
 }
 
-module.exports = { isProdEnvironment, stagingFlag, stagingOtp, logStagingBypasses };
+module.exports = { isProdEnvironment, prodBypassAuthorized, stagingFlag, stagingOtp, logStagingBypasses };
