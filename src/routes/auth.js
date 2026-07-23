@@ -858,8 +858,13 @@ router.post('/demo-session', async (req, res) => {
     );
     const user = rows[0];
 
-    // A normal session token — identical to what a real login issues.
+    // A normal session token — identical to what a real login issues, including
+    // the httpOnly session cookie that /auth/verify-code sets (activated by the
+    // cookie-auth migration). Without this the demo session would be subtly
+    // NOT a real login, and any cookie-authenticated path would behave
+    // differently for a reviewer than for a student.
     const token = signToken(user.id);
+    setSessionCookie(res, token);
 
     // Same profile shape /auth/verify-code returns. Sent as BOTH `user` (the
     // frontend's demo contract) and `profile` (what the verify-code consumer

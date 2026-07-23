@@ -34,6 +34,12 @@ inject('../services/email', {
   generateOTP: () => '000000', sendOTPEmail: async () => {},
   sendWelcomeEmail: async () => {}, sendFounderSignupAlert: async () => {},
 });
+inject('../lib/sessionCookie', {
+  setSessionCookie: (res, t) => res.setHeader('set-cookie', `hq_session=${t}; HttpOnly`),
+  clearSessionCookie: () => {},
+  readTokenCookie: () => null,
+  cookieAuthEnabled: () => true,
+});
 
 const express = require('express');
 const request = require('supertest');
@@ -140,5 +146,16 @@ test('the demo user is created verified, quiz-incomplete, with open preferences'
     // inclusively, so the seeds are guaranteed visible.
     assert.match(sql, /'\{\}'/);
     assert.match(sql, /FALSE/, 'quiz_completed FALSE — the reviewer takes the quiz');
+  });
+});
+
+test('the demo session sets the httpOnly cookie a real login sets', async () => {
+  // Cookie auth is active (PR #6), so /auth/verify-code sets hq_session. A demo
+  // session that skipped it would not be "identical to a real login" and any
+  // cookie-authenticated path would behave differently for a reviewer.
+  await withEnv({ RAILWAY_ENVIRONMENT: 'staging', ALLOW_DEMO_SESSION: 'true' }, async () => {
+    const cookie = String((await post()).headers['set-cookie'] || '');
+    assert.match(cookie, /hq_session=/);
+    assert.match(cookie, /HttpOnly/);
   });
 });
