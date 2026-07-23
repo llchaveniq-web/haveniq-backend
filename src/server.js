@@ -638,7 +638,12 @@ async function bootstrapSchemaAsync() {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`\n🚀 HavenIQ API running on port ${PORT}`);
-  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`
+    + ` (railway: ${process.env.RAILWAY_ENVIRONMENT || 'n/a'})`);
+  // Print any live auth bypasses (demo session / .edu relax / fixed OTP) so
+  // they are visible in the deploy log rather than silently enabled — and so a
+  // misconfiguration on prod is loud. They are refused on prod regardless.
+  require('./lib/stagingGuard').logStagingBypasses();
   // Echo the resolved DB HOST (never credentials) so a load-test operator can
   // confirm at a glance that a staging instance is pointed at the STAGING
   // Postgres — not production. Host only, parsed from DATABASE_URL.

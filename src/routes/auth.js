@@ -4,6 +4,10 @@ const { ipKeyGenerator } = require('../lib/rateLimit');
 const crypto = require('crypto');
 const pool     = require('../db/pool');
 const { generateOTP, sendOTPEmail, sendWelcomeEmail, sendFounderSignupAlert } = require('../services/email');
+// Staging-only auth bypasses (demo session, .edu relax, fixed OTP). Every one
+// of these is a signup bypass on prod, so the gate hard-denies production
+// regardless of how the flags are set — see lib/stagingGuard.js.
+const { stagingFlag, stagingOtp, isProdEnvironment } = require('../lib/stagingGuard');
 
 // Record a successful sign-in for the user. Fire-and-forget — a DB
 // failure here is loud but shouldn't break the auth response. The IP
@@ -210,7 +214,14 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
     //     the email's domain must also match it. Prevents claiming
     //     "Cal Poly" while signing up with a UCLA address — the
     //     identity-spoofing failure mode separate from the TLD gate.
-    if (!hasAcademicTld) {
+    // STAGING ONLY: accept any domain so a reviewer without a school address can
+    // walk the normal signup. Gated on ALLOW_ANY_EMAIL_DOMAIN *and* a
+    // non-production environment — on prod this expression is always false and
+    // the gate below is exactly as strict as it was. Note the history above:
+    // this boundary was probed and confirmed exploitable in prod once already,
+    // which is why the relax cannot be enabled by a single stray variable.
+    const relaxDomain = stagingFlag('ALLOW_ANY_EMAIL_DOMAIN');
+    if (!hasAcademicTld && !relaxDomain) {
       return res.status(400).json({
         error: 'School email required (.edu, .ac.uk, .edu.au, …). HavenIQ is for verified students only — please use your school address.',
       });
@@ -378,7 +389,15 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     const submitted = code.trim();
     const stored    = otpRecord.code;
     let equal = false;
-    if (stored === submitted) {
+    // STAGING ONLY: a fixed always-valid code, for when staging has no outbound
+    // email wired and nobody can read the real OTP. stagingOtp() returns null on
+    // production and for any value that isn't exactly 6 digits, so this can
+    // never become a blank-or-short master code. The OTP row still has to exist
+    // (send-code was called) and the attempt cap above still applies.
+    const fixedOtp = stagingOtp();
+    if (fixedOtp && submitted === fixedOtp) {
+      equal = true;
+    } else if (stored === submitted) {
       equal = true;
     } else if (stored && stored.length === 64) {
       const submittedHash = hashOtp(submitted);
@@ -798,6 +817,76 @@ router.get('/me', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('auth/me error:', err);
     return res.status(500).json({ error: 'Failed to load user.' });
+  }
+});
+
+// ── POST /auth/demo-session (STAGING ONLY) ────────────────────────────────
+// One-tap reviewer login: creates a throwaway student and returns a REAL
+// session, so a reviewer can walk the whole app with no email and no OTP.
+//
+// This is a complete authentication bypass, so it does not exist on
+// production: the route is registered unconditionally but returns 404 unless
+// BOTH the environment is non-production AND ALLOW_DEMO_SESSION=true. A 404
+// (not 403) so prod is indistinguishable from a build that never had the
+// feature. See lib/stagingGuard.js for why this is not a NODE_ENV check.
+//
+// The user it creates is deliberately ordinary — same columns, same signed
+// token as a real login — because the point is to exercise the real product,
+// not a special demo path.
+const DEMO_SCHOOL = process.env.DEMO_SEED_SCHOOL || 'University of Southern California';
+
+router.post('/demo-session', async (req, res) => {
+  if (!stagingFlag('ALLOW_DEMO_SESSION')) return res.status(404).json({ error: 'Not found' });
+  try {
+    // `.test` is a reserved TLD (RFC 2606) and is what lib/demoFilter treats as
+    // a demo account. That is intentional here: it keeps one reviewer's
+    // throwaway user out of the NEXT reviewer's match feed, so everyone sees
+    // the same curated seed cohort instead of a pile of "Demo Visitor" rows.
+    // The seeded students deliberately do NOT use a demo-pattern address, or
+    // the feed would filter them out and the demo would show an empty pool.
+    const rand  = crypto.randomBytes(5).toString('hex');
+    const email = `demo+${rand}@haveniq.test`;
+
+    const { rows } = await pool.query(
+      `INSERT INTO users
+         (email, school, school_domain, first_name, last_name, age, gender,
+          looking_for, is_verified, trust_score, quiz_completed)
+       VALUES ($1, $2, $3, 'Demo', 'Visitor', 20, NULL,
+               '{}', TRUE, 20, FALSE)
+       RETURNING *`,
+      [email, DEMO_SCHOOL, 'haveniq.test'],
+    );
+    const user = rows[0];
+
+    // A normal session token — identical to what a real login issues.
+    const token = signToken(user.id);
+
+    // Same profile shape /auth/verify-code returns. Sent as BOTH `user` (the
+    // frontend's demo contract) and `profile` (what the verify-code consumer
+    // reads) so either caller works without a client change.
+    const profile = {
+      id: user.id, email: user.email, school: user.school,
+      firstName: user.first_name, lastName: user.last_name,
+      lastInitial: user.last_name ? user.last_name.trim().charAt(0) : '',
+      bio: user.bio ?? '', major: user.major ?? '', schoolYear: user.school_year ?? '',
+      age: user.age ?? null, gender: user.gender ?? '', lookingFor: user.looking_for ?? [],
+      photoUrl: user.photo_url ?? null,
+      budgetMin: user.budget_min ?? null, budgetMax: user.budget_max ?? null,
+      neighborhoods: user.neighborhoods ?? [], moveInDate: user.move_in_date ?? null,
+      isVerified: user.is_verified, trustScore: user.trust_score,
+      quizCompleted: user.quiz_completed,
+      identityVerifiedAt: user.identity_verified_at,
+      totpEnabled: user.totp_enabled === true,
+    };
+
+    console.log('[demo-session] issued throwaway session for', email);
+    return res.json({
+      success: true, token, user: profile, profile,
+      userId: user.id, isNewUser: true, quizCompleted: false,
+    });
+  } catch (err) {
+    console.error('[demo-session] failed:', err);
+    return res.status(500).json({ error: 'demo session failed' });
   }
 });
 
