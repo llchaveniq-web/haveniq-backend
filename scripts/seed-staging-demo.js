@@ -73,16 +73,21 @@ const SEEDS = [
 
 async function main() {
   // ── Guard 1: environment ──
-  if (isProdEnvironment()) {
-    console.error('REFUSING: RAILWAY_ENVIRONMENT is production. This script seeds fake students.');
+  // Production requires an EXPLICIT opt-in. Seeding fake students into the live
+  // pool is exactly the mistake that has already happened here once, so the
+  // refusal stays the default and the override has to be typed on purpose.
+  const prodOk = String(process.env.SEED_ALLOW_PROD || '').trim().toLowerCase() === 'true';
+  if (isProdEnvironment() && !prodOk) {
+    console.error('REFUSING: RAILWAY_ENVIRONMENT is production. Pass SEED_ALLOW_PROD=true to seed prod deliberately.');
     process.exit(1);
   }
+  if (isProdEnvironment()) console.log('[seed] *** SEEDING PRODUCTION (SEED_ALLOW_PROD=true) ***');
   // ── Guard 2: the actual database host ──
   const host = (() => {
     try { return new URL(String(process.env.DATABASE_URL).replace(/^postgres(ql)?:/, 'http:')).hostname; }
     catch { return ''; }
   })();
-  if (PROD_DB_HOSTS.some((h) => host.includes(h))) {
+  if (PROD_DB_HOSTS.some((h) => host.includes(h)) && !prodOk) {
     console.error(`REFUSING: DATABASE_URL points at the production database (${host}).`);
     process.exit(1);
   }
