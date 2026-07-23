@@ -114,4 +114,35 @@ const aiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-module.exports = { writeReview, submitRule, submitNomination, quickAction, safetyReport, safetyBlock, aiLimiter };
+// ── Blanket per-IP cap on state-changing requests ───────────────────────────
+// The global limiter (server.js) counts ALL requests at 200 / 15 min, which is
+// sized for read traffic: feed refreshes, presence polls, thread opens. Writes
+// deserve a separate, tighter budget — a script hammering POST/PUT/PATCH/DELETE
+// would otherwise spend the whole shared allowance on mutations.
+//
+// Deliberately generous (60 writes / 5 min, ~one every 5s sustained): a student
+// messaging, answering the quiz and editing their profile stays well under it,
+// while scripted abuse hits a wall. GET/HEAD/OPTIONS are never counted, so
+// browsing is untouched.
+const writeLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many changes too quickly. Give it a minute and try again.' },
+  keyGenerator: (req) => ipKeyGenerator(req),
+  skip: (req) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return true;
+    // Provider callbacks authenticate by HMAC signature, not by our key. Never
+    // throttle them — a Stripe/Resend/Sentry retry burst would be dropped and
+    // the event lost.
+    if (/^\/(webhooks|sentry|api)\//.test(req.path)) return true;
+    // Internal callers (cron, the bot) are exempt only when they present a
+    // valid internal key — the same constant-time check the endpoints use, so
+    // the exemption cannot be claimed without the secret.
+    try { return require('./requireInternalKey').hasValidInternalKey(req); }
+    catch { return false; }
+  },
+});
+
+module.exports = { writeLimiter, writeReview, submitRule, submitNomination, quickAction, safetyReport, safetyBlock, aiLimiter };

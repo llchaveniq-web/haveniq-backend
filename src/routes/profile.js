@@ -381,21 +381,12 @@ router.get('/me/profile/signals', requireAuth, async (req, res) => {
 });
 
 // ── Bot-admin endpoint — for the nightly refresh cron ──────────────────
-const { requireBotToken } = (() => {
-  try { return require('../middleware/botAuth'); }
-  catch {
-    return {
-      requireBotToken: (req, res, next) => {
-        const tok = process.env.ADMIN_BOT_TOKEN;
-        if (!tok) return res.status(503).json({ error: 'bot auth disabled' });
-        const auth = req.headers.authorization || '';
-        const got = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-        if (got !== tok) return res.status(401).json({ error: 'Invalid bot token.' });
-        next();
-      },
-    };
-  }
-})();
+// The shared internal-endpoint guard. This used to be a try/require with an
+// inline fallback — and because middleware/botAuth.js did not exist, the
+// fallback is what actually ran: it compared the secret with `got !== tok`,
+// leaking match length through response timing. Requiring directly means a
+// missing module is a loud boot error instead of a silent downgrade.
+const { requireBotToken } = require('../middleware/botAuth');
 
 // Returns users whose underlying data has changed since their last profile
 // synthesis (or who never had one). Capped at 25 per call to control cost.

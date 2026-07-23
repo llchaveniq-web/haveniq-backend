@@ -31,21 +31,12 @@ const { computeCalibration, isAnswered, isSuccess, ratingOf } = require('./match
 
 // Bot token gate — same inline fallback used by routes/matchOutcomes.js
 // (there is no middleware/botAuth module).
-const { requireBotToken } = (() => {
-  try { return require('../middleware/botAuth'); }
-  catch {
-    return {
-      requireBotToken: (req, res, next) => {
-        const tok = process.env.ADMIN_BOT_TOKEN;
-        if (!tok) return res.status(503).json({ error: 'bot auth disabled' });
-        const auth = req.headers.authorization || '';
-        const got = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-        if (got !== tok) return res.status(401).json({ error: 'Invalid bot token.' });
-        next();
-      },
-    };
-  }
-})();
+// The shared internal-endpoint guard. This used to be a try/require with an
+// inline fallback — and because middleware/botAuth.js did not exist, the
+// fallback is what actually ran: it compared the secret with `got !== tok`,
+// leaking match length through response timing. Requiring directly means a
+// missing module is a loud boot error instead of a silent downgrade.
+const { requireBotToken } = require('../middleware/botAuth');
 
 // Read every answered outcome carrying a predicted score, and derive both the
 // calibration bands and the per-outcome (p, y) points for Brier/AUC. Shared by

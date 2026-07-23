@@ -41,28 +41,13 @@ const { notDemo } = require('../lib/demoFilter');
 
 // ── Static token auth ──────────────────────────────────────────────────
 
-function requireBotToken(req, res, next) {
-  const expected = process.env.ADMIN_BOT_TOKEN;
-  if (!expected) {
-    return res.status(503).json({ error: 'Bot admin disabled (ADMIN_BOT_TOKEN not set).' });
-  }
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token || !constantTimeEqual(token, expected)) {
-    return res.status(401).json({ error: 'Invalid bot token.' });
-  }
-  next();
-}
-
-// Constant-time string compare so token verification doesn't leak length/prefix
-// information through response timing. Length-mismatch short-circuits (that only
-// reveals the length, which is fixed for our token), otherwise timingSafeEqual.
-function constantTimeEqual(a, b) {
-  const ba = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  if (ba.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ba, bb);
-}
+// The single shared internal guard (middleware/requireInternalKey.js). This
+// file used to carry its own constant-time copy — correct, but a copy. Four
+// OTHER route files carried a WEAKER copy that compared with `!==`, which is
+// exactly what duplicating a security check leads to. One implementation now.
+// Still accepts `Authorization: Bearer <ADMIN_BOT_TOKEN>` (what the live cron
+// jobs and the Discord bot send) plus `X-Internal-Key: <INTERNAL_API_KEY>`.
+const { requireInternalKey: requireBotToken, constantTimeEqual } = require('../middleware/botAuth');
 
 // Ensure audit table exists. Best-effort; we don't fail the request if
 // the CREATE fails — only the audit insert downstream would silently

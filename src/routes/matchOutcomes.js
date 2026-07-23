@@ -382,21 +382,13 @@ router.get('/match-outcomes/calibration', requireAuth, async (req, res) => {
 // pings the founder in Discord with each pair so the founder reaches
 // out personally — phone calls beat surveys at low N.
 
-const { requireBotToken } = (() => {
-  try { return require('../middleware/botAuth'); }
-  catch {
-    return {
-      requireBotToken: (req, res, next) => {
-        const tok = process.env.ADMIN_BOT_TOKEN;
-        if (!tok) return res.status(503).json({ error: 'bot auth disabled' });
-        const auth = req.headers.authorization || '';
-        const got = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-        if (got !== tok) return res.status(401).json({ error: 'Invalid bot token.' });
-        next();
-      },
-    };
-  }
-})();
+// The shared internal-endpoint guard. This was previously a try/require with an
+// inline fallback — and because middleware/botAuth.js did not exist, the
+// fallback is what actually ran: it compared the secret with a plain string
+// comparison, which leaks how much of it matched through response timing.
+// Requiring directly makes a missing module a loud boot error rather than a
+// silent downgrade to the weaker check.
+const { requireBotToken } = require('../middleware/botAuth');
 
 router.get('/bot-admin/pending-checkins', requireBotToken, async (req, res) => {
   await ensureTable();

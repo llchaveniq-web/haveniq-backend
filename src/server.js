@@ -371,11 +371,20 @@ app.use(rateLimit({
   // routes/botAdmin.js and routes/matchOutcomes.js), not x-bot-key.
   skip: (req) => {
     if (!req.path.startsWith('/bot-admin')) return false;
-    const auth = req.get('authorization') || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    return Boolean(token) && token === process.env.ADMIN_BOT_TOKEN;
+    // Uses the shared constant-time check rather than a local `===` compare
+    // (a sixth copy of the secret comparison), and it also recognises the newer
+    // X-Internal-Key header — without this an internal caller using that header
+    // would be rate-limited like a stranger.
+    return require('./middleware/requireInternalKey').hasValidInternalKey(req);
   },
 }));
+
+// Per-IP cap on state-changing requests, on top of the global read-sized limit.
+// Mounted before the routes so it covers every POST/PUT/PATCH/DELETE without
+// each router opting in (the failure mode of per-route limiters is the route
+// somebody forgets). Reads, provider webhooks, and key-carrying internal
+// callers are skipped — see middleware/rateLimits.js.
+app.use(require('./middleware/rateLimits').writeLimiter);
 
 // CSRF guard for cookie-authenticated mutations. Active by default (disable with
 // COOKIE_AUTH_ENABLED=false). Auto-skips webhooks, pre-login OTP, and native
