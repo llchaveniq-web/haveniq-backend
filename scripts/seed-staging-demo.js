@@ -32,11 +32,26 @@ const opt = (i) => ({ type: 'option', index: i });
 const answerSet = (map) => Object.fromEntries(Object.entries(map).map(([k, v]) => [k, opt(v)]));
 
 // The 15 scored ids. Q14 is binary (0-1); every other scored question has 4
-// options (0-3). Sets are deliberately spread so match scores vary: Maya/Priya
-// are close, Jordan/Sam sit opposite them, Alex is a middle profile.
+// options (0-3).
+//
+// Sets are spread so scores VARY but stay above the feed's MATCH_MIN_SCORE (50)
+// for a typical reviewer. An earlier version made two seeds the exact opposite
+// of the others; they scored 25 and 27, so the feed correctly hid them and the
+// reviewer saw 3 of 5 students. That is the engine working, but it makes a thin
+// demo — and how many they see would depend on how they answered. "Different
+// but still plausibly compatible" keeps all five in the feed while the scores
+// still differ enough to show real discrimination.
 const BASE_TIDY   = { 14: 0, 48: 0, 49: 0, 50: 0, 51: 0, 52: 1, 53: 1, 54: 0, 55: 1, 56: 0, 57: 1, 60: 0, 62: 1, 63: 0, 68: 1 };
-const BASE_SOCIAL = { 14: 1, 48: 3, 49: 3, 50: 3, 51: 2, 52: 2, 53: 3, 54: 3, 55: 2, 56: 3, 57: 2, 60: 3, 62: 2, 63: 3, 68: 2 };
-const BASE_MIDDLE = { 14: 0, 48: 1, 49: 2, 50: 1, 51: 1, 52: 2, 53: 2, 54: 1, 55: 2, 56: 1, 57: 2, 60: 1, 62: 2, 63: 1, 68: 2 };
+const BASE_SOCIAL = { 14: 0, 48: 1, 49: 1, 50: 1, 51: 0, 52: 2, 53: 2, 54: 1, 55: 2, 56: 1, 57: 1, 60: 1, 62: 2, 63: 1, 68: 2 };
+const BASE_MIDDLE = { 14: 0, 48: 1, 49: 2, 50: 1, 51: 0, 52: 1, 53: 2, 54: 1, 55: 1, 56: 1, 57: 2, 60: 1, 62: 1, 63: 1, 68: 1 };
+
+// Illustrated initial-avatars, so the demo cohort renders as people instead of
+// grey silhouettes (profileComplete keys on first_name + photo_url). These are
+// generated monograms, NOT photographs of real people — appropriate for an
+// openly fictional staging cohort, and never used on production.
+const avatar = (first, last) =>
+  `https://ui-avatars.com/api/?name=${encodeURIComponent(first + ' ' + last)}`
+  + '&size=256&background=A33625&color=FBF1EA&bold=true&format=png';
 
 const SEEDS = [
   { first: 'Maya',   last: 'Rodriguez', age: 20, gender: 'female',    year: 'sophomore', major: 'Biology',
@@ -81,14 +96,15 @@ async function main() {
     const { rows } = await pool.query(
       `INSERT INTO users
          (email, school, school_domain, first_name, last_name, age, gender, school_year,
-          major, bio, looking_for, is_verified, trust_score, quiz_completed)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'{}',TRUE,60,TRUE)
+          major, bio, photo_url, looking_for, is_verified, trust_score, quiz_completed)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'{}',TRUE,60,TRUE)
        ON CONFLICT (email) DO UPDATE SET
          school=EXCLUDED.school, first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name,
          age=EXCLUDED.age, gender=EXCLUDED.gender, school_year=EXCLUDED.school_year,
-         major=EXCLUDED.major, bio=EXCLUDED.bio, is_verified=TRUE, quiz_completed=TRUE
+         major=EXCLUDED.major, bio=EXCLUDED.bio, photo_url=EXCLUDED.photo_url,
+         is_verified=TRUE, quiz_completed=TRUE
        RETURNING id, (xmax = 0) AS is_new`,
-      [email, SCHOOL, DOMAIN, s.first, s.last, s.age, s.gender, s.year, s.major, s.bio],
+      [email, SCHOOL, DOMAIN, s.first, s.last, s.age, s.gender, s.year, s.major, s.bio, avatar(s.first, s.last)],
     );
     const { id, is_new } = rows[0];
     is_new ? created++ : updated++;
