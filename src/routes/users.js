@@ -1,6 +1,7 @@
 const router  = require('express').Router();
 const multer  = require('multer');
 const pool    = require('../db/pool');
+const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { requireAuth } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
@@ -550,10 +551,13 @@ router.delete('/me', requireAuth, async (req, res) => {
 router.get('/:id', requireAuth, suspicious.track('profile.lookup', 50), async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, first_name, last_name, school, school_year, major, bio,
-              gender, looking_for, photo_url, budget_min, budget_max,
-              move_in_timeline, is_verified, trust_score, quiz_completed
-       FROM users WHERE id = $1 AND is_paused = FALSE`,
+      `SELECT u.id, u.first_name, u.last_name, u.school, u.school_year, u.major, u.bio,
+              u.gender, u.looking_for, u.photo_url, u.budget_min, u.budget_max,
+              u.move_in_timeline, u.is_verified, u.trust_score, u.quiz_completed,
+              ph.urls AS photo_urls
+       FROM users u
+       ${galleryJoin('u.id', 'ph')}
+       WHERE u.id = $1 AND u.is_paused = FALSE`,
       [req.params.id]
     );
 
@@ -577,6 +581,12 @@ router.get('/:id', requireAuth, suspicious.track('profile.lookup', 50), async (r
         console.error('profile_views insert failed:', err);
       });
     }
+
+    // Ordered gallery (up to 4). Shaped into `photos`, and the raw aggregate
+    // column dropped so the payload carries one documented field rather than an
+    // internal name. photo_url stays as the single-photo fallback.
+    rows[0].photos = photosFor(rows[0]);
+    delete rows[0].photo_urls;
 
     res.json(rows[0]);
   } catch (err) {

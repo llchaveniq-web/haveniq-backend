@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
+const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
 const { notDemo }     = require('../lib/demoFilter');
@@ -30,8 +31,10 @@ router.get('/', requireAuth, async (req, res) => {
     // so prefix matches still float to the top.
     const { rows: users } = await pool.query(
       `SELECT u.id, u.first_name, u.last_name, u.school, u.photo_url,
+              ph.urls AS photo_urls,
               GREATEST(similarity(u.first_name, $1), similarity(COALESCE(u.last_name,''), $1)) AS sim
        FROM users u
+       ${galleryJoin('u.id', 'ph')}
        WHERE u.id != $2
          AND u.is_paused = FALSE
          AND ($3::text IS NULL OR u.school = $3)
@@ -66,6 +69,7 @@ router.get('/', requireAuth, async (req, res) => {
         lastInitial: (u.last_name || '').slice(0, 1).toUpperCase(),
         school:      u.school,
         photoUrl:    u.photo_url,
+        photos:      photosFor(u),
       })),
       groups,
     });

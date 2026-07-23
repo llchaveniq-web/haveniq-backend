@@ -25,6 +25,7 @@
  */
 
 const router = require('express').Router();
+const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 
@@ -117,8 +118,10 @@ async function hydrateMatch(userId, matchUserId, action) {
     `SELECT
        u.id, u.first_name, u.last_name, u.school, u.school_year, u.major,
        u.bio, u.photo_url, u.is_verified,
+       ph.urls AS photo_urls,
        cs.score, cs.breakdown, cs.why_matched
      FROM users u
+     ${galleryJoin('u.id', 'ph')}
      JOIN compatibility_scores cs
        ON (LEAST($1::uuid, u.id) = cs.user_a AND GREATEST($1::uuid, u.id) = cs.user_b)
      WHERE u.id = $2
@@ -136,6 +139,7 @@ async function hydrateMatch(userId, matchUserId, action) {
     major:        r.major,
     bio:          r.bio,
     photoUrl:     r.photo_url,
+    photos:       photosFor(r),
     isVerified:   !!r.is_verified,
     score:        r.score != null ? Math.round(Number(r.score)) : null,
     breakdown:    r.breakdown || {},

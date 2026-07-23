@@ -25,7 +25,11 @@ const fakePool = {
         tokens_valid_after: null }] };
     }
     // GET /users/:id public profile (has move_in_timeline)
-    if (/FROM users WHERE id = \$1/.test(s) && /move_in_timeline/.test(s)) {
+    // Matched on COLUMNS, not the exact FROM text: the profile query gained a
+    // LATERAL join for the photo gallery and now aliases the table
+    // (`FROM users u ... WHERE u.id = $1`), which stopped matching the old
+    // pattern and made this privacy test 404 instead of asserting anything.
+    if (/FROM users/.test(s) && /move_in_timeline/.test(s)) {
       return { rows: [{ id: TARGET, first_name: 'Bob', last_name: 'Ng', school: 'X',
         school_year: 'Senior', major: 'CS', bio: 'hi', gender: 'm', looking_for: [],
         photo_url: null, budget_min: 500, budget_max: 2000, move_in_timeline: '1 month',

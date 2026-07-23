@@ -10,6 +10,8 @@ const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { isViable, applyCampusRanking } = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
+// Pre-match photo gallery (owner decision 2026-07-22: faces visible while choosing).
+const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { loadDrift } = require('../services/pulseDrift');
 const { calculateCompatibility, topFrictionTopic, matchingV11Enabled } = require('../services/scoring');
 const { computeFrictions } = require('../services/friction');
@@ -252,12 +254,14 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
           AND u.photo_url IS NOT NULL AND btrim(u.photo_url) <> '') AS profile_complete,
          pp.mbti  AS pairing_mbti,
          pp.disc  AS pairing_disc,
+         ph.urls  AS photo_urls,
          cr.id     AS connect_request_id,
          cr.status AS connect_status
        FROM compatibility_scores cs
        JOIN users u ON (
          CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END = u.id
        )
+       ${galleryJoin('u.id', 'ph')}
        LEFT JOIN personality_profiles pp ON pp.user_id = u.id
        LEFT JOIN connect_requests cr ON (
          (cr.from_user = $1 AND cr.to_user = u.id) OR
@@ -374,6 +378,10 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       gender:        r.gender,
       lookingFor:    r.looking_for || [],
       photoUrl:      r.photo_url,
+      // Ordered gallery (up to 4) — faces are now shown while CHOOSING a match,
+      // not only after one. Falls back to [photo_url] for anyone who never used
+      // the multi-photo manager, and [] when they have no photo at all.
+      photos:        photosFor(r),
       budgetMin:     r.budget_min,
       budgetMax:     r.budget_max,
       moveInTimeline:r.move_in_timeline,
