@@ -1,211 +1,203 @@
 // ─── Quiz question text (backend mirror) ─────────────────────────────────
 //
-// The backend stores quiz answers as bare numbers ({ "1": 2, "14": 1, ... }
-// — question id -> chosen option index). That's enough for the weighted
-// scoring engine, but the personality-derivation service needs the actual
-// QUESTION TEXT and OPTION TEXT to send the AI something meaningful.
+// The backend stores quiz answers as bare numbers ({ "14": 1, "50": 2, ... }
+// — question id -> chosen option index). The scoring engine needs only those
+// numbers, but the AI features (About You personality reveal, matched-moment)
+// need the actual QUESTION TEXT + OPTION TEXT to hand the model something
+// meaningful. This file is that lookup table.
 //
-// This file is a deliberate mirror of the frontend's constants/quiz.ts
-// QUESTIONS array (the v5 26-question set). v5 added Q15/25/35/45 — the
-// Big Five direct screens (Extraversion / Conscientiousness / Agreeableness
-// / Emotional Stability) that round out HEXACO Honesty-Humility (Q58). If
-// the quiz changes there, mirror the change here. IDs are non-contiguous
-// on purpose — preserved from the original 60-question set.
+// It mirrors the 17 questions the app actually asks — frontend
+// constants/quiz.ts SCORED_IDS: 14, 48–57, 60, 62, 63, 65–67 (14 lifestyle /
+// behavioral + 3 stress-response). Older removed questions (attachment, Big
+// Five, HEXACO, etc. from the pre-2026 60-question set) were dropped: no
+// student can answer them, so every consumer's id->text lookup already
+// skipped them. IDs stay non-contiguous — preserved from the original set.
+// If the frontend quiz text changes, mirror the change here.
 
 module.exports = [
-  { id: 1,  category: 'attachment',
-    text: 'When you feel uncomfortable at home, what do you do first?',
-    options: ['Speak up right away', 'Go to my room', 'Leave the house', "Pretend it's fine"] },
-  { id: 3,  category: 'attachment',
-    text: 'If your roommate goes cold after a disagreement, you...',
-    options: ['Move on easily', 'Stay neutral', 'Feel unsettled', 'Need to resolve it'] },
-  { id: 9,  category: 'emotional regulation',
-    text: 'Do you ever slam doors or raise your voice when frustrated?',
-    options: ['Yes, it happens', 'Rarely', 'Never'] },
-  { id: 14, category: 'communication',
-    text: 'Which is MORE true of you?',
-    options: [
-      'I sometimes roll my eyes, sigh, or mock when frustrated with a roommate',
-      'Even frustrated, I keep it civil and say things straight',
-    ] },
-  { id: 17, category: 'communication',
-    text: 'Are you direct or indirect when something bothers you?',
-    options: ['Very direct', 'Somewhat direct', 'Indirect'] },
-  { id: 22, category: 'attachment',
-    text: "When you really need support, what's your first move?",
-    options: ['Reach out right away', 'Wait a bit, then reach out', 'Try to handle it alone first', "Pull away — I don't want to burden anyone"] },
-  { id: 29, category: 'childhood / origin',
-    text: 'Growing up, what did adults model when they were upset with each other?',
-    options: ['Talked it out directly', 'Went silent for hours or days', 'Loud arguments, then made up', 'Pretended everything was fine'] },
-  { id: 31, category: 'shadow trait',
-    text: 'Which is MORE true of you?',
-    options: [
-      'I vent about people I live with to others when frustrated',
-      'I tend to take it straight to the person involved',
-    ] },
-  { id: 32, category: 'shadow trait',
-    text: 'Which is MORE true of you?',
-    options: [
-      "I've used social pressure or strategic timing to get my way at home",
-      'I tend to just ask directly for what I want',
-    ] },
-  { id: 34, category: 'shadow trait',
-    text: 'Are you more likely to explode or go cold when upset?',
-    options: ['Explode', 'Go cold', 'Neither'] },
-  { id: 37, category: 'nervous system',
-    text: 'How much do you need physical space (your own room, closed door) to recharge?',
-    options: [
-      'Constantly — alone time is non-negotiable',
-      'Daily — at least an hour',
-      'A few times a week',
-      'Rarely — I recharge around people',
-    ] },
-  { id: 40, category: 'nervous system',
-    text: 'When a roommate goes cold without explanation, you...',
-    options: [
-      'Address it directly within hours',
-      "Wait it out — they'll come around",
-      'Mentally rehearse what I might have done wrong',
-      "Feel anxious and can't focus on anything else",
-    ] },
-  { id: 48, category: 'lifestyle',
-    text: 'How often do you have people over?',
-    options: ['Rarely or never', 'Once or twice a month', 'Most weekends', 'Multiple times a week'] },
-  { id: 49, category: 'lifestyle',
-    text: "What's your typical weekday bedtime?",
-    options: ['Before 10 PM', '10 PM – midnight', 'Midnight – 2 AM', "After 2 AM — I'm a night owl"] },
-  { id: 50, category: 'lifestyle',
-    text: 'How clean do you keep shared spaces?',
-    options: ['Spotless — I clean constantly', 'Clean most of the time', 'I clean when it gets noticeable', 'Honestly not a priority for me'] },
-  { id: 51, category: 'lifestyle',
-    text: 'Do you smoke, vape, or use cannabis at home?',
-    options: ['Never', 'Cannabis occasionally', 'Vape or smoke occasionally', "Regularly — it's part of my routine"] },
-  { id: 54, category: 'lifestyle',
-    text: 'Are you comfortable with a roommate who drinks alcohol at home?',
-    options: ['Totally fine', 'Fine occasionally', "Prefer they don't", 'Not comfortable with it'] },
-  { id: 56, category: 'lifestyle / money',
-    text: "If a roommate constantly spent on things you'd consider wasteful, you'd feel...",
-    options: [
-      'Honestly bothered — our shared rent is at stake',
+  {
+    "id": 14,
+    "category": "communication",
+    "text": "Which is MORE true of you?",
+    "options": [
+      "I sometimes roll my eyes, sigh, or mock when frustrated with a roommate",
+      "Even frustrated, I keep it civil and say things straight"
+    ]
+  },
+  {
+    "id": 48,
+    "category": "lifestyle",
+    "text": "How often do you have people over?",
+    "options": [
+      "Rarely or never",
+      "Once or twice a month",
+      "Most weekends",
+      "Multiple times a week"
+    ]
+  },
+  {
+    "id": 49,
+    "category": "lifestyle",
+    "text": "What's your typical weekday bedtime?",
+    "options": [
+      "Before 10 PM",
+      "10 PM – midnight",
+      "Midnight – 2 AM",
+      "After 2 AM — I'm a night owl"
+    ]
+  },
+  {
+    "id": 50,
+    "category": "lifestyle",
+    "text": "How clean do you keep shared spaces?",
+    "options": [
+      "Spotless — I clean constantly",
+      "Clean most of the time",
+      "I clean when it gets noticeable",
+      "Honestly not a priority for me"
+    ]
+  },
+  {
+    "id": 51,
+    "category": "lifestyle",
+    "text": "Do you smoke, vape, or use cannabis at home?",
+    "options": [
+      "Never",
+      "Cannabis occasionally",
+      "Vape or smoke occasionally",
+      "Regularly — it's part of my routine"
+    ]
+  },
+  {
+    "id": 52,
+    "category": "lifestyle",
+    "text": "How do you feel about a roommate's partner staying over often?",
+    "options": [
+      "Totally fine",
+      "Occasionally, sure",
+      "Prefer it's rare, with a heads-up",
+      "I'd want it kept to a minimum"
+    ]
+  },
+  {
+    "id": 53,
+    "category": "nervous system",
+    "text": "When you're studying or working at home, you need…",
+    "options": [
+      "Near silence to focus",
+      "Low background noise is fine",
+      "Normal activity around me is fine",
+      "I focus better with energy around"
+    ]
+  },
+  {
+    "id": 54,
+    "category": "lifestyle",
+    "text": "Are you comfortable with a roommate who drinks alcohol at home?",
+    "options": [
+      "Totally fine",
+      "Fine occasionally",
+      "Prefer they don't",
+      "Not comfortable with it"
+    ]
+  },
+  {
+    "id": 55,
+    "category": "lifestyle",
+    "text": "In the kitchen, your approach to food is…",
+    "options": [
+      "Totally shared. Help yourself",
+      "Sharing basics is fine",
+      "Mostly separate",
+      "Strictly separate. Label and ask"
+    ]
+  },
+  {
+    "id": 56,
+    "category": "lifestyle / money",
+    "text": "If a roommate constantly spent on things you'd consider wasteful, you'd feel...",
+    "options": [
+      "Honestly bothered — our shared rent is at stake",
       "Quietly judgmental but I wouldn't say anything",
-      'Indifferent — their money, their choice',
-      "Curious — I'd probably learn from them",
-    ] },
-  { id: 57, category: 'executive function',
-    text: 'You started a load of laundry 2 hours ago. Most likely scenario:',
-    options: [
-      'Already folded and put away',
+      "Indifferent — their money, their choice",
+      "Curious — I'd probably learn from them"
+    ]
+  },
+  {
+    "id": 57,
+    "category": "executive function",
+    "text": "You started a load of laundry 2 hours ago. Most likely scenario:",
+    "options": [
+      "Already folded and put away",
       "I'll move it to the dryer when I notice",
-      'Still in the washer the next morning',
-      'This happens to me weekly — I forget regularly',
-    ] },
-  { id: 58, category: 'shadow trait',
-    text: "Have you ever used a roommate's stuff (food, products, supplies) without asking — even small things?",
-    options: [
-      "Yes — small things shouldn't matter",
-      'Once or twice',
-      'Only if I replaced it later',
-      'Never — I always ask first',
-    ] },
-  { id: 59, category: 'nervous system',
-    text: 'What disturbs you most when trying to sleep or focus?',
-    options: [
-      'Background noise (music, voices, TV)',
-      'Light leaking in (under doors, screens)',
-      'Smells (cooking, products, perfumes)',
-      'Visual clutter / messy shared spaces',
-      'Honestly, none of these bother me much',
-    ] },
-  { id: 60, category: 'communication',
-    text: 'After someone you live with apologizes for something, you typically...',
-    options: [
-      'Accept it fully and genuinely move on',
-      'Accept it but stay guarded for a few days',
-      'Need to talk through it more before I can let go',
-      "Say I'm fine but the resentment lingers honestly",
-    ] },
-
-  // ── Big Five (v5) ───────────────────────────────────────────────────
-  { id: 15, category: 'personality / extraversion',
-    text: "At the end of a long day, you'd rather come home to…",
-    options: [
-      'A quiet apartment with no one around',
-      'Roommates around but doing their own thing',
-      'Casual conversation in the kitchen',
-      'A few friends over — the more the merrier',
-    ] },
-  { id: 25, category: 'personality / conscientiousness',
-    text: "You told your roommate you'd handle something by Friday. Most likely outcome:",
-    options: [
-      'Done by Wednesday, with time to spare',
-      'Done Friday, on time',
-      'Done Friday but rushed',
-      "Done late — I'll mention it when I get to it",
-    ] },
-  { id: 35, category: 'personality / agreeableness',
-    text: "When a roommate suggests something you'd rather not do, you usually…",
-    options: [
-      'Go along with it — keeping the peace matters more',
-      'Suggest a small tweak that works for both of us',
-      'Say no and explain why',
-      'Push back firmly — they should pick something else',
-    ] },
-  { id: 45, category: 'personality / emotional stability',
-    text: 'Something unexpected goes wrong at home — locked out, AC broken, surprise charge on the bill. Your first reaction is…',
-    options: [
-      'Calm — work the problem step by step',
-      'A little stressed but I figure it out',
-      "Pretty anxious until it's resolved",
-      'I spiral — everything feels worse than it actually is',
-    ] },
-  // ─── v6 additions (Openness + Boundary-setting + Repair-initiator) ───
-  { id: 61, category: 'personality / openness',
-    text: "In a shared apartment, you'd rather…",
-    options: [
-      'Stick to familiar routines and rhythms — comfort is in sameness',
-      'Mostly familiar with occasional new things',
-      'A regular mix of new and routine',
-      'Constant novelty — new playlists, new recipes, evolving space',
-    ] },
-  { id: 62, category: 'communication / boundaries',
-    text: "A roommate asks for a favor you'd rather not do. You usually…",
-    options: [
+      "Still in the washer the next morning",
+      "This happens to me weekly — I forget regularly"
+    ]
+  },
+  {
+    "id": 60,
+    "category": "communication",
+    "text": "After someone you live with apologizes for something, you typically...",
+    "options": [
+      "Accept it fully and genuinely move on",
+      "Accept it but stay guarded for a few days",
+      "Need to talk through it more before I can let go",
+      "Say I'm fine but the resentment lingers honestly"
+    ]
+  },
+  {
+    "id": 62,
+    "category": "communication / boundaries",
+    "text": "A roommate asks for a favor you'd rather not do. You usually…",
+    "options": [
       "Say yes anyway — I don't want to disappoint them",
-      'Half-yes — do it, but reluctantly',
-      'Politely decline and explain why',
-      'Straightforward no — they can ask someone else',
-    ] },
-  { id: 63, category: 'communication / repair initiation',
-    text: 'After a fight with someone you live with, who usually makes the first move to fix it?',
-    options: [
-      'Me, almost always',
-      'Me — but only after some space',
-      'Whoever cools down first',
-      'Usually them — being the first is hard for me',
-    ] },
-
-  // ─── v7 additions (2026-06-09) ───────────────────────────────────────
-  { id: 52, category: 'lifestyle',
-    text: "How do you feel about a roommate's partner staying over often?",
-    options: ['Totally fine', 'Occasionally, sure', "Prefer it's rare, with a heads-up", "I'd want it kept to a minimum"] },
-  { id: 53, category: 'nervous system',
-    text: 'When you\'re studying or working at home, you need…',
-    options: ['Near silence to focus', 'Low background noise is fine', 'Normal activity around me is fine', 'I focus better with energy around'] },
-  { id: 55, category: 'lifestyle',
-    text: 'In the kitchen, your approach to food is…',
-    options: ['Totally shared. Help yourself', 'Sharing basics is fine', 'Mostly separate', 'Strictly separate. Label and ask'] },
-
-  // ─── v10 additions (2026-07-09) — optional high-friction axes (Q65–68) ───
-  { id: 65, category: 'lifestyle',
-    text: 'The apartment thermostat lives at…',
-    options: ['Cool. I run warm and like it crisp', 'On the cooler side', 'On the warmer side', "Warm. I'm always cold"] },
-  { id: 66, category: 'nervous system',
-    text: 'A roommate comes in at 1 AM with the light on and some noise. You…',
-    options: ['Sleep right through it', 'Stir but fall back asleep', 'Wake up and it takes a while', "I'm up for the night. I need dark and quiet"] },
-  { id: 67, category: 'lifestyle / executive function',
-    text: "Rent and the utility split are due. Honestly, you're usually…",
-    options: ['Paid early, every time', 'On time without being reminded', 'On time if someone reminds me', "Often a few days late. Money's tight or I forget"] },
-  { id: 68, category: 'lifestyle',
-    text: "On a weekday morning you're…",
-    options: ['Up early, out fast', 'Up early but slow to get going', 'Rolling out right before I have to', 'Rushing. Every minute counts'] },
+      "Half-yes — do it, but reluctantly",
+      "Politely decline and explain why",
+      "Straightforward no — they can ask someone else"
+    ]
+  },
+  {
+    "id": 63,
+    "category": "communication / repair initiation",
+    "text": "After a fight with someone you live with, who usually makes the first move to fix it?",
+    "options": [
+      "Me, almost always",
+      "Me — but only after some space",
+      "Whoever cools down first",
+      "Usually them — being the first is hard for me"
+    ]
+  },
+  {
+    "id": 65,
+    "category": "lifestyle",
+    "text": "The apartment thermostat lives at…",
+    "options": [
+      "Cool. I run warm and like it crisp",
+      "On the cooler side",
+      "On the warmer side",
+      "Warm. I'm always cold"
+    ]
+  },
+  {
+    "id": 66,
+    "category": "nervous system",
+    "text": "A roommate comes in at 1 AM with the light on and some noise. You…",
+    "options": [
+      "Sleep right through it",
+      "Stir but fall back asleep",
+      "Wake up and it takes a while",
+      "I'm up for the night. I need dark and quiet"
+    ]
+  },
+  {
+    "id": 67,
+    "category": "lifestyle / executive function",
+    "text": "Rent and the utility split are due. Honestly, you're usually…",
+    "options": [
+      "Paid early, every time",
+      "On time without being reminded",
+      "On time if someone reminds me",
+      "Often a few days late. Money's tight or I forget"
+    ]
+  }
 ];
