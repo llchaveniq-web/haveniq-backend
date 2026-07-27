@@ -1295,6 +1295,41 @@ router.post('/parent-invite', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /users/parent-invite ──────────────────────────────────────────────
+// Returns the parent email currently on the student's account (or null). Lets
+// the "Loop in a parent" screen show who's looped in and offer to remove them,
+// so a student always knows — and can revoke — what they've shared.
+router.get('/parent-invite', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT parent_email FROM users WHERE id = $1',
+      [req.user.id],
+    );
+    res.json({ parentEmail: rows[0]?.parent_email || null });
+  } catch (err) {
+    console.error('[parent-invite:get] failed:', err);
+    res.status(500).json({ error: 'Failed to load parent info' });
+  }
+});
+
+// ── DELETE /users/parent-invite ───────────────────────────────────────────
+// Removes the parent email a student added. Consent has to be revocable — a
+// student must be able to take back an email they shared. Also resets
+// parent_notified so that if they later loop in a new parent, the one-time
+// first-match heads-up can fire for that parent too.
+router.delete('/parent-invite', requireAuth, async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE users SET parent_email = NULL, parent_notified = FALSE WHERE id = $1',
+      [req.user.id],
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[parent-invite:delete] failed:', err);
+    res.status(500).json({ error: 'Failed to remove parent email' });
+  }
+});
+
 // ─── Change email — self-serve, with new-address verification ──────────────
 // Changing the .edu identity must prove control of the NEW inbox, or the whole
 // "verified student" trust model breaks. Two authenticated steps:
