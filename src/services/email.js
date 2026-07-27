@@ -150,7 +150,7 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
                 <li><strong>Anti-scam protected:</strong> contact details stay hidden until both students are .edu-verified and mutually agree to share them</li>
               </ul>
               <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0 0 8px;">
-                We won't email you about every match, just the first one. ${studentName} added your email and stays in control of it.
+                We won't email you about every match, just the first one. ${studentName} added your email and can remove it anytime in the HavenIQ app.
               </p>
             </div>
             <div style="background:#FBF1EA; padding:18px 32px; text-align:center; border-top:1px solid #E8DCC6;">
@@ -208,7 +208,7 @@ async function sendParentInviteEmail({ parentEmail, studentName, userId = null }
                 <li>Their match activity, preferences, or quiz answers</li>
               </ul>
               <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0;">
-                ${name} added your email and stays in full control of what you receive.
+                ${name} added your email and can remove it anytime in the HavenIQ app.
               </p>
             </div>
             <div style="background:#FBF1EA; padding:18px 32px; text-align:center; border-top:1px solid #E8DCC6;">
