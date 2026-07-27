@@ -38,7 +38,7 @@ function voiceAudioUpload(req, res, next) {
 // 1000 words — far more than any legitimate clinical-quiz reflection.
 const MAX_TEXT_ANSWER_CHARS = 5000;
 const MIN_QUESTION_ID  = 1;
-const MAX_QUESTION_ID  = 100;   // Headroom above the current 32-question set (max id 63)
+const MAX_QUESTION_ID  = 100;   // Headroom above the current 17-question set (max scored id 67)
                                 // so adding questions doesn't require a
                                 // simultaneous backend deploy.
 const MAX_TOTAL_ANSWERS = 200;  // Stops a single submit from carrying

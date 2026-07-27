@@ -861,7 +861,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
     if (!me.quiz_completed) {
       noticings.push({
         icon: '◐',
-        line: 'your matches sharpen once you finish the 32-question quiz. each answer pulls signal you wouldn\'t otherwise share.',
+        line: 'your matches sharpen once you finish the 17-question quiz. each answer pulls signal you wouldn\'t otherwise share.',
       });
     } else if (!me.has_photo) {
       noticings.push({
@@ -909,7 +909,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
 // ── GET /users/me/about-you ──────────────────────────────────────────
 // The "About You" reveal — a 5-section editorial magazine spread that
 // reads the user's personality back to them after they finish the
-// 32-question quiz. The single highest-leverage "wow this app sees me"
+// 17-question quiz. The single highest-leverage "wow this app sees me"
 // moment in HavenIQ. Sits between quiz completion and matches.
 //
 // Five sections, each grounded in SPECIFIC quiz answers (not generic
