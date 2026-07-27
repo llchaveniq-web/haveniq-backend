@@ -147,10 +147,10 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
               <ul style="color:#2D2620; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 24px;">
                 <li><strong>.edu verified:</strong> confirmed enrollment at ${matchSchool}</li>
                 <li><strong>Quiz-matched:</strong> 32-question clinical compatibility framework, not just preferences</li>
-                <li><strong>Anti-scam protected:</strong> contact info stays hidden until both sides ID-verify</li>
+                <li><strong>Anti-scam protected:</strong> contact details stay hidden until both students are .edu-verified and mutually agree to share them</li>
               </ul>
               <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0 0 8px;">
-                We won't email you about every match, just the first one. If ${studentName} would rather we stopped, they can remove your email from Settings.
+                We won't email you about every match, just the first one. ${studentName} added your email and stays in control of it.
               </p>
             </div>
             <div style="background:#FBF1EA; padding:18px 32px; text-align:center; border-top:1px solid #E8DCC6;">
@@ -208,7 +208,7 @@ async function sendParentInviteEmail({ parentEmail, studentName, userId = null }
                 <li>Their match activity, preferences, or quiz answers</li>
               </ul>
               <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0;">
-                ${name} stays in full control and can remove your email anytime from their Parent Dashboard.
+                ${name} added your email and stays in full control of what you receive.
               </p>
             </div>
             <div style="background:#FBF1EA; padding:18px 32px; text-align:center; border-top:1px solid #E8DCC6;">
