@@ -24,6 +24,16 @@
 //        node scripts/cohort-sim.js
 // ═══════════════════════════════════════════════════════════════════════════
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'sim-only-secret-at-least-32-chars-xxxxxx';
+// The lifecycle + growth-digest services deliberately EXCLUDE the
+// @demo.haveniq.test domain this sim seeds (see lib/demoFilter). Without this,
+// PART 3 seeds a cohort the analytics are built to ignore, so every funnel /
+// segment count comes back 0 and the checks fail by construction. This sim-only
+// flag (honored ONLY here; the safety gate below refuses production) tells the
+// filter to include the seeded demo cohort so PART 3 can validate the real
+// counting/targeting logic against its own accounts. Real deployments never set
+// it → production stays demo-excluded, unchanged. MUST be set before the
+// services are required (they bake the eligibility clause at load time).
+process.env.SIM_INCLUDE_DEMO = '1';
 
 const assert = require('assert');
 const { calculateCompatibility } = require('../src/services/scoring');
