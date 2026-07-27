@@ -146,7 +146,7 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
               </p>
               <ul style="color:#2D2620; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 24px;">
                 <li><strong>.edu verified:</strong> confirmed enrollment at ${matchSchool}</li>
-                <li><strong>Quiz-matched:</strong> 32-question clinical compatibility framework, not just preferences</li>
+                <li><strong>Quiz-matched:</strong> 17-question clinical compatibility framework, not just preferences</li>
                 <li><strong>Anti-scam protected:</strong> contact details stay hidden until both students are .edu-verified and mutually agree to share them</li>
               </ul>
               <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0 0 8px;">
@@ -256,7 +256,7 @@ async function sendWelcomeEmail(email, userId = null) {
               <div style="background:#FBF1EA; border-left:4px solid #A33625; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
                 <p style="font-size:15px; color:#2D2620; margin:0 0 12px; font-weight:600;">3 things to do this week:</p>
                 <p style="font-size:14px; color:#75695A; line-height:1.8; margin:0;">
-                  <strong>1.</strong> Take the quiz. ~10 minutes, 32 questions, clinical-framework backed.<br/>
+                  <strong>1.</strong> Take the quiz. ~3 minutes, 17 questions, clinical-framework backed.<br/>
                   <strong>2.</strong> Add a photo + a few real sentences on how you actually live. Specific beats generic.<br/>
                   <strong>3.</strong> Browse your matches and send your first connect request.
                 </p>
