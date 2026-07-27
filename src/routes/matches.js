@@ -159,6 +159,128 @@ async function maybeEmailConnectRequest(toUserId, fromUserId, score) {
 // Feed gets pulled on every app open + manual refresh — 100/5min is the
 // threshold. A user who refreshes 20x is still fine; one pulling the feed
 // programmatically every 3 seconds (200/5min) trips the audit log.
+// Map ONE scored row (the feed's SELECT shape) to the flat match DTO the app
+// consumes (stores/matchStore.transformBackendMatch expects exactly these keys).
+// Shared by the feed and the single-pair GET /:userId resolver so the two can
+// never drift. `ctx` carries the viewer-scoped inputs the mapping needs:
+//   me        – viewer's { mbti, disc } for the display-only personality pairing
+//   myAnswers – viewer's raw quiz answers, for the both-sides friction forecast
+//   mySchool  – viewer's campus, for the cross-school flag
+function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
+  // Part 2 honesty gate: only surface the behavioral-validation layer when
+  // the multiplier is genuinely ≠ 1.0 (BOTH users had a real validation_score
+  // at score time). At a neutral 1.0 we OMIT both fields so the app renders
+  // nothing — no "validated" badge without real signal (trust fraud).
+  const vMult = r.validation_multiplier != null ? Number(r.validation_multiplier) : 1;
+  const validationFields = (vMult !== 1 && r.pre_validation_pct != null)
+    ? { validationMultiplier: vMult, preValidationPct: r.pre_validation_pct }
+    : {};
+  // Deep-matching #2: surface complementarity only when present (a certified
+  // shape made this pair fit BECAUSE they differ). Omitted otherwise so the
+  // app shows nothing — "balance" is a finding, never a default.
+  const compDims = Array.isArray(r.complementary_dims) ? r.complementary_dims : [];
+  const complementaryFields = compDims.length ? { complementaryDims: compDims } : {};
+  // Deep-matching #6: surface trajectory ("converging") dims only when present.
+  const convDims = Array.isArray(r.converging_dims) ? r.converging_dims : [];
+  const convergingFields = convDims.length ? { convergingDims: convDims } : {};
+  // Specific friction forecast — "where you'll clash + the exact script",
+  // computed here because this is the only place BOTH answer sets exist (the
+  // client never receives another student's raw answers). A certified
+  // complementary dim is a balance, not a fight, so it's suppressed. Empty
+  // array is omitted so the app shows nothing rather than a hollow section.
+  const suppressDims = compDims.map(d => Number(d && d.qid)).filter(Number.isFinite);
+  const topFrictions = computeFrictions(myAnswers, r.candidate_answers, { suppressDims, n: 3 });
+  const frictionFields = topFrictions.length ? { topFrictions } : {};
+  return ({
+    userId:        r.id,
+    firstName:     r.first_name,
+    // Only the initial ever leaves the server — never the full surname. The
+    // UI shows "First L." everywhere, so the raw last name would be an unused
+    // field sitting on another student's device (privacy policy §3).
+    lastInitial:   (r.last_name || '').slice(0, 1).toUpperCase(),
+    school:        r.school,
+    schoolYear:    r.school_year,
+    major:         r.major,
+    bio:           r.bio,
+    gender:        r.gender,
+    lookingFor:    r.looking_for || [],
+    photoUrl:      r.photo_url,
+    // Ordered gallery (up to 4) — faces are now shown while CHOOSING a match,
+    // not only after one. Falls back to [photo_url] for anyone who never used
+    // the multi-photo manager, and [] when they have no photo at all.
+    photos:        photosFor(r),
+    budgetMin:     r.budget_min,
+    budgetMax:     r.budget_max,
+    moveInTimeline:r.move_in_timeline,
+    isVerified:    r.is_verified,
+    trustScore:    r.trust_score,
+    // ID-verified timestamp from Stripe Identity. Null when the user
+    // hasn't done selfie+ID; non-null = the "ID ✓" badge renders on
+    // their match card. Distinct from `isVerified` (= .edu email).
+    identityVerifiedAt: r.identity_verified_at,
+    // Last time this candidate was active in the app — drives the
+    // "Active today / Active Nd ago" presence label on their match card.
+    lastActiveAt:  r.last_active_at,
+    // Did they finish the setup screen (name + last initial + age + photo)?
+    // FALSE is why a card renders as "Your match" + a grey silhouette: the
+    // person is real and matchable, they just never filled their profile in.
+    // Purely descriptive — the feed still returns them, in the same order.
+    profileComplete: r.profile_complete === true,
+    // Is this candidate from a DIFFERENT school than the viewer? Cross-school
+    // rows only appear at all when the viewer's own campus pool is below
+    // THIN_POOL (applyCampusRanking above), and they are appended AFTER the
+    // same-school block.
+    //
+    // That grouping is currently lost: the app re-sorts the feed purely by
+    // compatibility % ("rather than trusting the feed's order"), so a
+    // cross-school 99 outranks a same-school 80 on screen. Exposing the fact
+    // lets the client sort by (crossSchool, score) and get the intended
+    // order back.
+    //
+    // Deliberately NOT done by penalizing the score: compatScore is shown to
+    // students as a real compatibility number, and shading it by 15 points to
+    // win an argument about sort order would make the displayed figure a lie.
+    // Rank on the flag; keep the number true.
+    crossSchool: !!(mySchool && r.school !== mySchool),
+    compatScore:   parseFloat(r.score),
+    // Confidence coefficient (0–1). <1 when either side's quiz answers are
+    // thin/uniform — the scorer already multiplied compatScore down by it.
+    // `isProvisional` lets the card render the number as "still learning you
+    // two" instead of a hard figure that looks as certain as a full-data one.
+    confidence:    r.confidence != null ? parseFloat(r.confidence) : 1,
+    isProvisional: r.confidence != null && parseFloat(r.confidence) < 1,
+    // Stress dimension (spec §4): { score, pattern, headline, pactSuggestion }.
+    // Spread so the key is ABSENT (not null) when the pair has no stress read —
+    // the frontend gates the "Under pressure" row on presence, so it stays
+    // unrendered until the app flips STRESS_IDS into SCORED_IDS.
+    ...(r.under_pressure ? { underPressure: r.under_pressure } : {}),
+    isSoftBlocked: r.is_soft_blocked,
+    shadowPenalty: parseFloat(r.shadow_penalty),
+    breakdown:     r.breakdown || {},
+    // Which lens the communication category % represents, so the compat-report
+    // copy matches the math. Global (depends only on the v11 flag). Flag OFF ⇒
+    // 'similarity' ⇒ the app's default copy ⇒ no visible change until v11 is on.
+    communicationMode: matchingV11Enabled() ? 'adequacy' : 'similarity',
+    whyMatched:    r.why_matched,
+    // Secondary, display-only MBTI/DISC personality lens. Never affects
+    // compatScore — see services/personalityPairing.js.
+    pairing:       computePairing(me.mbti, me.disc, r.pairing_mbti, r.pairing_disc),
+    // Direct MBTI / DISC strings for surfacing on the match card.
+    // (`pairing` above already encodes the *relationship* between two
+    // profiles; these are the raw type strings — "INFJ", "D" — that the
+    // UI displays as a small pill so students see the psychology piece
+    // they were promised, not just an opaque score.)
+    mbti:          r.pairing_mbti || null,
+    disc:          r.pairing_disc || null,
+    connectStatus: r.connect_status || null,
+    requestId:     r.connect_request_id || null,
+    ...validationFields,
+    ...complementaryFields,
+    ...convergingFields,
+    ...frictionFields,
+  });
+}
+
 router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (req, res) => {
   try {
     const userId = req.user.id;
@@ -339,120 +461,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // that school), so it can't fight the caller's chosen scope.
     if (!school) feedRows = applyCampusRanking(feedRows, mySchool);
 
-    const matches = feedRows.map(r => {
-      // Part 2 honesty gate: only surface the behavioral-validation layer when
-      // the multiplier is genuinely ≠ 1.0 (BOTH users had a real validation_score
-      // at score time). At a neutral 1.0 we OMIT both fields so the app renders
-      // nothing — no "validated" badge without real signal (trust fraud).
-      const vMult = r.validation_multiplier != null ? Number(r.validation_multiplier) : 1;
-      const validationFields = (vMult !== 1 && r.pre_validation_pct != null)
-        ? { validationMultiplier: vMult, preValidationPct: r.pre_validation_pct }
-        : {};
-      // Deep-matching #2: surface complementarity only when present (a certified
-      // shape made this pair fit BECAUSE they differ). Omitted otherwise so the
-      // app shows nothing — "balance" is a finding, never a default.
-      const compDims = Array.isArray(r.complementary_dims) ? r.complementary_dims : [];
-      const complementaryFields = compDims.length ? { complementaryDims: compDims } : {};
-      // Deep-matching #6: surface trajectory ("converging") dims only when present.
-      const convDims = Array.isArray(r.converging_dims) ? r.converging_dims : [];
-      const convergingFields = convDims.length ? { convergingDims: convDims } : {};
-      // Specific friction forecast — "where you'll clash + the exact script",
-      // computed here because this is the only place BOTH answer sets exist (the
-      // client never receives another student's raw answers). A certified
-      // complementary dim is a balance, not a fight, so it's suppressed. Empty
-      // array is omitted so the app shows nothing rather than a hollow section.
-      const suppressDims = compDims.map(d => Number(d && d.qid)).filter(Number.isFinite);
-      const topFrictions = computeFrictions(myAnswers, r.candidate_answers, { suppressDims, n: 3 });
-      const frictionFields = topFrictions.length ? { topFrictions } : {};
-      return ({
-      userId:        r.id,
-      firstName:     r.first_name,
-      // Only the initial ever leaves the server — never the full surname. The
-      // UI shows "First L." everywhere, so the raw last name would be an unused
-      // field sitting on another student's device (privacy policy §3).
-      lastInitial:   (r.last_name || '').slice(0, 1).toUpperCase(),
-      school:        r.school,
-      schoolYear:    r.school_year,
-      major:         r.major,
-      bio:           r.bio,
-      gender:        r.gender,
-      lookingFor:    r.looking_for || [],
-      photoUrl:      r.photo_url,
-      // Ordered gallery (up to 4) — faces are now shown while CHOOSING a match,
-      // not only after one. Falls back to [photo_url] for anyone who never used
-      // the multi-photo manager, and [] when they have no photo at all.
-      photos:        photosFor(r),
-      budgetMin:     r.budget_min,
-      budgetMax:     r.budget_max,
-      moveInTimeline:r.move_in_timeline,
-      isVerified:    r.is_verified,
-      trustScore:    r.trust_score,
-      // ID-verified timestamp from Stripe Identity. Null when the user
-      // hasn't done selfie+ID; non-null = the "ID ✓" badge renders on
-      // their match card. Distinct from `isVerified` (= .edu email).
-      identityVerifiedAt: r.identity_verified_at,
-      // Last time this candidate was active in the app — drives the
-      // "Active today / Active Nd ago" presence label on their match card.
-      lastActiveAt:  r.last_active_at,
-      // Did they finish the setup screen (name + last initial + age + photo)?
-      // FALSE is why a card renders as "Your match" + a grey silhouette: the
-      // person is real and matchable, they just never filled their profile in.
-      // Purely descriptive — the feed still returns them, in the same order.
-      profileComplete: r.profile_complete === true,
-      // Is this candidate from a DIFFERENT school than the viewer? Cross-school
-      // rows only appear at all when the viewer's own campus pool is below
-      // THIN_POOL (applyCampusRanking above), and they are appended AFTER the
-      // same-school block.
-      //
-      // That grouping is currently lost: the app re-sorts the feed purely by
-      // compatibility % ("rather than trusting the feed's order"), so a
-      // cross-school 99 outranks a same-school 80 on screen. Exposing the fact
-      // lets the client sort by (crossSchool, score) and get the intended
-      // order back.
-      //
-      // Deliberately NOT done by penalizing the score: compatScore is shown to
-      // students as a real compatibility number, and shading it by 15 points to
-      // win an argument about sort order would make the displayed figure a lie.
-      // Rank on the flag; keep the number true.
-      crossSchool: !!(mySchool && r.school !== mySchool),
-      compatScore:   parseFloat(r.score),
-      // Confidence coefficient (0–1). <1 when either side's quiz answers are
-      // thin/uniform — the scorer already multiplied compatScore down by it.
-      // `isProvisional` lets the card render the number as "still learning you
-      // two" instead of a hard figure that looks as certain as a full-data one.
-      confidence:    r.confidence != null ? parseFloat(r.confidence) : 1,
-      isProvisional: r.confidence != null && parseFloat(r.confidence) < 1,
-      // Stress dimension (spec §4): { score, pattern, headline, pactSuggestion }.
-      // Spread so the key is ABSENT (not null) when the pair has no stress read —
-      // the frontend gates the "Under pressure" row on presence, so it stays
-      // unrendered until the app flips STRESS_IDS into SCORED_IDS.
-      ...(r.under_pressure ? { underPressure: r.under_pressure } : {}),
-      isSoftBlocked: r.is_soft_blocked,
-      shadowPenalty: parseFloat(r.shadow_penalty),
-      breakdown:     r.breakdown || {},
-      // Which lens the communication category % represents, so the compat-report
-      // copy matches the math. Global (depends only on the v11 flag). Flag OFF ⇒
-      // 'similarity' ⇒ the app's default copy ⇒ no visible change until v11 is on.
-      communicationMode: matchingV11Enabled() ? 'adequacy' : 'similarity',
-      whyMatched:    r.why_matched,
-      // Secondary, display-only MBTI/DISC personality lens. Never affects
-      // compatScore — see services/personalityPairing.js.
-      pairing:       computePairing(me.mbti, me.disc, r.pairing_mbti, r.pairing_disc),
-      // Direct MBTI / DISC strings for surfacing on the match card.
-      // (`pairing` above already encodes the *relationship* between two
-      // profiles; these are the raw type strings — "INFJ", "D" — that the
-      // UI displays as a small pill so students see the psychology piece
-      // they were promised, not just an opaque score.)
-      mbti:          r.pairing_mbti || null,
-      disc:          r.pairing_disc || null,
-      connectStatus: r.connect_status || null,
-      requestId:     r.connect_request_id || null,
-      ...validationFields,
-      ...complementaryFields,
-      ...convergingFields,
-      ...frictionFields,
-    });
-    });
+    const matches = feedRows.map(r => buildMatchDTO(r, { me, myAnswers, mySchool }));
 
     // Part 3 — personalized re-rank. If the viewer has a learned category-weight
     // model (enough real connect/accept/decline history), order their feed by
@@ -1442,4 +1451,129 @@ No markdown fence. No explanation outside JSON.`;
   }
 });
 
+// ── GET /matches/:userId ─────────────────────────────────────────────────────
+// Single-pair resolver: the full match DTO for ONE other student, by their user
+// id. This is the endpoint the app's MatchAPI.getProfile() calls, and it powers
+// every path that has a userId but no cached deck row:
+//   • a Match-of-the-Day tap or a shared deep link (/match/:id)
+//   • a match that has aged out of the live feed
+//   • the Messages inbox backfilling a conversation partner's real name + photo
+// Without it all of those 404'd — the detail screen showed "match not found" and
+// the inbox showed "Your match" over a grey silhouette.
+//
+// Access is gated by mayViewMatchDetail (same campus, OR an existing connect
+// request) — the exact gate /explain and /openers already use — so this can't
+// become an arbitrary profile-enumeration endpoint. It mirrors the feed's
+// people-level gates (not paused, not banned, quiz done, not hard-blocked,
+// neither side has blocked the other) so nobody the feed hides becomes reachable
+// here. The one deliberate relaxation vs. the feed is the MATCH_MIN_SCORE cutoff
+// and the discovery filters (gender / smoke / demo): a detail lookup by explicit
+// id isn't discovery — you already know who you're opening — so an aged-out or
+// below-threshold pair must still resolve to the real person.
+router.get('/:userId', requireAuth, async (req, res) => {
+  try {
+    const viewerId = req.user.id;
+    const targetId = req.params.userId;
+    if (!targetId || typeof targetId !== 'string' || targetId === viewerId) {
+      return res.status(400).json({ error: 'invalid target user id' });
+    }
+    if (!(await mayViewMatchDetail(viewerId, req.user.school, targetId))) {
+      return res.status(403).json({ error: 'not a match' });
+    }
+    // Block in EITHER direction hides the pair entirely — same as the feed.
+    const { rows: blk } = await pool.query(
+      `SELECT 1 FROM user_blocks
+        WHERE (blocker_id = $1 AND blocked_id = $2)
+           OR (blocker_id = $2 AND blocked_id = $1) LIMIT 1`,
+      [viewerId, targetId],
+    );
+    if (blk.length) return res.status(404).json({ error: 'match not found' });
+
+    // Viewer context for the shared DTO mapper (display-only personality
+    // pairing, the both-sides friction forecast, the cross-school flag).
+    const [{ rows: meRows }, { rows: meUserRows }, { rows: meAnsRows }] = await Promise.all([
+      pool.query('SELECT mbti, disc FROM personality_profiles WHERE user_id = $1', [viewerId]),
+      pool.query('SELECT school FROM users WHERE id = $1', [viewerId]),
+      pool.query('SELECT answers FROM quiz_answers WHERE user_id = $1', [viewerId]),
+    ]);
+    const me        = meRows[0] || {};
+    const mySchool  = meUserRows[0]?.school ?? null;
+    const myAnswers = meAnsRows[0]?.answers || null;
+
+    // Exactly the feed's SELECT + JOINs, narrowed to this one pair. No
+    // MATCH_MIN_SCORE / gender / smoke / demo discovery filters here (see the
+    // route comment) — but the same is_hard_blocked / paused / banned / quiz
+    // people-gates, so nothing the feed hides leaks through.
+    const { rows } = await pool.query(
+      `SELECT
+         cs.score,
+         cs.is_soft_blocked,
+         cs.shadow_penalty,
+         cs.breakdown,
+         cs.why_matched,
+         cs.pre_validation_pct,
+         cs.validation_multiplier,
+         cs.complementary_dims,
+         cs.converging_dims,
+         cs.confidence,
+         cs.under_pressure,
+         dq.answers AS candidate_answers,
+         u.id,
+         u.first_name,
+         u.last_name,
+         u.school,
+         u.school_year,
+         u.major,
+         u.bio,
+         u.gender,
+         u.looking_for,
+         u.photo_url,
+         u.budget_min,
+         u.budget_max,
+         u.move_in_timeline,
+         u.is_verified,
+         u.trust_score,
+         u.identity_verified_at,
+         u.last_active_at,
+         (u.first_name IS NOT NULL AND btrim(u.first_name) <> ''
+          AND u.photo_url IS NOT NULL AND btrim(u.photo_url) <> '') AS profile_complete,
+         pp.mbti  AS pairing_mbti,
+         pp.disc  AS pairing_disc,
+         ph.urls  AS photo_urls,
+         cr.id     AS connect_request_id,
+         cr.status AS connect_status
+       FROM compatibility_scores cs
+       JOIN users u ON (
+         CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END = u.id
+       )
+       ${galleryJoin('u.id', 'ph')}
+       LEFT JOIN personality_profiles pp ON pp.user_id = u.id
+       LEFT JOIN connect_requests cr ON (
+         (cr.from_user = $1 AND cr.to_user = u.id) OR
+         (cr.to_user = $1   AND cr.from_user = u.id)
+       )
+       LEFT JOIN quiz_answers dq ON dq.user_id = u.id
+       WHERE ((cs.user_a = $1 AND cs.user_b = $2) OR (cs.user_a = $2 AND cs.user_b = $1))
+         AND u.id = $2
+         AND cs.is_hard_blocked = FALSE
+         AND u.is_paused  = FALSE
+         AND u.is_banned  = FALSE
+         AND u.quiz_completed = TRUE
+       LIMIT 1`,
+      [viewerId, targetId],
+    );
+    if (!rows.length) return res.status(404).json({ error: 'match not found' });
+
+    return res.json(buildMatchDTO(rows[0], { me, myAnswers, mySchool }));
+  } catch (err) {
+    console.error('[matches/:userId]', err);
+    return res.status(500).json({ error: 'Failed to fetch match' });
+  }
+});
+
 module.exports = router;
+// Exposed for unit tests — this is the cross-repo DTO contract the app's
+// stores/matchStore.transformBackendMatch() decodes, shared by the feed and the
+// single-pair /:userId resolver. Attaching it to the router keeps HTTP mounting
+// (module.exports = router) intact.
+module.exports.buildMatchDTO = buildMatchDTO;
