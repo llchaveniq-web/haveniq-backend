@@ -1470,7 +1470,21 @@ No markdown fence. No explanation outside JSON.`;
 // and the discovery filters (gender / smoke / demo): a detail lookup by explicit
 // id isn't discovery — you already know who you're opening — so an aged-out or
 // below-threshold pair must still resolve to the real person.
-router.get('/:userId', requireAuth, async (req, res) => {
+// UUID guard for the single-pair resolver. This route (added in #9) is mounted
+// on '/matches' AHEAD of routes/matchOfTheDay.js and routes/matchedMoment.js, so
+// its ':userId' param would otherwise swallow every sibling literal sub-route:
+// GET /matches/today bound userId='today', fed "today" into a uuid-typed query,
+// and threw 'invalid input syntax for type uuid' → a 500 on EVERY home load
+// during cold-start (the bug this fixes). Passing non-UUID params through with
+// next() lets Express fall through to the router that actually owns the literal
+// path, and permanently prevents this whole collision class.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+router.get('/:userId', (req, res, next) => {
+  // Fall through to the sibling router (e.g. matchOfTheDay's /today) for any
+  // non-UUID param, BEFORE auth — this resolver only handles real user ids.
+  if (!UUID_RE.test(String(req.params.userId || ''))) return next('route');
+  next();
+}, requireAuth, async (req, res) => {
   try {
     const viewerId = req.user.id;
     const targetId = req.params.userId;
