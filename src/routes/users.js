@@ -247,9 +247,35 @@ router.get('/me', requireAuth, async (req, res) => {
 // Per-field validators. SQL is already parameterized so injection isn't
 // possible — these stop garbage data (negative ages, 100KB bios, arbitrary
 // strings in enum-shaped fields) from polluting the row.
-const SCHOOL_YEARS = new Set(['freshman', 'sophomore', 'junior', 'senior', 'grad']);
-const GENDERS      = new Set(['male', 'female', 'nonbinary', 'other', 'prefer_not']);
-const LOOKING_FOR  = new Set(['same_gender', 'any_gender', 'lgbtq_friendly', 'no_substances', 'quiet', 'social']);
+// The APP's option lists are the source of truth — GET /users/me returns the
+// stored values verbatim, so the validator MUST accept exactly what the app
+// offers or a read→re-save round-trip of an UNCHANGED field 400s. These enums
+// were originally written against an invented lowercase/token vocabulary
+// ('male', 'junior', 'same_gender') that the app never used — the app writes
+// human labels ('Man', 'Junior', and gender labels in lookingFor). That drift
+// (added with the field-validation PR) is what started rejecting untouched
+// values. The matching layer already speaks the app vocab (matches.js compares
+// gender/lookingFor as 'Man'/'Woman'/'Non-binary' and special-cases
+// 'Prefer not to say'), so aligning here matches how the data is actually used.
+//
+// The legacy lowercase tokens are kept alongside the app vocab so any row
+// already written in the old shape (e.g. seeded demo users) still round-trips —
+// the goal is "every value GET can return is re-savable", not a hard cutover.
+//   app source: app/(setup)/profile.tsx + app/match-preferences.tsx
+const SCHOOL_YEARS = new Set([
+  'Freshman', 'Sophomore', 'Junior', 'Senior', 'Graduate Student', 'Other',   // app
+  'freshman', 'sophomore', 'junior', 'senior', 'grad',                        // legacy
+]);
+const GENDERS = new Set([
+  'Man', 'Woman', 'Non-binary', 'Prefer not to say',                          // app
+  'male', 'female', 'nonbinary', 'other', 'prefer_not',                       // legacy
+]);
+// lookingFor holds GENDER LABELS (who you'd live with), matched against the
+// other person's `gender` — NOT the abstract preference tokens the old set had.
+const LOOKING_FOR = new Set([
+  'Man', 'Woman', 'Non-binary',                                               // app
+  'same_gender', 'any_gender', 'lgbtq_friendly', 'no_substances', 'quiet', 'social', // legacy
+]);
 const STATUSES     = new Set(['looking', 'open', 'committed', 'paused']);
 const TIMELINES    = new Set(['this_month', '1-3_months', 'fall_semester', 'spring_semester', 'flexible']);
 const EMAIL_RE     = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
