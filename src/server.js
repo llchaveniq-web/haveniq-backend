@@ -424,6 +424,10 @@ app.use('/feature-state', require('./routes/featureState')); // generic per-feat
 app.use('/walkscore', require('./routes/walkscore')); // Walk/Transit/Bike Score proxy (key stays server-side)
 app.use('/referrals', require('./routes/referrals')); // unique invite codes + referral attribution
 app.use('/circle',    require('./routes/circle'));    // your referred users + compatibility to each
+// Cross-referenceable safety record: POST a report, GET /mine, GET /admin
+// (founder-only) surfaces same-person-different-reporters patterns. Inert until
+// the app adds its third fetch call. See routes/roommateSafety.js.
+app.use('/roommate-safety-reports', require('./routes/roommateSafety'));
 app.use('/vouches',  require('./routes/vouches'));    // past-roommate vouches (public submit → pending → owner approves)
 app.use('/feature-usage', require('./routes/featureUsage')); // real "popular with students" aggregate (distinct users)
 app.use('/search',   require('./routes/search'));

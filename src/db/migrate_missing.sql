@@ -741,3 +741,18 @@ CREATE TABLE IF NOT EXISTS pair_consent (
   revoked_at   TIMESTAMPTZ,               -- consent is withdrawable; NULL = active
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ── Roommate safety reports (cross-referenceable safety record) — 2026-07-30 ──
+-- A dedicated, queryable table so the same person reported by DIFFERENT students
+-- surfaces as a PATTERN to the safety team. gen_random_uuid needs pgcrypto,
+-- ensured earlier in this file. Route: src/routes/roommateSafety.js.
+CREATE TABLE IF NOT EXISTS roommate_safety_reports (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  reporter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reported_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category    TEXT NOT NULL,
+  detail      TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_safety_reports_reported ON roommate_safety_reports(reported_id);
+CREATE INDEX IF NOT EXISTS idx_safety_reports_reporter ON roommate_safety_reports(reporter_id);
