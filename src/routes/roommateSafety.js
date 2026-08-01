@@ -38,6 +38,80 @@ async function ensureTable() {
   tableReady = true;
 }
 
+// Post a safety alert to Discord. There is no shared Discord helper in this repo
+// — /telemetry/report posts inline to DISCORD_WEBHOOK_URL — so this reuses that
+// SAME channel by default (the founder already watches it), mirroring its embed
+// shape. DISCORD_SAFETY_WEBHOOK_URL, if set, overrides to a dedicated safety
+// channel. No webhook configured (dev/test) → silent no-op.
+async function postSafetyAlert({ title, description, fields }) {
+  const hook = process.env.DISCORD_SAFETY_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL;
+  if (!hook) return;
+  try {
+    const r = await fetch(hook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        embeds: [{
+          title,
+          description,
+          color: 0xDC2626, // red — this is a safety pattern, not a routine report
+          fields: fields || [],
+          footer: { text: 'Roommate safety • forming pattern' },
+          timestamp: new Date().toISOString(),
+        }],
+      }),
+    });
+    if (!r.ok) console.error('[roommate-safety-reports] Discord webhook returned', r.status);
+  } catch (err) {
+    console.error('[roommate-safety-reports] Discord post failed:', err.message);
+  }
+}
+
+// Real-time pattern detector, fired the instant a NEW distinct reporter files
+// against an ALREADY-reported person — so a forming pattern surfaces immediately
+// instead of waiting for someone to load the /admin dashboard. Fire-and-forget
+// and fully self-contained (never throws), so it can't affect the POST response
+// that already went out.
+//
+// Fires iff, AFTER this insert: the reported person has >= 2 DISTINCT reporters
+// AND this reporter has exactly ONE report of them (i.e. this is that reporter's
+// first). That is exactly "first from a new distinct reporter against an
+// already-reported person":
+//   - never on a person's first-ever report (distinct_reporters would be 1);
+//   - never twice for the same reporter+person (my_reports would be >= 2).
+async function maybeAlertPattern(reporterId, reportedId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT COUNT(DISTINCT reporter_id)::int                      AS distinct_reporters,
+              COUNT(*) FILTER (WHERE reporter_id = $2)::int         AS my_reports
+         FROM roommate_safety_reports
+        WHERE reported_id = $1`,
+      [reportedId, reporterId],
+    );
+    const distinctReporters = rows[0]?.distinct_reporters || 0;
+    const myReports = rows[0]?.my_reports || 0;
+    if (!(distinctReporters >= 2 && myReports === 1)) return;
+
+    // Best-effort name for the alert; the reviewer opens /admin for the detail.
+    const { rows: u } = await pool.query('SELECT first_name FROM users WHERE id = $1', [reportedId]);
+    const name = u[0]?.first_name || 'a student';
+
+    await postSafetyAlert({
+      title: '🚨 Roommate safety pattern forming',
+      description:
+        `**${name}** has now been reported by **${distinctReporters}** different students ` +
+        `(a new distinct reporter just filed). Review in the safety dashboard: ` +
+        `GET /roommate-safety-reports/admin`,
+      fields: [
+        { name: 'Reported user', value: String(reportedId), inline: false },
+        { name: 'Distinct reporters', value: String(distinctReporters), inline: true },
+      ],
+    });
+  } catch (err) {
+    console.error('[roommate-safety-reports] pattern alert failed:', err.message);
+  }
+}
+
 // POST /roommate-safety-reports — file a new report.
 router.post('/', requireAuth, async (req, res) => {
   try {
@@ -62,6 +136,10 @@ router.post('/', requireAuth, async (req, res) => {
     );
 
     res.json({ ok: true, id: rows[0].id });
+
+    // Real-time pattern alert — fire-and-forget AFTER the response, so it can
+    // never delay or fail the student's report.
+    maybeAlertPattern(reporterId, reportedId);
   } catch (err) {
     console.error('[roommate-safety-reports] POST failed', err);
     res.status(500).json({ ok: false, error: 'Could not save report' });
