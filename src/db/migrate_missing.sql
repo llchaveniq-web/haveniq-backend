@@ -742,6 +742,28 @@ CREATE TABLE IF NOT EXISTS pair_consent (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ── Conflict Pulse read stream (conflict_pulses) — 2026-07-31 ────────────────
+-- One row per client-emitted `conflict_pulse`: a private roommate comfort read
+-- (topic + level 0–2 + whether raised). Written from the /telemetry/batch
+-- side-channel (NOT in ALLOWED_TYPES — same as pair_events), read by the
+-- counterpart via GET /conflict-pulse/:matchId.
+--
+-- ids are TEXT (the client event id, so a retried batch is idempotent via
+-- ON CONFLICT DO NOTHING) and user_id/match_id are TEXT with no FK — same
+-- rationale as pair_events: a roommate read may reference an account we don't
+-- want an FK to reject. `at` is the client ms clock, kept as-is.
+CREATE TABLE IF NOT EXISTS conflict_pulses (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,        -- who logged the read
+  match_id   TEXT NOT NULL,        -- the roommate the read is about
+  topic      TEXT NOT NULL,
+  level      SMALLINT NOT NULL,    -- 0–2 comfort read
+  raised     BOOLEAN NOT NULL DEFAULT FALSE,
+  at         BIGINT NOT NULL,      -- client-side ms timestamp
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_conflict_pulses_user_match ON conflict_pulses (user_id, match_id);
+
 -- ── Roommate safety reports (cross-referenceable safety record) — 2026-07-30 ──
 -- A dedicated, queryable table so the same person reported by DIFFERENT students
 -- surfaces as a PATTERN to the safety team. gen_random_uuid needs pgcrypto,

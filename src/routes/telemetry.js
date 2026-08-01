@@ -221,17 +221,31 @@ router.post('/batch', requireAuth, async (req, res) => {
     console.error('[telemetry] pair_event persist failed:', e.message);
   }
 
-  // `dropped` must not count pair_events: they never take the ALLOWED_TYPES
-  // path, so counting them there would report events as lost that were in fact
-  // stored — the one number a human debugging this stream would trust.
+  // Conflict Pulse — the roommate read stream. Same longitudinal-family pattern
+  // as pair_event above: `conflict_pulse` is NOT in ALLOWED_TYPES; it goes to its
+  // own typed conflict_pulses table straight from the raw batch (so the join
+  // route reads typed columns, not telemetry_events JSON). Best-effort: a hiccup
+  // here must never fail a student's telemetry batch.
+  let conflictPulses = { stored: 0, dropped: 0 };
+  try {
+    conflictPulses = await require('../services/conflictPulses').persistBatch(events, userId);
+  } catch (e) {
+    console.error('[telemetry] conflict_pulse persist failed:', e.message);
+  }
+
+  // `dropped` must not count pair_events / conflict_pulses: they never take the
+  // ALLOWED_TYPES path, so counting them there would report events as lost that
+  // were in fact stored — the one number a human debugging this stream trusts.
   const pairEventCount = events.filter(e => e && e.type === 'pair_event').length;
+  const conflictPulseCount = events.filter(e => e && e.type === 'conflict_pulse').length;
 
   res.json({
     accepted: valid.length,
-    dropped: events.length - valid.length - pairEventCount,
-    // Reported separately because pair_events bypasses the ALLOWED_TYPES path —
-    // folding it into `accepted` would misreport what landed in telemetry_events.
+    dropped: events.length - valid.length - pairEventCount - conflictPulseCount,
+    // Reported separately because these bypass the ALLOWED_TYPES path —
+    // folding them into `accepted` would misreport what landed in telemetry_events.
     pairEvents,
+    conflictPulses,
   });
 });
 

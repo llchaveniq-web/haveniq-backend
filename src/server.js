@@ -416,6 +416,10 @@ app.use('/research', require('./routes/research'));
 // the TIMELINE is research/internal only (it is a record of two real people's
 // conflict, so it is never returned to a normal user). See routes/pairs.js.
 app.use('/pairs', require('./routes/pairs'));
+// Conflict Pulse counterpart read — a student fetches their roommate's own
+// conflict_pulse reads about them (GET /conflict-pulse/:matchId). Data is
+// ingested via /telemetry/batch → conflict_pulses table.
+app.use('/conflict-pulse', require('./routes/conflictPulseJoin'));
 app.use('/reviews',  require('./routes/reviews'));
 app.use('/pulses',   require('./routes/pulses'));
 app.use('/checklists', require('./routes/checklists'));
