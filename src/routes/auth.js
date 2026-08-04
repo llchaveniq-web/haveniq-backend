@@ -113,8 +113,107 @@ const refreshLimitIp = rateLimit({
 
 // ── POST /auth/send-code ──────────────────────────────────────────────────
 // Validates .edu email, generates OTP, sends via SendGrid
+// The `profile` object /auth/verify-code returns, factored out so the
+// skip-verification branch below emits a BYTE-IDENTICAL shape without editing
+// (or risking a behavior change to) the real OTP path. verify-code keeps its own
+// inline copy untouched; a test asserts the two stay key-for-key in lockstep.
+function buildAuthProfile(user) {
+  return {
+    id:          user.id,
+    email:       user.email,
+    school:      user.school,
+    firstName:   user.first_name,
+    lastName:    user.last_name,
+    lastInitial: user.last_name ? user.last_name.trim().charAt(0) : '',
+    bio:         user.bio        ?? '',
+    major:       user.major      ?? '',
+    schoolYear:  user.school_year ?? '',
+    age:         user.age        ?? null,
+    gender:      user.gender     ?? '',
+    lookingFor:  user.looking_for ?? [],
+    photoUrl:    user.photo_url  ?? null,
+    budgetMin:   user.budget_min ?? null,
+    budgetMax:   user.budget_max ?? null,
+    neighborhoods: user.neighborhoods ?? [],
+    moveInDate:  user.move_in_date ?? null,
+    isVerified:  user.is_verified,
+    trustScore:  user.trust_score,
+    quizCompleted: user.quiz_completed,
+    identityVerifiedAt: user.identity_verified_at,
+    totpEnabled: user.totp_enabled === true,
+  };
+}
+
+// ── Skip-verification (env-gated reviewer access, OFF by default) ────────────
+// When SKIP_EMAIL_VERIFICATION==='true', /auth/send-code skips BOTH the academic-
+// domain check AND the 6-digit OTP: it creates-or-finds the user and returns a
+// real session in the SAME request. It NEVER touches /auth/verify-code — no OTP
+// is generated, stored, or emailed, so the normal path is entirely unaffected.
+// New accounts are tagged created_via_skip_verification=TRUE (that tag does NOT
+// auto-revert when the flag flips off — it's the cleanup handle). A blank school
+// defaults to the DB's healthiest pool so the reviewer doesn't land in a hollow
+// feed. Rate-limit middleware already ran before this handler: "no verification"
+// is not "no rate limit".
+const SKIP_DEFAULT_SCHOOL = process.env.SKIP_DEFAULT_SCHOOL || 'University of Southern California';
+
+async function handleSkipVerification(req, res) {
+  const { email, school, schoolDomain } = req.body || {};
+  if (!email || typeof email !== 'string' || !email.includes('@')) {
+    return res.status(400).json({ error: 'email is required' });
+  }
+  const emailLower = email.trim().toLowerCase();
+  try {
+    const { rows: existing } = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [emailLower]);
+    let user = existing[0];
+    let isNewUser = false;
+
+    if (!user) {
+      const domain = emailLower.split('@')[1] || '';
+      const chosenSchool = (typeof school === 'string' && school.trim()) ? school.trim() : SKIP_DEFAULT_SCHOOL;
+      const chosenDomain = (typeof schoolDomain === 'string' && schoolDomain.trim()) ? schoolDomain.trim() : domain;
+      const { rows: ins } = await pool.query(
+        `INSERT INTO users (email, school, school_domain, trust_score, is_verified, created_via_skip_verification)
+         VALUES ($1, $2, $3, 20, TRUE, TRUE)
+         RETURNING *`,
+        [emailLower, chosenSchool, chosenDomain],
+      );
+      user = ins[0];
+      isNewUser = true;
+      // Visibility (email is not a secret here, unlike a bypass code) — a single
+      // info line so this path is greppable in the deploy logs.
+      console.log(`[auth] skip-verification signup used: ${emailLower}`);
+    } else {
+      console.log(`[auth] skip-verification signin used: ${emailLower}`);
+    }
+
+    // A normal session — identical to what /auth/verify-code issues on a real
+    // login, including the httpOnly session cookie.
+    const token = signToken(user.id);
+    setSessionCookie(res, token);
+    logSignIn(pool, user.id, 'skip_verification', req);
+
+    return res.json({
+      ok: true,
+      skipVerification: true,
+      token,
+      profile: buildAuthProfile(user),
+      quizCompleted: user.quiz_completed === true,
+      isNewUser,
+    });
+  } catch (err) {
+    console.error('[auth] skip-verification failed:', err);
+    return res.status(500).json({ error: 'Verification failed' });
+  }
+}
+
 router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (req, res) => {
   try {
+    // Env-gated reviewer bypass. OFF (unset / anything but exactly 'true') ⇒ this
+    // branch is never entered and the handler below runs byte-for-byte as today.
+    if (process.env.SKIP_EMAIL_VERIFICATION === 'true') {
+      return handleSkipVerification(req, res);
+    }
+
     // Guard against `req.body === undefined` (request with no Content-Type
     // and no body would otherwise throw on destructuring and bubble up to
     // a 500). Smoke test caught this — should be a clean 400.

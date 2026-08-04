@@ -778,3 +778,9 @@ CREATE TABLE IF NOT EXISTS roommate_safety_reports (
 );
 CREATE INDEX IF NOT EXISTS idx_safety_reports_reported ON roommate_safety_reports(reported_id);
 CREATE INDEX IF NOT EXISTS idx_safety_reports_reporter ON roommate_safety_reports(reporter_id);
+
+-- ── Skip-verification tagging (env-gated reviewer access) — 2026-07-31 ───────
+-- Accounts created via /auth/send-code's SKIP_EMAIL_VERIFICATION branch are
+-- tagged here so they're trivially findable for cleanup. This tag is the ONE
+-- thing that does NOT auto-revert when the flag flips off.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS created_via_skip_verification BOOLEAN DEFAULT false;
