@@ -126,12 +126,22 @@ test('ON, valid token: real session for the seeded account', async () => {
   });
 });
 
-test('valid token: quiz completed + scored through the NORMAL path (feed populated)', async () => {
+test('DEFAULT (autoseed off): blank-slate — firstName empty, quiz NOT completed, NOT scored', async () => {
+  // The reviewer routes through profile-setup → quiz → real scored matches like
+  // any new user; it must NOT be auto-completed or pre-scored on login.
   await withEnv({ MAGIC_LINK_MODE: 'true', MAGIC_LINK_TOKEN: TOKEN }, async () => {
     const res = await call({ token: TOKEN });
+    assert.equal(res.body.quizCompleted, false, 'not auto-completed');
+    assert.equal(res.body.user.firstName, '', 'blank name → app routes to profile-setup');
+    assert.equal(scoreCalls.length, 0, 'no auto-scoring by default');
+  });
+});
+
+test('OPT-IN (MAGIC_LINK_AUTOSEED=true): the old pre-populated behavior still works', async () => {
+  await withEnv({ MAGIC_LINK_MODE: 'true', MAGIC_LINK_TOKEN: TOKEN, MAGIC_LINK_AUTOSEED: 'true' }, async () => {
+    const res = await call({ token: TOKEN });
     assert.equal(res.body.quizCompleted, true);
-    assert.equal(scoreCalls.length, 1, 'scoreNewMatches was invoked (real scoring, not hand-written)');
-    // A valid index per SCORED question, in the production {type,index} shape.
+    assert.equal(scoreCalls.length, 1, 'scoreNewMatches invoked (real scoring, not hand-written)');
     const answers = scoreCalls[0].answers;
     assert.ok(answers['50'] && typeof answers['50'].index === 'number');
   });
@@ -153,7 +163,7 @@ test('a second valid call reuses the SAME account (isNewUser:false), no duplicat
     const b = await call({ token: TOKEN });
     assert.equal(b.body.isNewUser, false);
     assert.equal(inserts.length, 1, 'only one INSERT total');
-    // Already quiz-complete ⇒ no re-scoring on the second hit.
-    assert.equal(scoreCalls.length, 1);
+    // Autoseed off by default ⇒ never scores.
+    assert.equal(scoreCalls.length, 0);
   });
 });

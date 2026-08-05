@@ -1045,7 +1045,17 @@ const MAGIC_LINK_ANSWERS = Object.fromEntries(
 async function ensureReviewerUser() {
   const email  = (process.env.MAGIC_LINK_EMAIL  || 'chad@haveniq.review').trim().toLowerCase();
   const school =  process.env.MAGIC_LINK_SCHOOL || 'University of Southern California';
-  const name   =  process.env.MAGIC_LINK_NAME   || 'Chad';
+  // Default to a BLANK first name so a fresh reviewer routes through the real
+  // onboarding (the app sends an empty-name account to profile-setup first).
+  // MAGIC_LINK_NAME can restore a pre-filled name if ever wanted.
+  const name   =  process.env.MAGIC_LINK_NAME   || '';
+  // Auto-complete + auto-score the reviewer on login was the ORIGINAL behavior
+  // (land directly in a pre-populated feed). It is now OPT-IN and OFF by default:
+  // the reviewer should walk profile-setup → quiz → real scored matches like any
+  // new user. Without this gate, a login would re-complete the quiz on every hit
+  // and a blank-slate reset could never stick — which is exactly the reset this
+  // supports. Set MAGIC_LINK_AUTOSEED=true to restore the pre-populated demo.
+  const autoseed = process.env.MAGIC_LINK_AUTOSEED === 'true';
 
   const { rows: ex } = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [email]);
   let user = ex[0];
@@ -1061,7 +1071,7 @@ async function ensureReviewerUser() {
     created = true;
   }
 
-  if (user.quiz_completed !== true) {
+  if (autoseed && user.quiz_completed !== true) {
     await pool.query(
       `INSERT INTO quiz_answers (user_id, answers, completed) VALUES ($1, $2, TRUE)
        ON CONFLICT (user_id) DO UPDATE SET answers = EXCLUDED.answers, completed = TRUE, updated_at = NOW()`,
