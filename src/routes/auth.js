@@ -1006,4 +1006,111 @@ router.post('/demo-session', async (req, res) => {
   }
 });
 
+// ── Magic-link sign-in (env-gated, ONE seeded reviewer account) ─────────────
+// A single-purpose bypass: one pre-approved viewer opens a URL carrying a long,
+// high-entropy token and lands signed in as ONE specific seeded account. It
+// NEVER weakens OTP for anyone else, NEVER creates arbitrary accounts (only the
+// MAGIC_LINK_EMAIL user), and returns 404 unless MAGIC_LINK_MODE==='true' — off
+// is indistinguishable from the route not existing.
+//
+// Why a 32-byte token, not a 6-digit code: OTP is safe at 6 digits ONLY because
+// entry is rate-limited and the code is short-lived. This endpoint has no
+// rate-limited typing step between a guess and success, so the secret itself
+// must carry the entropy. Compared in constant time.
+const { constantTimeEqual } = require('../middleware/requireInternalKey');
+
+function isValidMagicLinkToken(token) {
+  if (process.env.MAGIC_LINK_MODE !== 'true') return false;
+  const expected = process.env.MAGIC_LINK_TOKEN;
+  if (!expected || typeof expected !== 'string') return false;   // missing env ⇒ closed
+  if (typeof token !== 'string' || !token) return false;
+  return constantTimeEqual(token, expected);
+}
+
+// The reviewer's answer set — a valid index per SCORED question, in the shape
+// production stores ({type:'option',index}). A middle-of-the-road profile so it
+// scores plausibly against the seeded pool. Scoring is done through the NORMAL
+// path (quiz.scoreNewMatches → calculateCompatibility), never a hand-written
+// number.
+const MAGIC_LINK_ANSWERS = Object.fromEntries(
+  Object.entries({
+    14: 0, 48: 1, 49: 2, 50: 1, 51: 0, 52: 1, 53: 2, 54: 1, 55: 1,
+    56: 1, 57: 2, 60: 1, 62: 1, 63: 1, 68: 1, 65: 1, 66: 1, 67: 1,
+  }).map(([q, i]) => [q, { type: 'option', index: i }]),
+);
+
+// Find-or-lazily-create the ONE seeded reviewer account and, if it isn't yet
+// quiz-complete, write its answers + score it against the pool through the real
+// engine so its match feed is populated. Idempotent.
+async function ensureReviewerUser() {
+  const email  = (process.env.MAGIC_LINK_EMAIL  || 'chad@haveniq.review').trim().toLowerCase();
+  const school =  process.env.MAGIC_LINK_SCHOOL || 'University of Southern California';
+  const name   =  process.env.MAGIC_LINK_NAME   || 'Chad';
+
+  const { rows: ex } = await pool.query('SELECT * FROM users WHERE email = $1 LIMIT 1', [email]);
+  let user = ex[0];
+  let created = false;
+  if (!user) {
+    const domain = email.split('@')[1] || '';
+    const { rows } = await pool.query(
+      `INSERT INTO users (email, school, school_domain, first_name, trust_score, is_verified, quiz_completed)
+       VALUES ($1, $2, $3, $4, 20, TRUE, FALSE) RETURNING *`,
+      [email, school, domain, name],
+    );
+    user = rows[0];
+    created = true;
+  }
+
+  if (user.quiz_completed !== true) {
+    await pool.query(
+      `INSERT INTO quiz_answers (user_id, answers, completed) VALUES ($1, $2, TRUE)
+       ON CONFLICT (user_id) DO UPDATE SET answers = EXCLUDED.answers, completed = TRUE, updated_at = NOW()`,
+      [user.id, JSON.stringify(MAGIC_LINK_ANSWERS)],
+    );
+    await pool.query('UPDATE users SET quiz_completed = TRUE WHERE id = $1', [user.id]);
+    // The normal quiz-scoring path — populates compatibility_scores against every
+    // completed-quiz user via calculateCompatibility. Lazy-required to avoid any
+    // load-order cycle. Best-effort: a scoring hiccup shouldn't block sign-in.
+    try { await require('./quiz').scoreNewMatches(user.id, MAGIC_LINK_ANSWERS); }
+    catch (e) { console.error('[auth] magic-link scoring failed:', e.message); }
+    const { rows: fresh } = await pool.query('SELECT * FROM users WHERE id = $1', [user.id]);
+    user = fresh[0];
+  }
+  return { user, created };
+}
+
+router.post('/magic-link', async (req, res) => {
+  // OFF ⇒ 404, before touching the body — no observable difference from the
+  // route not existing.
+  if (process.env.MAGIC_LINK_MODE !== 'true') return res.status(404).json({ error: 'Not found' });
+  const { token } = req.body || {};
+  if (!isValidMagicLinkToken(token)) return res.status(401).json({ ok: false });
+
+  try {
+    const { user, created } = await ensureReviewerUser();
+    const sessionToken = signToken(user.id);
+    setSessionCookie(res, sessionToken);
+    logSignIn(pool, user.id, 'magic_link', req);
+    // One info line, never the token value.
+    console.log(`[auth] magic-link sign-in used for the seeded reviewer account (created=${created})`);
+
+    // { token, user } in the shape /auth/verify-code returns (buildAuthProfile),
+    // with `profile`/`success` also present so any verify-code-style consumer works.
+    return res.json({
+      ok: true,
+      success: true,
+      token: sessionToken,
+      user:    buildAuthProfile(user),
+      profile: buildAuthProfile(user),
+      userId:  user.id,
+      quizCompleted: user.quiz_completed === true,
+      isNewUser: created,
+    });
+  } catch (err) {
+    console.error('[auth] magic-link failed:', err);
+    return res.status(500).json({ error: 'Sign-in failed' });
+  }
+});
+
 module.exports = router;
+module.exports.isValidMagicLinkToken = isValidMagicLinkToken;   // exported for unit tests
