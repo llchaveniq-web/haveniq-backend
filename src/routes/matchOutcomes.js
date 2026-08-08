@@ -317,21 +317,28 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
     // 'decline' were already wired at their own call sites in matches.js, but
     // NOTHING stamped a terminal outcome from here — the trainer has been
     // running against zero labels, forever, regardless of real data volume.
-    // Only the two outcomes with an unambiguous funnel mapping are wired:
-    //   moved_in_together        -> 'moved_in' (the success signal)
+    //   moved_in_together           -> 'moved_in' (the success signal)
     //   ended_roommate_relationship -> 'room_change' (they WERE living
     //     together and it ended -- the clearest post-move-in failure signal
     //     this funnel models)
-    // Deliberately NOT mapped: decided_not_to_continue / lost_contact. Those
-    // describe pairs that never reached moved_in_together at all -- forcing
-    // them into 'room_change' would mislabel "never tried" as "tried and it
-    // broke down" and corrupt the training signal for a real-sounding but
-    // wrong reason. They stay unlabeled (censored), which is the honest state
-    // per docs/specs/outcome-learning.md §3's ladder.
+    //   lost_contact                -> 'ghost'. Was unreachable from any UI
+    //     until the app added a direct follow-up when meet48's "no" is
+    //     tapped ("we decided not to" vs "I never heard back") -- a real,
+    //     explicit report, not inferred from message-silence (which would
+    //     confound "it fizzled" with "it worked so well they moved off-
+    //     platform," and unfairly blame both people's dimensions for one
+    //     side's disengagement).
+    // Deliberately NOT mapped: decided_not_to_continue. It describes pairs
+    // that never reached moved_in_together at all -- forcing it into
+    // 'room_change' would mislabel "never tried" as "tried and it broke
+    // down" and corrupt the training signal for a real-sounding but wrong
+    // reason. It stays unlabeled (censored), which is the honest state per
+    // docs/specs/outcome-learning.md §3's ladder.
     const PAIRING_EVENT_FOR_OUTCOME = {
       moved_in_together:          'moved_in',
       met_in_person:              'met',
       ended_roommate_relationship: 'room_change',
+      lost_contact:                'ghost',
     };
     const pairingEvent = PAIRING_EVENT_FOR_OUTCOME[outcome];
     if (pairingEvent) {

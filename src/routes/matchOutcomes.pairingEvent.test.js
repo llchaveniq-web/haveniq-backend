@@ -2,9 +2,11 @@
 // funnel event (services/pairingOutcomes.js), the labels
 // services/dimensionModel.js's Loop B trainer needs. Before this wiring,
 // 'connect'/'message'/'match'/'decline' were the only funnel steps ever
-// recorded — nothing ever stamped moved_in_at/room_change_at, so
+// recorded — nothing ever stamped moved_in_at/room_change_at/ghosted_at, so
 // labelOutcome() could never produce a training label and the trainer ran
 // daily against zero examples regardless of real outcome volume.
+// lost_contact -> 'ghost' is the app's first honest ghosting signal: a direct
+// report (the meet48 "no" follow-up), not inferred from message-silence.
 // pool/auth/sentry stubbed. node --test.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -45,6 +47,7 @@ const CASES = [
   ['moved_in_together', 'moved_in_at'],
   ['met_in_person', 'met_at'],
   ['ended_roommate_relationship', 'room_change_at'],
+  ['lost_contact', 'ghosted_at'],
 ];
 
 for (const [outcome, column] of CASES) {
@@ -59,10 +62,10 @@ for (const [outcome, column] of CASES) {
   });
 }
 
-// The deliberate non-mapping: these outcomes never reached moved_in_together,
-// so forcing them into 'room_change' would mislabel "never tried" as "tried
-// and it broke down" — they must stay censored (unlabeled), not miscoded.
-for (const outcome of ['decided_not_to_continue', 'lost_contact', 'survey_60d', 'still_chatting']) {
+// The deliberate non-mapping: this outcome never reached moved_in_together,
+// so forcing it into 'room_change' would mislabel "never tried" as "tried
+// and it broke down" — it must stay censored (unlabeled), not miscoded.
+for (const outcome of ['decided_not_to_continue', 'survey_60d', 'still_chatting']) {
   test(`${outcome} does NOT stamp any pairing_outcomes funnel event`, async () => {
     const res = await post(outcome);
     assert.equal(res.status, 200);
