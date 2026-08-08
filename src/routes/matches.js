@@ -20,8 +20,10 @@ const { buildSuites } = require('../services/suiteOptimizer');
 const { loadFeatures: loadTextInsightFeatures } = require('../services/textInsight');
 // Earned roommate reputation badge (docs/BACKEND_ROOMMATE_REPUTATION.md) —
 // only attached on the single match-detail route below, never the feed: it's
-// a per-user aggregate query, too expensive to run once per feed row.
-const { computeTrackRecord } = require('./vouches');
+// a per-user aggregate query, too expensive to run once per feed row. Sourced
+// from the mutual, verified roommate_vouches system (gated on real match
+// history), not src/routes/vouches.js's public unverified testimonials.
+const { computeTrackRecord } = require('./roommateVouches');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock, aiLimiter } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');

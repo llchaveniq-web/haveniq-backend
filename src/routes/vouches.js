@@ -41,52 +41,7 @@ async function ensureTables() {
       created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_vouches_user ON vouches (user_id, status)`);
-  // NULLable, not a default-false: rows written before this column existed (or
-  // by a stale cached client that never asked the question) mean "never
-  // asked", not "no" — computeTrackRecord below must never count either as a
-  // negative would-live-again signal, only as an unopinionated cohabitation.
-  await pool.query(`ALTER TABLE vouches ADD COLUMN IF NOT EXISTS would_live_again BOOLEAN`);
   ready = true;
-}
-
-// The honest trust-badge computation (docs/BACKEND_ROOMMATE_REPUTATION.md,
-// cheap path): derived entirely from vouches this vouchee has already
-// APPROVED for display — no new table, no double opt-in. livedWithCount is
-// every approved vouch (a neutral fact: this person cohabited with someone,
-// independent of how it went); wouldLiveAgainCount is the subset that
-// explicitly said yes. A vouch with would_live_again false/null still counts
-// toward livedWithCount but is never quoted or counted as positive — matches
-// the "never a scarlet letter" rule: absence/negative of the positive signal
-// is neutral, never displayed as a mark against them.
-async function computeTrackRecord(userId) {
-  await ensureTables();
-  const { rows } = await pool.query(
-    `SELECT from_name, text
-       FROM vouches
-      WHERE user_id = $1 AND status = 'approved' AND would_live_again = TRUE
-      ORDER BY created_at DESC
-      LIMIT 5`,
-    [userId],
-  );
-  const { rows: countRows } = await pool.query(
-    `SELECT COUNT(*)::int AS lived_with_count,
-            COUNT(*) FILTER (WHERE would_live_again = TRUE)::int AS would_live_again_count
-       FROM vouches WHERE user_id = $1 AND status = 'approved'`,
-    [userId],
-  );
-  const livedWithCount      = countRows[0]?.lived_with_count ?? 0;
-  const wouldLiveAgainCount = countRows[0]?.would_live_again_count ?? 0;
-  if (livedWithCount === 0) return null;
-  const roommateWord = livedWithCount === 1 ? 'roommate' : 'roommates';
-  const display = wouldLiveAgainCount > 0
-    ? `Lived with ${livedWithCount} ${roommateWord} · ${wouldLiveAgainCount === livedWithCount ? (livedWithCount === 1 ? 'would live again' : 'all would live again') : `${wouldLiveAgainCount} would live again`}`
-    : `Lived with ${livedWithCount} ${roommateWord}`;
-  return {
-    livedWithCount,
-    wouldLiveAgainCount,
-    display,
-    vouches: rows.map(r => ({ fromFirstName: r.from_name, note: r.text })),
-  };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -136,9 +91,6 @@ router.post('/:userId', submitLimiter, async (req, res) => {
     const text         = clean(req.body?.text, 280);
     if (fromName.length < 1)  return res.status(400).json({ error: 'Please add your name.' });
     if (text.length < 10)     return res.status(400).json({ error: 'Please write at least a sentence.' });
-    // Optional so older/cached clients that predate this question don't get
-    // rejected — stored as NULL ("never asked"), never coerced to false.
-    const wouldLiveAgain = typeof req.body?.wouldLiveAgain === 'boolean' ? req.body.wouldLiveAgain : null;
 
     // Same content gate as messaging — block slurs / threats / sexual content.
     const screen = screenMessage(`${fromName} ${relationship} ${text}`);
@@ -154,9 +106,9 @@ router.post('/:userId', submitLimiter, async (req, res) => {
     }
 
     await pool.query(
-      `INSERT INTO vouches (user_id, from_name, relationship, text, status, would_live_again)
-       VALUES ($1, $2, $3, $4, 'pending', $5)`,
-      [userId, fromName, relationship || null, text, wouldLiveAgain]);
+      `INSERT INTO vouches (user_id, from_name, relationship, text, status)
+       VALUES ($1, $2, $3, $4, 'pending')`,
+      [userId, fromName, relationship || null, text]);
 
     res.json({ ok: true, firstName: target.rows[0].first_name || 'your roommate' });
   } catch (e) {
@@ -217,6 +169,3 @@ router.get('/public/:userId', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
-// Exposed so GET /matches/:userId (matches.js) can attach `trackRecord`
-// without a second router mount — see docs/BACKEND_ROOMMATE_REPUTATION.md.
-module.exports.computeTrackRecord = computeTrackRecord;

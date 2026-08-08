@@ -1,4 +1,5 @@
-// GET /matches/:userId attaches `trackRecord` (docs/BACKEND_ROOMMATE_REPUTATION.md)
+// GET /matches/:userId attaches `trackRecord` (docs/BACKEND_ROOMMATE_REPUTATION.md),
+// sourced from the mutual, verified roommate_vouches system (roommateVouches.js),
 // so the frontend's already-shipped TrackRecordBadge lights up. Locks: the
 // field is present when the target has earned vouches, ABSENT (not null-
 // valued) when they have none — buildMatchDTO's own "omit, don't null" idiom
@@ -44,8 +45,8 @@ inject('../db/pool', {
     if (/SELECT school FROM users WHERE id/.test(sql))       return { rows: [{ school: 'UCLA' }] };
     if (/FROM quiz_answers WHERE user_id/.test(sql))          return { rows: [] };
     if (/FROM compatibility_scores cs/.test(sql))  return { rows: [matchRow()] };
-    // computeTrackRecord's two queries:
-    if (/SELECT from_name, text/.test(sql)) {
+    // computeTrackRecord's two queries (roommateVouches.js):
+    if (/JOIN users u ON u\.id = rv\.from_user_id/.test(sql)) {
       if (trackRecordThrows) throw new Error('db exploded');
       return { rows: [] };
     }
