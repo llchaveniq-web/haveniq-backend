@@ -308,6 +308,45 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [req.user.id, otherUserId, outcome, sanitized, predScore, predTier, stressStretch, predPattern]
     );
+
+    // Mutual corroboration nudge: 'moved_in_together' today is a one-sided
+    // self-report — nothing has ever asked the OTHER person to confirm it.
+    // That's the same ground truth roommateVouches.js's anti-forgery gate and
+    // the weight-learning training set both lean on, so a false or loose
+    // unilateral claim quietly weakens both. If the reverse direction hasn't
+    // reported it yet, nudge them toward the SAME "we moved in" step they
+    // already have in their own thread (components/RoommateJourney.tsx) —
+    // no new UI needed, just a reason to tap the button that's already there.
+    // Best-effort, fire-and-forget: never blocks or fails the response.
+    if (outcome === 'moved_in_together') {
+      (async () => {
+        try {
+          const { rows: reverse } = await pool.query(
+            `SELECT 1 FROM match_outcomes
+              WHERE reporter_id = $1 AND other_user_id = $2 AND outcome = 'moved_in_together'
+              LIMIT 1`,
+            [otherUserId, req.user.id],
+          );
+          if (reverse.length) return; // already mutually corroborated — nothing to nudge
+          const sendPushToUser = req.app.get('sendPushToUser');
+          if (!sendPushToUser) return;
+          const reporterName = req.user.first_name || 'Your roommate';
+          // Routed generically to the inbox, not deep-linked to the specific
+          // thread — this handler only has user ids, not the conversation id
+          // app/_layout.tsx's 'thread' push route requires (data.conversationId).
+          // Same "screen, not deep link" precedent as the connect-request push
+          // in matches.js.
+          await sendPushToUser(otherUserId, {
+            title: 'Did you move in together too?',
+            body: `${reporterName} marked that you two moved in together. Confirm it on your end to build your own honest track record.`,
+            data: { screen: 'messages' },
+          });
+        } catch (e) {
+          console.error('[match-outcomes] moved-in corroboration nudge failed:', e.message);
+        }
+      })();
+    }
+
     // W2 — mirror every recurring check-in into the pair ledger as an `outcome`
     // event, so the longitudinal record and the check-in survey are ONE dataset
     // rather than two that have to be reconciled later. Best-effort and

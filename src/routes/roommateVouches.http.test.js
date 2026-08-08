@@ -24,9 +24,19 @@ let pushCalls        = [];
 let updateResult      = { rowCount: 1, rows: [{ from_user_id: FROM }] };
 let lastUpdateParams  = null;
 let currentUserId     = ABOUT; // confirm/decline/visibility are called BY the about_user in real use
+let corroborationInsertParams = null; // the confirm-triggered moved_in_together auto-stamp
+let corroborationInsertSql    = null;
+
+// The nudge/corroboration inserts are fire-and-forget (not awaited by the
+// handler) — give them a tick to land before asserting.
+const flush = () => new Promise(r => setImmediate(r));
 
 inject('../db/pool', {
   query: async (sql, params) => {
+    // Checked BEFORE the bare "SELECT 1 FROM match_outcomes" branch below —
+    // the corroboration INSERT's own WHERE NOT EXISTS subquery contains that
+    // exact substring, so the order here matters.
+    if (/INSERT INTO match_outcomes/.test(sql)) { corroborationInsertParams = params; corroborationInsertSql = sql; return { rows: [] }; }
     if (/SELECT 1 FROM match_outcomes/.test(sql)) return { rows: everMovedIn ? [{ '?column?': 1 }] : [] };
     if (/SELECT id, status FROM roommate_vouches WHERE from_user_id/.test(sql)) {
       return { rows: existingRow ? [existingRow] : [] };
@@ -63,6 +73,8 @@ test.beforeEach(() => {
   updateResult = { rowCount: 1, rows: [{ from_user_id: FROM }] };
   currentUserId = FROM; // default: the requester's perspective (POST .../request tests)
   contentAction = 'allow';
+  corroborationInsertParams = null;
+  corroborationInsertSql = null;
 });
 
 test('rejects a request when there is no moved_in_together record for the pair — the load-bearing anti-forgery gate', async () => {
@@ -156,6 +168,35 @@ test('confirming pushes the ORIGINAL requester, not the confirmer', async () => 
   await request(app).post('/roommate-vouches/33333333-3333-3333-3333-333333333333/confirm');
   assert.equal(pushCalls.length, 1);
   assert.equal(pushCalls[0].userId, FROM, 'from_user_id returned by the UPDATE');
+});
+
+test('confirming a vouch is itself an attestation — auto-stamps the confirmer\'s OWN moved_in_together report', async () => {
+  currentUserId = ABOUT;
+  await request(app).post('/roommate-vouches/33333333-3333-3333-3333-333333333333/confirm');
+  await flush();
+  assert.ok(corroborationInsertParams, 'a match_outcomes row should have been inserted');
+  // reporter = the confirmer (about_user), other = the original requester.
+  // 'moved_in_together' is inlined as a SQL literal (not a $N param) so it
+  // can never drift from any other outcome — checked against the SQL text.
+  assert.equal(corroborationInsertParams[0], ABOUT);
+  assert.equal(corroborationInsertParams[1], FROM);
+  assert.match(corroborationInsertSql, /'moved_in_together'/);
+});
+
+test('the auto-stamp insert is conditional (WHERE NOT EXISTS) — never duplicates an existing report', async () => {
+  currentUserId = ABOUT;
+  await request(app).post('/roommate-vouches/33333333-3333-3333-3333-333333333333/confirm');
+  await flush();
+  // The guard lives in the SQL itself (idempotent even under a race), not in
+  // application code deciding whether to run the query at all.
+  assert.match(corroborationInsertSql, /WHERE NOT EXISTS/);
+});
+
+test('declining does NOT auto-stamp a moved_in_together report — only a real confirm counts as attestation', async () => {
+  currentUserId = ABOUT;
+  await request(app).post('/roommate-vouches/33333333-3333-3333-3333-333333333333/decline');
+  await flush();
+  assert.equal(corroborationInsertParams, null);
 });
 
 test('declining is scoped the same way as confirm, and sends no push at all', async () => {

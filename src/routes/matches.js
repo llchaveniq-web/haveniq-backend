@@ -23,7 +23,7 @@ const { loadFeatures: loadTextInsightFeatures } = require('../services/textInsig
 // a per-user aggregate query, too expensive to run once per feed row. Sourced
 // from the mutual, verified roommate_vouches system (gated on real match
 // history), not src/routes/vouches.js's public unverified testimonials.
-const { computeTrackRecord } = require('./roommateVouches');
+const { computeTrackRecord, bothMovedInTogether } = require('./roommateVouches');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock, aiLimiter } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -1593,6 +1593,15 @@ router.get('/:userId', (req, res, next) => {
       if (trackRecord) dto.trackRecord = trackRecord;
     } catch (trErr) {
       console.error('[matches/:userId trackRecord]', trErr.message);
+    }
+    // Whether BOTH sides have independently self-reported moving in — the
+    // stronger bar above a one-sided claim (roommateVouches.js). Omitted
+    // (not false) on failure or absence, matching trackRecord's own idiom.
+    try {
+      const confirmed = await bothMovedInTogether(viewerId, targetId);
+      if (confirmed) dto.movedInMutuallyConfirmed = true;
+    } catch (mErr) {
+      console.error('[matches/:userId movedInMutuallyConfirmed]', mErr.message);
     }
 
     return res.json(dto);

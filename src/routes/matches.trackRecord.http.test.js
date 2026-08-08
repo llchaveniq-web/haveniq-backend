@@ -36,6 +36,8 @@ function matchRow(overrides = {}) {
 // Mutable per-test knobs.
 let trackRecordCountRow = { lived_with_count: 0, would_live_again_count: 0 };
 let trackRecordThrows   = false;
+let mutualRow           = { a_reported: false, b_reported: false };
+let mutualThrows        = false;
 
 inject('../db/pool', {
   query: async (sql) => {
@@ -54,6 +56,11 @@ inject('../db/pool', {
       if (trackRecordThrows) throw new Error('db exploded');
       return { rows: [trackRecordCountRow] };
     }
+    // bothMovedInTogether (roommateVouches.js):
+    if (/a_reported/.test(sql)) {
+      if (mutualThrows) throw new Error('db exploded');
+      return { rows: [mutualRow] };
+    }
     return { rows: [] };
   },
 });
@@ -71,6 +78,8 @@ app.use('/matches', require('./matches'));
 test.beforeEach(() => {
   trackRecordCountRow = { lived_with_count: 0, would_live_again_count: 0 };
   trackRecordThrows   = false;
+  mutualRow = { a_reported: false, b_reported: false };
+  mutualThrows = false;
 });
 
 test('a target with zero approved vouches: trackRecord is absent, not a zeroed object', async () => {
@@ -94,4 +103,32 @@ test('a broken trackRecord query never breaks match-detail — best-effort only'
   assert.equal(res.status, 200, 'the match itself must still load');
   assert.equal(res.body.userId, TARGET);
   assert.equal('trackRecord' in res.body, false);
+});
+
+test('neither side reported moving in: movedInMutuallyConfirmed is absent, never false', async () => {
+  const res = await request(app).get(`/matches/${TARGET}`);
+  assert.equal(res.status, 200);
+  assert.equal('movedInMutuallyConfirmed' in res.body, false);
+});
+
+test('only one side reported: still absent — a unilateral claim is not "mutually confirmed"', async () => {
+  mutualRow = { a_reported: true, b_reported: false };
+  const res = await request(app).get(`/matches/${TARGET}`);
+  assert.equal(res.status, 200);
+  assert.equal('movedInMutuallyConfirmed' in res.body, false);
+});
+
+test('both sides reported: movedInMutuallyConfirmed is true', async () => {
+  mutualRow = { a_reported: true, b_reported: true };
+  const res = await request(app).get(`/matches/${TARGET}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.movedInMutuallyConfirmed, true);
+});
+
+test('a broken mutual-confirmation query never breaks match-detail — best-effort only', async () => {
+  mutualThrows = true;
+  const res = await request(app).get(`/matches/${TARGET}`);
+  assert.equal(res.status, 200, 'the match itself must still load');
+  assert.equal(res.body.userId, TARGET);
+  assert.equal('movedInMutuallyConfirmed' in res.body, false);
 });

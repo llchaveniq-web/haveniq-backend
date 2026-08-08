@@ -77,6 +77,25 @@ async function everMovedInTogether(userA, userB) {
   return rows.length > 0;
 }
 
+// The STRONGER bar: has EACH side independently self-reported
+// 'moved_in_together' about the other? A unilateral report is enough to
+// create a vouch request (everMovedInTogether above); this is the honest
+// "ground truth" signal for anything that shouldn't rest on one person's
+// unverified word alone — surfaced on match-detail (matches.js) so it can
+// eventually feed the weight-learning training set the same way. Confirming
+// a roommate vouch always produces this (see POST /:id/confirm above); pairs
+// who never touch vouches get it only if both independently mark "we moved
+// in" — which is why matchOutcomes.js nudges the second side to do so.
+async function bothMovedInTogether(userA, userB) {
+  const { rows } = await pool.query(
+    `SELECT
+       EXISTS(SELECT 1 FROM match_outcomes WHERE reporter_id = $1 AND other_user_id = $2 AND outcome = 'moved_in_together') AS a_reported,
+       EXISTS(SELECT 1 FROM match_outcomes WHERE reporter_id = $2 AND other_user_id = $1 AND outcome = 'moved_in_together') AS b_reported`,
+    [userA, userB],
+  );
+  return !!(rows[0]?.a_reported && rows[0]?.b_reported);
+}
+
 // The honest trust-badge aggregation, used by GET /matches/:userId
 // (matches.js). Only status='confirmed' AND visibility='public' rows ever
 // count — a pending or private-confirmed vouch is invisible here, matching
@@ -240,6 +259,24 @@ async function setStatus(req, res, status) {
     if (!rows[0]) return res.status(404).json({ error: 'not found' });
 
     if (status === 'confirmed') {
+      // Confirming a vouch IS an explicit attestation "yes, we lived
+      // together" — a stronger claim than the plain moved_in_together
+      // self-report the request itself required. Best-effort: if the
+      // about_user hasn't independently logged their own moved_in_together
+      // report for this pair, stamp one now, so a confirmed vouch always
+      // leaves the underlying match_outcomes ground truth mutually
+      // corroborated (both directions present), not just the one-sided
+      // report that was enough to CREATE the request.
+      pool.query(
+        `INSERT INTO match_outcomes (reporter_id, other_user_id, outcome, details)
+         SELECT $1, $2, 'moved_in_together', $3
+          WHERE NOT EXISTS (
+            SELECT 1 FROM match_outcomes
+             WHERE reporter_id = $1 AND other_user_id = $2 AND outcome = 'moved_in_together'
+          )`,
+        [String(req.user.id), rows[0].from_user_id, { source: 'roommate_vouch_confirm' }],
+      ).catch(err => console.error('[roommate-vouches/confirm] moved-in corroboration insert failed:', err.message));
+
       const sendPushToUser = req.app.get('sendPushToUser');
       if (sendPushToUser) {
         const confirmerName = req.user.first_name || 'They';
@@ -284,3 +321,4 @@ router.patch('/:id/visibility', requireAuth, async (req, res) => {
 
 module.exports = router;
 module.exports.computeTrackRecord = computeTrackRecord;
+module.exports.bothMovedInTogether = bothMovedInTogether;
