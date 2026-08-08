@@ -60,18 +60,40 @@ function agreement(ai, bi, optionCount) {
 //   null   = unknown / too-early → EXCLUDED from training (never forced)
 // A failure signal wins over an earlier positive one (a pair that ended failed,
 // however well day-30 went).
+//
+// moved_in_together is treated differently from the other MET_OUTCOMES: it's
+// the strongest individual claim ("we actually live together"), and unlike
+// met_in_person/lease_signed it has a real corroboration mechanism
+// (roommateVouches.js's bothMovedInTogether — the OTHER side gets nudged to
+// independently confirm it, see matchOutcomes.js). Before that, ONE person's
+// full self-reported journey (move-in claim + their own positive retention
+// check-ins) was enough to label a pair "worked" with zero input from the
+// other person — this is what let a training pair be entirely one-sided.
+// Now a moved_in_together row only counts toward `met` once it's present
+// from TWO DISTINCT reporters for this pair (rows carry `reporterId` when
+// the caller has real reporter identity — see weightAnalyst.js). A single
+// unilateral moved_in_together claim can still label the pair "worked" via
+// a plain meet48 'yes' (a lower-stakes claim, unchanged) — it just can't do
+// it alone on the strength of an unconfirmed "we moved in" claim.
 function labelPair(rows) {
   let met = false, retentionPos = false, failed = false;
+  const movedInReporters = new Set();
+
   for (const r of rows || []) {
     const outcome = r.outcome;
     const stage   = r.stage   != null ? r.stage   : (r.details && r.details.stage);
     const answer  = r.answer  != null ? r.answer  : (r.details && r.details.answer);
     const rating  = num(r.rating != null ? r.rating : (r.details && r.details.rating));
+    const reporterId = r.reporterId != null ? r.reporterId : (r.details && r.details.reporterId);
 
     if (FAILED_OUTCOMES.has(outcome)) failed = true;
     if (rating != null && rating <= 2) failed = true;
 
-    if (MET_OUTCOMES.has(outcome)) met = true;
+    if (outcome === 'moved_in_together') {
+      if (reporterId != null) movedInReporters.add(reporterId);
+    } else if (MET_OUTCOMES.has(outcome)) {
+      met = true; // met_in_person / lease_signed — no corroboration infra, unchanged
+    }
     if (stage === 'meet48' && answer === 'yes') met = true;
 
     if (RETENTION_STAGES.has(stage)) {
@@ -79,6 +101,8 @@ function labelPair(rows) {
       if (rating != null && rating >= 4) retentionPos = true;
     }
   }
+  if (movedInReporters.size >= 2) met = true; // both sides independently confirmed
+
   if (failed) return 'failed';
   if (met && retentionPos) return 'worked';
   return null; // too-early / unknown
