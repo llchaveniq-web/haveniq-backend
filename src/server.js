@@ -437,6 +437,12 @@ app.use('/feature-usage', require('./routes/featureUsage')); // real "popular wi
 app.use('/search',   require('./routes/search'));
 app.use('/housing',  require('./routes/housing'));
 app.use('/premium',  require('./routes/premium'));
+// Outcome-Learning Loop C: per-friction-detector confirmation rates (founder-
+// only, GET /admin/friction-validation). Declares its own full path, so no
+// prefix. Mounted BEFORE the generic /admin router so it can't be shadowed.
+// Inert until the app's check-in emits predictedFrictionCategory/Id +
+// frictionConfirmed into match_outcomes.details. See routes/frictionValidation.js.
+app.use(require('./routes/frictionValidation'));
 app.use('/admin',    require('./routes/admin'));
 app.use('/admin/safety', require('./routes/adminSafety'));
 app.use('/admin/support', require('./routes/support'));  // "Report a problem" triage queue (founder + moderators)
