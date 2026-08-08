@@ -27,6 +27,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { screenMessage } = require('../lib/contentFilter');
 const sentry = require('../utils/sentry');
+const { recordPairingEvent } = require('../services/pairingOutcomes');
 const DISCORD_HOOK = process.env.DISCORD_WEBHOOK_URL || '';
 
 const ALLOWED_OUTCOMES = new Set([
@@ -308,6 +309,35 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [req.user.id, otherUserId, outcome, sanitized, predScore, predTier, stressStretch, predPattern]
     );
+
+    // Outcome scaffolding (services/dimensionModel.js's Loop B trainer, run
+    // daily by server.js's runGateTraining): pairing_outcomes.labelOutcome()
+    // needs moved_in_at (success) or room_change_at/blocked_at/ghosted_at
+    // (failure) to ever produce a training label. 'connect'/'message'/'match'/
+    // 'decline' were already wired at their own call sites in matches.js, but
+    // NOTHING stamped a terminal outcome from here — the trainer has been
+    // running against zero labels, forever, regardless of real data volume.
+    // Only the two outcomes with an unambiguous funnel mapping are wired:
+    //   moved_in_together        -> 'moved_in' (the success signal)
+    //   ended_roommate_relationship -> 'room_change' (they WERE living
+    //     together and it ended -- the clearest post-move-in failure signal
+    //     this funnel models)
+    // Deliberately NOT mapped: decided_not_to_continue / lost_contact. Those
+    // describe pairs that never reached moved_in_together at all -- forcing
+    // them into 'room_change' would mislabel "never tried" as "tried and it
+    // broke down" and corrupt the training signal for a real-sounding but
+    // wrong reason. They stay unlabeled (censored), which is the honest state
+    // per docs/specs/outcome-learning.md §3's ladder.
+    const PAIRING_EVENT_FOR_OUTCOME = {
+      moved_in_together:          'moved_in',
+      met_in_person:              'met',
+      ended_roommate_relationship: 'room_change',
+    };
+    const pairingEvent = PAIRING_EVENT_FOR_OUTCOME[outcome];
+    if (pairingEvent) {
+      recordPairingEvent(req.user.id, otherUserId, pairingEvent).catch(() => {});
+    }
+
     // W2 — mirror every recurring check-in into the pair ledger as an `outcome`
     // event, so the longitudinal record and the check-in survey are ONE dataset
     // rather than two that have to be reconciled later. Best-effort and

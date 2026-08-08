@@ -969,6 +969,14 @@ router.post('/:matchId/block', requireAuth, safetyBlock, async (req, res) => {
 
     audit(req, 'user.block', { blocked: blockedId }).catch(() => {});
     analytics.track(analytics.EVENTS.user_blocked, blockerId, { target_user_id: blockedId });
+    // Outcome scaffolding (services/dimensionModel.js's Loop B trainer): a block
+    // is one of the funnel's terminal FAILURE signals (with room_change/ghost) —
+    // labelOutcome() reads pairing_outcomes.blocked_at directly. Without this the
+    // trainer runs daily forever with zero labeled examples on the failure side:
+    // 'connect'/'message'/'match'/'decline' were already wired, but nothing ever
+    // stamped a terminal outcome, so no dimension could ever certify. Best-effort,
+    // non-blocking — a block must always succeed regardless of this write.
+    recordPairingEvent(blockerId, blockedId, 'block').catch(() => {});
     res.json({ blocked: true });
   } catch (err) {
     console.error('block failed:', err);
