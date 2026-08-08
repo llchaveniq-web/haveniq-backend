@@ -1591,3 +1591,8 @@ module.exports = router;
 // single-pair /:userId resolver. Attaching it to the router keeps HTTP mounting
 // (module.exports = router) intact.
 module.exports.buildMatchDTO = buildMatchDTO;
+// Exposed so other route modules reading pair-scoped data by an arbitrary
+// :id param can reuse this exact "same-campus or connected pair" gate instead
+// of shipping with no relationship check at all (the bug class this function
+// itself was written to close — see the /score-history comment above).
+module.exports.mayViewMatchDetail = mayViewMatchDetail;
