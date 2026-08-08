@@ -1,9 +1,11 @@
 // The mutual, verified roommate-vouch flow (docs/BACKEND_ROOMMATE_REPUTATION.md)
 // — what makes it unfakeable vs. src/routes/vouches.js's public testimonials:
-// (1) gated to real HavenIQ match history (connect_requests), (2) double
-// opt-in — the about_user must explicitly confirm before anything counts,
-// (3) visibility defaults private and is the about_user's call alone.
-// node --test.
+// (1) gated to an actual 'moved_in_together' self-report on file for the
+// pair (match_outcomes) — deliberately stronger than "they matched" or "a
+// connect_requests row exists", since either of those is true for pairs who
+// never actually lived together; (2) double opt-in — the about_user must
+// explicitly confirm before anything counts; (3) visibility defaults
+// private and is the about_user's call alone. node --test.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -15,7 +17,7 @@ function inject(relPath, exportsObj) {
 const FROM  = '11111111-1111-1111-1111-111111111111';
 const ABOUT = '22222222-2222-2222-2222-222222222222';
 
-let wereConnected = true;
+let everMovedIn = true;
 let existingRow    = null; // { id, status } — simulates the idempotency check
 let insertedParams  = null;
 let pushCalls        = [];
@@ -25,7 +27,7 @@ let currentUserId     = ABOUT; // confirm/decline/visibility are called BY the a
 
 inject('../db/pool', {
   query: async (sql, params) => {
-    if (/SELECT 1 FROM connect_requests/.test(sql)) return { rows: wereConnected ? [{ '?column?': 1 }] : [] };
+    if (/SELECT 1 FROM match_outcomes/.test(sql)) return { rows: everMovedIn ? [{ '?column?': 1 }] : [] };
     if (/SELECT id, status FROM roommate_vouches WHERE from_user_id/.test(sql)) {
       return { rows: existingRow ? [existingRow] : [] };
     }
@@ -53,7 +55,7 @@ app.set('sendPushToUser', (userId, payload) => { pushCalls.push({ userId, payloa
 app.use('/roommate-vouches', require('./roommateVouches'));
 
 test.beforeEach(() => {
-  wereConnected = true;
+  everMovedIn = true;
   existingRow = null;
   insertedParams = null;
   lastUpdateParams = null;
@@ -63,8 +65,8 @@ test.beforeEach(() => {
   contentAction = 'allow';
 });
 
-test('rejects a request between two users who never matched — the load-bearing anti-forgery gate', async () => {
-  wereConnected = false;
+test('rejects a request when there is no moved_in_together record for the pair — the load-bearing anti-forgery gate', async () => {
+  everMovedIn = false;
   const res = await request(app)
     .post(`/roommate-vouches/${ABOUT}/request`)
     .send({ wouldLiveAgain: true });
@@ -72,7 +74,19 @@ test('rejects a request between two users who never matched — the load-bearing
   assert.equal(insertedParams, null, 'nothing should have been inserted');
 });
 
-test('a real past match can request, storing wouldLiveAgain as a real boolean', async () => {
+test('a real MATCH alone is not enough — merely having matched/chatted, with no moved-in report, is still rejected', async () => {
+  // This is the specific gap the gate closes: two real, connected accounts
+  // who never actually lived together should not be able to fabricate a
+  // cohabitation claim just because they matched.
+  everMovedIn = false;
+  const res = await request(app)
+    .post(`/roommate-vouches/${ABOUT}/request`)
+    .send({ wouldLiveAgain: true, note: 'we definitely lived together, trust me' });
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /moved-in record/);
+});
+
+test('a pair with a real moved_in_together report can request, storing wouldLiveAgain as a real boolean', async () => {
   const res = await request(app)
     .post(`/roommate-vouches/${ABOUT}/request`)
     .send({ wouldLiveAgain: true, note: 'Great to live with.' });

@@ -4,12 +4,16 @@
  * (the public link, ANY ex-roommate, unverified testimonial system, which
  * still exists for its own ⭐ profile badge and is untouched here).
  *
- * What makes THIS one the real moat: both people must be real HavenIQ users
- * who actually matched/connected in the app (gated on connect_requests —
- * the same history mayViewMatchDetail in matches.js trusts), and it's a real
- * double opt-in: the FROM user submits a claim, but nothing counts toward
- * the ABOUT user's trust badge until the about_user explicitly confirms the
- * cohabitation happened. No stranger, no unverifiable claim, no forgery.
+ * What makes THIS one the real moat: a request requires an actual
+ * `moved_in_together` self-report already on file for the pair
+ * (match_outcomes — the same table matchStore.js's markMovedIn() writes to,
+ * and the same signal weightLearning/calibration train on), not merely that
+ * the two matched or exchanged a connect request. A pair that only matched
+ * or chatted — never recorded moving in — cannot create a row. And it's a
+ * real double opt-in on top of that: the FROM user submits a claim, but
+ * nothing counts toward the ABOUT user's trust badge until the about_user
+ * explicitly confirms the cohabitation happened. No stranger, no thin
+ * "we matched" claim, no forgery.
  *
  *   POST  /roommate-vouches/:aboutUserId/request     → create (auth; gated on real match history)
  *   GET   /roommate-vouches/me                       → my three lists (auth)
@@ -52,14 +56,21 @@ async function ensureTables() {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Same real-match-history proof mayViewMatchDetail (matches.js) trusts — a
-// connect_requests row in either direction, any status. This is the load-
-// bearing check that makes the whole feature unfakeable: a stranger with no
-// connect_requests history with the target can never create a row at all.
-async function everConnected(userA, userB) {
+// The load-bearing anti-forgery check: has EITHER side of this pair ever
+// self-reported 'moved_in_together' for the other? Deliberately stronger
+// than "they matched" or "a connect_requests row exists" — either of those
+// is true for pairs who never actually lived together, which would let two
+// merely-matched (or merely-friendly) real accounts fabricate a cohabitation
+// claim. moved_in_together is the SAME event that schedules the day90/
+// month6 retention check-ins (stores/matchStore.ts markMovedIn()) — every
+// pair the check-in flywheel ever prompts already has this row, so
+// tightening this gate never breaks that path, only the two manual entry
+// points (thread + match-detail menus) that don't imply it on their own.
+async function everMovedInTogether(userA, userB) {
   const { rows } = await pool.query(
-    `SELECT 1 FROM connect_requests
-      WHERE (from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1)
+    `SELECT 1 FROM match_outcomes
+      WHERE outcome = 'moved_in_together'
+        AND ((reporter_id = $1 AND other_user_id = $2) OR (reporter_id = $2 AND other_user_id = $1))
       LIMIT 1`,
     [userA, userB],
   );
@@ -148,8 +159,8 @@ router.post('/:aboutUserId/request', requireAuth, refuseBanned, async (req, res)
       }
     }
 
-    if (!(await everConnected(fromUserId, aboutUserId))) {
-      return res.status(403).json({ error: 'You can only vouch for someone you actually matched with on HavenIQ.' });
+    if (!(await everMovedInTogether(fromUserId, aboutUserId))) {
+      return res.status(403).json({ error: "HavenIQ doesn't have a moved-in record for you two — mark that you moved in together first." });
     }
 
     // Idempotent — a vouch is one per direction per pair (unique index).
