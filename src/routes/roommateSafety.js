@@ -35,6 +35,14 @@ async function ensureTable() {
     CREATE INDEX IF NOT EXISTS idx_safety_reports_reported ON roommate_safety_reports(reported_id);
     CREATE INDEX IF NOT EXISTS idx_safety_reports_reporter ON roommate_safety_reports(reporter_id);
   `).catch((e) => console.error('[roommate-safety-reports] ensure table:', e.message));
+  // Founder review state — this table had a real-time Discord alert on a
+  // forming pattern but no durable, browsable review surface at all: the
+  // ONLY way to ever see the accumulated data was catching the alert live
+  // in Discord. 'open' by default so nothing already-filed is silently
+  // marked reviewed by the migration itself.
+  await pool.query(`
+    ALTER TABLE roommate_safety_reports ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open'
+  `).catch((e) => console.error('[roommate-safety-reports] add status column:', e.message));
   tableReady = true;
 }
 
@@ -165,9 +173,21 @@ router.get('/mine', requireAuth, async (req, res) => {
   }
 });
 
+const VALID_STATUSES = new Set(['open', 'reviewed']);
+
 // GET /roommate-safety-reports/admin — the safety-team view. Surfaces PATTERNS
 // (same reported_id, DISTINCT reporter_ids): one student reported by several
-// different people is the signal worth immediate attention.
+// different people is the signal worth immediate attention. Previously this
+// was the ONLY way to ever see this data, and nothing ever called it — the
+// real-time Discord alert (maybeAlertPattern) was the sole review surface,
+// which meant a pattern was reviewable exactly once: the moment it scrolled
+// past in Discord. This is the durable version.
+//
+// ?status=open|reviewed|all (default 'open', matching AdminSafetyAPI's own
+// convention) filters the REPORTS list only — patterns are always computed
+// from the FULL history regardless of the filter, since "this person has
+// been reported by 3 different students" doesn't stop being true just
+// because a founder marked one of those reports reviewed.
 //
 // NOTE the path change from the patch. The patch mounted this router at
 // '/roommate-safety-reports' but declared the route as
@@ -179,9 +199,9 @@ router.get('/mine', requireAuth, async (req, res) => {
 router.get('/admin', requireAuth, requireFounder, async (req, res) => {
   try {
     await ensureTable();
-    const { rows: reports } = await pool.query(
+    const { rows: allReports } = await pool.query(
       `SELECT
-         r.id, r.category, r.detail, r.created_at,
+         r.id, r.category, r.detail, r.created_at, r.status,
          reporter.id AS reporter_id, reporter.first_name AS reporter_first_name,
          reported.id AS reported_id, reported.first_name AS reported_first_name
        FROM roommate_safety_reports r
@@ -191,7 +211,7 @@ router.get('/admin', requireAuth, requireFounder, async (req, res) => {
     );
 
     const byReported = new Map();
-    for (const r of reports) {
+    for (const r of allReports) {
       const bucket = byReported.get(r.reported_id)
         ?? { reportedId: r.reported_id, name: r.reported_first_name, reporterIds: new Set() };
       bucket.reporterIds.add(r.reporter_id);
@@ -202,10 +222,39 @@ router.get('/admin', requireAuth, requireFounder, async (req, res) => {
       .map(b => ({ reportedId: b.reportedId, name: b.name, distinctReporterCount: b.reporterIds.size }))
       .sort((a, b) => b.distinctReporterCount - a.distinctReporterCount);
 
+    const statusFilter = String(req.query.status || 'open');
+    const reports = statusFilter === 'all'
+      ? allReports
+      : allReports.filter(r => r.status === (VALID_STATUSES.has(statusFilter) ? statusFilter : 'open'));
+
     res.json({ ok: true, reports, patterns });
   } catch (err) {
     console.error('[roommate-safety-reports] GET /admin failed', err);
     res.status(500).json({ ok: false, error: 'Could not load reports' });
+  }
+});
+
+// PATCH /roommate-safety-reports/:id — founder marks a report reviewed (or
+// reopens it). This is acknowledgment only — banning/unbanning a user stays
+// on the existing general moderation system (AdminSafetyAPI /admin/safety/*),
+// so this dataset doesn't grow a second, competing ban mechanism.
+router.patch('/:id', requireAuth, requireFounder, async (req, res) => {
+  try {
+    await ensureTable();
+    const { id } = req.params;
+    const status = req.body?.status;
+    if (!VALID_STATUSES.has(status)) {
+      return res.status(400).json({ ok: false, error: `status must be one of: ${[...VALID_STATUSES].join(', ')}` });
+    }
+    const { rowCount } = await pool.query(
+      `UPDATE roommate_safety_reports SET status = $1 WHERE id = $2`,
+      [status, id],
+    );
+    if (rowCount === 0) return res.status(404).json({ ok: false, error: 'not found' });
+    res.json({ ok: true, status });
+  } catch (err) {
+    console.error('[roommate-safety-reports] PATCH failed', err);
+    res.status(500).json({ ok: false, error: 'Could not update report' });
   }
 });
 
