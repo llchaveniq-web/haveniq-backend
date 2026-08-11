@@ -29,7 +29,7 @@ async function buildLabeledData() {
     const r = await pool.query(
       `SELECT LEAST(reporter_id, other_user_id) AS a,
               GREATEST(reporter_id, other_user_id) AS b,
-              outcome, details
+              reporter_id, outcome, details
          FROM match_outcomes`,
     );
     outcomeRows = r.rows;
@@ -38,12 +38,15 @@ async function buildLabeledData() {
     return { pairs: [], answersByUser: {}, schoolByUser: {} };
   }
 
-  // Group every outcome row by unordered pair.
+  // Group every outcome row by unordered pair. reporter_id is carried through
+  // UN-anonymized (unlike a/b above) — labelPair needs the real reporter so
+  // moved_in_together can require it from two DISTINCT people, not just "a
+  // row exists somewhere in this pair's history".
   const byPair = new Map();
   for (const row of outcomeRows) {
     const key = `${row.a}|${row.b}`;
     if (!byPair.has(key)) byPair.set(key, { a: row.a, b: row.b, rows: [] });
-    byPair.get(key).rows.push({ outcome: row.outcome, details: row.details });
+    byPair.get(key).rows.push({ outcome: row.outcome, details: row.details, reporterId: row.reporter_id });
   }
 
   // Fetch answers + school for every user that appears in a pair.

@@ -12,8 +12,46 @@ test('labelPair: met + positive retention → worked', () => {
     { stage: 'meet48', answer: 'yes' },
     { stage: 'day30', rating: 5 },
   ]), 'worked');
+  // met_in_person/lease_signed are unilateral-fine — no corroboration infra
+  // exists for them, unlike moved_in_together (see the next block).
   assert.equal(wl.labelPair([
-    { outcome: 'moved_in_together' },
+    { outcome: 'met_in_person' },
+    { stage: 'day60', answer: 'yes' },
+  ]), 'worked');
+});
+
+// moved_in_together is the one MET_OUTCOME with a real corroboration path
+// (roommateVouches.js's bothMovedInTogether + the nudge in matchOutcomes.js)
+// — it should NOT be able to label a pair "worked" on one person's word
+// alone, since that person's own retention check-ins could ALSO be entirely
+// self-generated (scheduleMoveIn only fires for whoever tapped "we moved
+// in"). Two distinct reporterIds is what makes it count.
+test('labelPair: a UNILATERAL moved_in_together claim alone does not count as "met"', () => {
+  assert.equal(wl.labelPair([
+    { outcome: 'moved_in_together', reporterId: 'user-a' },
+    { stage: 'day60', answer: 'yes' },
+  ]), null, 'one person\'s claim + their own retention check-in is not enough');
+  // Two rows, but from the SAME reporter (a resubmission/duplicate) — still
+  // only one distinct person, still not mutual.
+  assert.equal(wl.labelPair([
+    { outcome: 'moved_in_together', reporterId: 'user-a' },
+    { outcome: 'moved_in_together', reporterId: 'user-a' },
+    { stage: 'day60', answer: 'yes' },
+  ]), null);
+});
+
+test('labelPair: a MUTUALLY confirmed moved_in_together (two distinct reporters) + retention → worked', () => {
+  assert.equal(wl.labelPair([
+    { outcome: 'moved_in_together', reporterId: 'user-a' },
+    { outcome: 'moved_in_together', reporterId: 'user-b' },
+    { stage: 'day60', answer: 'yes' },
+  ]), 'worked');
+});
+
+test('labelPair: reporterId can also come from the details blob, same as stage/answer/rating', () => {
+  assert.equal(wl.labelPair([
+    { details: { outcome: 'moved_in_together', reporterId: 'user-a' }, outcome: 'moved_in_together' },
+    { details: { outcome: 'moved_in_together', reporterId: 'user-b' }, outcome: 'moved_in_together' },
     { stage: 'day60', answer: 'yes' },
   ]), 'worked');
 });

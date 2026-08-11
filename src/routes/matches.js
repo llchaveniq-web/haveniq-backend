@@ -18,6 +18,12 @@ const { computeFrictions } = require('../services/friction');
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { buildSuites } = require('../services/suiteOptimizer');
 const { loadFeatures: loadTextInsightFeatures } = require('../services/textInsight');
+// Earned roommate reputation badge (docs/BACKEND_ROOMMATE_REPUTATION.md) —
+// only attached on the single match-detail route below, never the feed: it's
+// a per-user aggregate query, too expensive to run once per feed row. Sourced
+// from the mutual, verified roommate_vouches system (gated on real match
+// history), not src/routes/vouches.js's public unverified testimonials.
+const { computeTrackRecord, bothMovedInTogether } = require('./roommateVouches');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock, aiLimiter } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -1578,7 +1584,27 @@ router.get('/:userId', (req, res, next) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'match not found' });
 
-    return res.json(buildMatchDTO(rows[0], { me, myAnswers, mySchool }));
+    const dto = buildMatchDTO(rows[0], { me, myAnswers, mySchool });
+    // Best-effort: a broken trackRecord query must never break match-detail
+    // (the badge is a bonus; the match screen is not). Absent on failure,
+    // same as when the person just has no earned track record yet.
+    try {
+      const trackRecord = await computeTrackRecord(targetId);
+      if (trackRecord) dto.trackRecord = trackRecord;
+    } catch (trErr) {
+      console.error('[matches/:userId trackRecord]', trErr.message);
+    }
+    // Whether BOTH sides have independently self-reported moving in — the
+    // stronger bar above a one-sided claim (roommateVouches.js). Omitted
+    // (not false) on failure or absence, matching trackRecord's own idiom.
+    try {
+      const confirmed = await bothMovedInTogether(viewerId, targetId);
+      if (confirmed) dto.movedInMutuallyConfirmed = true;
+    } catch (mErr) {
+      console.error('[matches/:userId movedInMutuallyConfirmed]', mErr.message);
+    }
+
+    return res.json(dto);
   } catch (err) {
     console.error('[matches/:userId]', err);
     return res.status(500).json({ error: 'Failed to fetch match' });

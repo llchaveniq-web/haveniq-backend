@@ -433,6 +433,7 @@ app.use('/circle',    require('./routes/circle'));    // your referred users + c
 // the app adds its third fetch call. See routes/roommateSafety.js.
 app.use('/roommate-safety-reports', require('./routes/roommateSafety'));
 app.use('/vouches',  require('./routes/vouches'));    // past-roommate vouches (public submit → pending → owner approves)
+app.use('/roommate-vouches', require('./routes/roommateVouches')); // mutual, verified — gated to real matched pairs
 app.use('/feature-usage', require('./routes/featureUsage')); // real "popular with students" aggregate (distinct users)
 app.use('/search',   require('./routes/search'));
 app.use('/housing',  require('./routes/housing'));
