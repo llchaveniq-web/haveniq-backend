@@ -103,6 +103,21 @@ router.post('/review/:userId/approve', requireAuth, requireFounder, async (req, 
     );
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     console.log(`[admin/review] APPROVED user ${rows[0].id} by founder ${req.user.id}`);
+    // Same reasoning as botAdmin.js's bot-driven approve: scoreNewMatches
+    // skips unverified submitters, so a user approved after already finishing
+    // the quiz would otherwise never get scored. Best-effort, non-fatal.
+    try {
+      const { rows: qa } = await pool.query(
+        'SELECT answers FROM quiz_answers WHERE user_id = $1 AND completed = TRUE LIMIT 1',
+        [rows[0].id],
+      );
+      if (qa[0]) {
+        const { scoreNewMatches } = require('./quiz');
+        await scoreNewMatches(rows[0].id, qa[0].answers);
+      }
+    } catch (err) {
+      console.error('[admin/review/approve] post-approve scoring failed:', err.message);
+    }
     res.json({ ok: true, userId: rows[0].id });
   } catch (err) {
     console.error('[admin/review/approve] failed:', err);

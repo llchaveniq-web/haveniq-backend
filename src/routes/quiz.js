@@ -382,10 +382,17 @@ async function scoreNewMatches(userId, newAnswers) {
   // dealbreakers and passed into calculateCompatibility so flagged
   // categories carry amplified weight in the pair's score.
   const { rows: userRow } = await pool.query(
-    'SELECT school, dealbreakers, validation_score, move_in_timeline FROM users WHERE id = $1',
+    'SELECT school, dealbreakers, validation_score, move_in_timeline, is_verified FROM users WHERE id = $1',
     [userId]
   );
   if (!userRow[0]) return;
+  // Unreviewed accounts (is_verified = FALSE — pending the signup-review
+  // bot/founder) are quarantined from the marketplace entirely: no rows get
+  // written involving them as submitter here, and the candidate query below
+  // excludes them from everyone else's scoring too. Once reviewed, the
+  // approve handlers (botAdmin.js, admin.js) call this function directly so
+  // the account doesn't just sit invisible until its next quiz edit.
+  if (userRow[0].is_verified !== true) return;
   const myDealbreakers = Array.isArray(userRow[0].dealbreakers) ? userRow[0].dealbreakers : [];
   const myValidation   = userRow[0].validation_score != null ? Number(userRow[0].validation_score) : undefined;
 
@@ -401,7 +408,8 @@ async function scoreNewMatches(userId, newAnswers) {
      JOIN users u ON u.id = qa.user_id
      WHERE qa.completed = TRUE
        AND qa.user_id != $1
-       AND u.is_paused = FALSE`,
+       AND u.is_paused = FALSE
+       AND u.is_verified = TRUE`,
     [userId]
   );
 
@@ -570,7 +578,10 @@ async function scoreNewMatches(userId, newAnswers) {
 // empty even though their answers are fine and they SHOULD match. Paused
 // users are still scored as the *submitter* (so they can see others) but
 // remain excluded as candidates by scoreNewMatches' own query, matching live
-// behavior. Returns a small summary for the admin tool. Best-effort per user:
+// behavior. Unverified (pending-review) users are the opposite: scoreNewMatches
+// early-returns for them as submitter too, so they're a no-op here until the
+// signup-review bot/founder approves them — recompute doesn't bypass review.
+// Returns a small summary for the admin tool. Best-effort per user:
 // one user's failure doesn't abort the whole sweep.
 async function recomputeAllMatches() {
   const { rows: users } = await pool.query(
