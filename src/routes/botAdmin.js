@@ -136,6 +136,25 @@ router.post('/signup/:userId/approve', requireBotToken, async (req, res) => {
     );
     const acted = r.rows.length > 0;
     await audit('signup-review', 'approve', userId, { reason: reason ?? null }, acted ? 'updated' : 'noop');
+    // scoreNewMatches skips unverified submitters entirely, so an account
+    // that finished the quiz BEFORE being approved would otherwise sit with
+    // zero compatibility_scores rows forever — nothing re-triggers scoring
+    // for them on its own. Score them now if they've completed the quiz.
+    // Best-effort: a scoring failure shouldn't fail the approval itself.
+    if (acted) {
+      try {
+        const { rows: qa } = await pool.query(
+          'SELECT answers FROM quiz_answers WHERE user_id = $1 AND completed = TRUE LIMIT 1',
+          [userId],
+        );
+        if (qa[0]) {
+          const { scoreNewMatches } = require('./quiz');
+          await scoreNewMatches(userId, qa[0].answers);
+        }
+      } catch (err) {
+        console.error('[botAdmin] post-approve scoring failed:', err.message);
+      }
+    }
     res.json({ ok: true, acted });
   } catch (err) {
     console.error('[botAdmin] approve failed:', err);

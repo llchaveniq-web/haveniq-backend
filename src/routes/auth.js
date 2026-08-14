@@ -534,13 +534,10 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
 
     if (userRows[0]) {
       user = userRows[0];
-      // Returning user just re-passed .edu OTP — ensure they're verified
-      // (covers accounts created before .edu auto-verify existed, so they
-      // become matchable without a manual approval).
-      if (!user.is_verified) {
-        await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [user.id]);
-        user.is_verified = true;
-      }
+      // Re-passing .edu OTP on login proves email ownership again, but that's
+      // ALL it proves — it is not a substitute for the review pipeline (see
+      // the INSERT below). Unverified accounts stay unverified across logins;
+      // only the bot/founder review (botAdmin.js, admin.js) flips this.
     } else {
       // Store the user's ACTUAL verified email domain as school_domain
       // (not the picked school's curated domain). The email just passed
@@ -551,13 +548,17 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
       // next time. The school NAME is still whatever they picked.
       const verifiedDomain = emailLower.split('@')[1] || schoolDomain || '';
       const ins = await pool.query(
-        // is_verified = TRUE on creation: passing .edu OTP IS the
-        // verification (the academic-email check at /send-code gates it),
-        // so we don't need a manual human approval before the account can
-        // appear in matches. Low-trust accounts still surface in the
-        // auto-review for attention; they're just not blocked from existing.
+        // is_verified = FALSE on creation: passing .edu OTP proves the user
+        // controls SOME .edu-shaped inbox — it does not screen for a fake
+        // name, a bot, or a catfish. Real verification is the review
+        // pipeline: botAdmin.js's hourly Claude-classifier bot (or the
+        // founder via admin.js) approves/rejects each pending signup and
+        // flips this flag. Until reviewed, the account exists (can log in,
+        // do the quiz, edit its profile) but scoreNewMatches excludes it as
+        // both submitter and candidate — see quiz.js — so it's invisible to
+        // the marketplace and sees no matches of its own.
         `INSERT INTO users (email, school, school_domain, trust_score, is_verified)
-         VALUES ($1, $2, $3, 20, TRUE)
+         VALUES ($1, $2, $3, 20, FALSE)
          RETURNING id, email, school, first_name, last_name,
                    is_verified, trust_score, quiz_completed,
                    identity_verified_at, totp_enabled`,
@@ -776,13 +777,21 @@ router.post('/logout-all', requireAuth, async (req, res) => {
   }
 });
 
-// ═══ Logged-in .edu re-verification ════════════════════════════════════════
-// Lets an already-signed-in student verify their school email and earn the
-// is_verified badge. Acts ONLY on the token-derived user + their account .edu —
-// never an email from the body (else a user could verify an address they don't
-// own). Reuses the signup OTP machinery (otp_codes / generateOTP / hashOtp /
+// ═══ Logged-in .edu re-confirmation ═════════════════════════════════════════
+// Lets an already-signed-in student re-prove they still control their school
+// email. Acts ONLY on the token-derived user + their account .edu — never an
+// email from the body (else a user could confirm an address they don't own).
+// Reuses the signup OTP machinery (otp_codes / generateOTP / hashOtp /
 // sendOTPEmail / MAX_OTP_ATTEMPTS) with purpose='email_verification' so it's
 // ONE code path, not a parallel one.
+//
+// IMPORTANT: this does NOT grant is_verified. It never did anything more than
+// re-prove the exact same thing signup's OTP already proved — passing this
+// used to also flip is_verified=TRUE, which meant anyone could instantly
+// self-grant the "Verified" trust badge for free, bypassing the review
+// pipeline entirely (botAdmin.js's bot / admin.js's founder review — the
+// systems that actually screen a name/photo/bio for being fake). Fixed:
+// is_verified is now earned ONLY by that review, never by this endpoint.
 
 // Resend limiter: ~1 / 30s, keyed by the token user (no body email here).
 // Mirrors the send-code limiter's intent for the authenticated case.
@@ -803,9 +812,8 @@ router.post('/resend-verification', requireAuth, resendVerifyLimit, async (req, 
       return res.status(400).json({ error: 'Your account email is not a .edu address.' });
     }
 
-    const { rows } = await pool.query('SELECT is_verified FROM users WHERE id = $1', [userId]);
+    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (!rows[0]) return res.status(404).json({ error: 'User not found.' });
-    if (rows[0].is_verified) return res.status(200).json({ ok: true, alreadyVerified: true });
 
     // Invalidate any prior, still-unused verification codes for this user so
     // only the newest is live. Scoped to purpose so it never touches a signup code.
@@ -837,7 +845,9 @@ router.post('/resend-verification', requireAuth, resendVerifyLimit, async (req, 
 });
 
 // ── POST /auth/verify-email (auth; body: { code }) ─────────────────────────
-// The ONLY place is_verified may be set to true post-signup.
+// Confirms email control only — see the block comment above. Does NOT touch
+// is_verified. That flag is set exclusively by botAdmin.js's signup-review
+// bot or admin.js's founder approve/reject.
 router.post('/verify-email', requireAuth, verifyEmailLimit, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -882,11 +892,14 @@ router.post('/verify-email', requireAuth, verifyEmailLimit, async (req, res) => 
       return res.status(400).json({ error: 'That code is incorrect or expired. Request a new one.' });
     }
 
-    // Valid → grant the badge, then delete the code (single-use).
-    await pool.query('UPDATE users SET is_verified = TRUE WHERE id = $1', [userId]);
+    // Valid → email control re-confirmed. Delete the code (single-use). We
+    // deliberately do NOT touch is_verified here (see block comment above) —
+    // report the account's REAL review status instead of pretending this
+    // action granted it.
     await pool.query('DELETE FROM otp_codes WHERE id = $1', [rec.id]);
+    const { rows: cur } = await pool.query('SELECT is_verified FROM users WHERE id = $1', [userId]);
 
-    return res.json({ ok: true, isVerified: true });
+    return res.json({ ok: true, emailConfirmed: true, isVerified: cur[0]?.is_verified === true });
   } catch (err) {
     console.error('verify-email error:', err);
     return res.status(500).json({ error: 'Verification failed.' });
