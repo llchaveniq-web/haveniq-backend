@@ -2,7 +2,7 @@ const router  = require('express').Router();
 const multer  = require('multer');
 const pool    = require('../db/pool');
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { checkPhotoSafety } = require('../services/photoSafety');
@@ -342,7 +342,7 @@ const validators = {
     && (v === '' || /^@?[a-zA-Z0-9._]{1,30}$/.test(v)),
 };
 
-router.patch('/me', requireAuth, async (req, res) => {
+router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
   try {
     const updates = [];
     const values  = [];
@@ -712,7 +712,7 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
 //
 // Cost: ~$0.003 per check (one Claude vision call, small image). At 100
 // new signups/month + occasional re-uploads ≈ ~$1/month at scale.
-router.post('/me/photo/quality-check', requireAuth, async (req, res) => {
+router.post('/me/photo/quality-check', requireAuth, refuseBanned, async (req, res) => {
   const { url } = req.body || {};
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'photo url required' });
@@ -773,7 +773,7 @@ router.post('/me/photo/quality-check', requireAuth, async (req, res) => {
 // Multipart upload of profile photo. Stores to Cloudinary, saves URL to
 // users.photo_url. Returns `{ url }` — matches the frontend ProfileAPI
 // contract. Requires CLOUDINARY_* env vars on the server.
-router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
+router.post('/me/photo', requireAuth, refuseBanned, photoUpload, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'photo file is required' });

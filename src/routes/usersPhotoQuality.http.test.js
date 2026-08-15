@@ -45,7 +45,14 @@ inject('../services/cloudinary', {
   ModerationRejectedError,
 });
 inject('../services/auditLog', { audit: async (_req, event, meta) => { audits.push({ event, meta }); } });
-inject('../middleware/auth', { requireAuth: (req, _res, next) => { req.user = { id: 'user-me' }; next(); } });
+let currentUserBanned = false;
+inject('../middleware/auth', {
+  requireAuth: (req, _res, next) => { req.user = { id: 'user-me', is_banned: currentUserBanned }; next(); },
+  // Real conditional, not a pass-through — the point of these tests is
+  // proving the route actually stacks this middleware, not just that the
+  // stub never gets in the way.
+  refuseBanned: (req, res, next) => (req.user?.is_banned ? res.status(403).json({ banned: true }) : next()),
+});
 inject('../middleware/suspiciousActivity', { track: () => (_req, _res, next) => next() });
 inject('../services/email', { sendParentInviteEmail: async () => {}, generateOTP: () => '123456', sendOTPEmail: async () => {} });
 inject('./sentryTunnel', { reportServerError: () => {} });
@@ -67,6 +74,23 @@ test.beforeEach(() => {
   dbCalls = []; deletedFor = []; audits = []; pushCalls = [];
   usersRow = { photo_url: 'https://res.cloudinary.com/x/old.jpg', is_verified: false };
   verdict = { safe: true, safety_reason: null, score: 88, summary: 'Clear face.', issues: [], suggestion: null, good_enough: true };
+  currentUserBanned = false;
+});
+
+// ── Ban enforcement ──
+test('a banned user is refused on /me/photo/quality-check', async () => {
+  currentUserBanned = true;
+  const res = await post({ url: URL_OK });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.banned, true);
+  assert.equal(dbCalls.length, 0, 'refused before touching the DB at all');
+});
+
+test('a banned user is refused on POST /me/photo (the upload route)', async () => {
+  currentUserBanned = true;
+  const res = await request(app).post('/users/me/photo').attach('photo', Buffer.from('img'), 'a.jpg');
+  assert.equal(res.status, 403);
+  assert.equal(res.body.banned, true);
 });
 
 // ── Input validation ──

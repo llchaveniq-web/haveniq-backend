@@ -8,11 +8,18 @@
 // Reuses the existing Cloudinary upload + AI-moderation (services/cloudinary)
 // and the Claude-vision safety verdict (services/photoSafety) — same gates the
 // single POST /users/me/photo uses.
+//
+// Every write route here also stacks refuseBanned. A banned account was
+// previously able to keep uploading/reordering/deleting photos indefinitely
+// — it just wouldn't surface them in anyone's NEW match feed (matches.js
+// filters is_banned at read time). That still left an already-confirmed bad
+// actor free to keep changing what anyone with an existing connection or
+// open conversation sees on their profile.
 
 const router  = require('express').Router();
 const multer  = require('multer');
 const pool    = require('../db/pool');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, refuseBanned } = require('../middleware/auth');
 const { uploadUserGalleryPhoto, deleteByPublicId, ModerationRejectedError } = require('../services/cloudinary');
 const { checkPhotoSafety } = require('../services/photoSafety');
 const { applyPrimaryPhotoChange } = require('../lib/primaryPhoto');
@@ -107,7 +114,7 @@ router.get('/:id/photos', requireAuth, async (req, res) => {
 // Multipart "photo". 409 if already at the cap; else Cloudinary upload → AI
 // safety check → on unsafe delete the asset + 422; else insert at end. If it
 // lands at position 0 (first photo), sync users.photo_url. Returns {id,url,position}.
-router.post('/me/photos', requireAuth, photoUpload, async (req, res) => {
+router.post('/me/photos', requireAuth, refuseBanned, photoUpload, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'photo file is required' });
 
   let publicId = null;
@@ -179,7 +186,7 @@ router.post('/me/photos', requireAuth, photoUpload, async (req, res) => {
 // ── DELETE /users/me/photos/:photoId ────────────────────────────────────────
 // Remove one of your own photos: delete the Cloudinary asset + row, re-pack the
 // remaining positions to stay contiguous, and re-sync users.photo_url.
-router.delete('/me/photos/:photoId', requireAuth, async (req, res) => {
+router.delete('/me/photos/:photoId', requireAuth, refuseBanned, async (req, res) => {
   try {
     const { rows } = await pool.query(
       'SELECT public_id, position FROM user_photos WHERE id = $1 AND user_id = $2',
@@ -211,7 +218,7 @@ router.delete('/me/photos/:photoId', requireAuth, async (req, res) => {
 // ── PATCH /users/me/photos/reorder ──────────────────────────────────────────
 // Body: { order: [photoId, ...] } — must be exactly the user's photo ids. Rewrites
 // positions to that order and re-syncs users.photo_url to the new position-0.
-router.patch('/me/photos/reorder', requireAuth, async (req, res) => {
+router.patch('/me/photos/reorder', requireAuth, refuseBanned, async (req, res) => {
   try {
     const order = req.body && req.body.order;
     if (!Array.isArray(order) || order.length === 0 || !order.every((id) => typeof id === 'string' && id)) {

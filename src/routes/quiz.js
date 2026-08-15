@@ -382,7 +382,7 @@ async function scoreNewMatches(userId, newAnswers) {
   // dealbreakers and passed into calculateCompatibility so flagged
   // categories carry amplified weight in the pair's score.
   const { rows: userRow } = await pool.query(
-    'SELECT school, dealbreakers, validation_score, move_in_timeline, is_verified FROM users WHERE id = $1',
+    'SELECT school, dealbreakers, validation_score, move_in_timeline, is_verified, is_banned FROM users WHERE id = $1',
     [userId]
   );
   if (!userRow[0]) return;
@@ -392,7 +392,16 @@ async function scoreNewMatches(userId, newAnswers) {
   // excludes them from everyone else's scoring too. Once reviewed, the
   // approve handlers (botAdmin.js, admin.js) call this function directly so
   // the account doesn't just sit invisible until its next quiz edit.
+  //
+  // Banned accounts get the same quarantine — this query previously had NO
+  // is_banned filter at all (matches.js's feed-read queries do filter it,
+  // which kept a banned candidate from actually being SHOWN, but this
+  // function would still compute and persist a fresh compatibility_scores
+  // row pairing them with a real, currently-active user every time anyone
+  // else's quiz was submitted or edited — one filter silently doing the
+  // other's job instead of both holding the line).
   if (userRow[0].is_verified !== true) return;
+  if (userRow[0].is_banned === true) return;
   const myDealbreakers = Array.isArray(userRow[0].dealbreakers) ? userRow[0].dealbreakers : [];
   const myValidation   = userRow[0].validation_score != null ? Number(userRow[0].validation_score) : undefined;
 
@@ -409,7 +418,8 @@ async function scoreNewMatches(userId, newAnswers) {
      WHERE qa.completed = TRUE
        AND qa.user_id != $1
        AND u.is_paused = FALSE
-       AND u.is_verified = TRUE`,
+       AND u.is_verified = TRUE
+       AND COALESCE(u.is_banned, FALSE) = FALSE`,
     [userId]
   );
 

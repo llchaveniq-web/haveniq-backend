@@ -19,6 +19,7 @@ let dbCalls = [];
 // The users row applyPrimaryPhotoChange (lib/primaryPhoto.js) reads/writes —
 // separate from `photos` (user_photos) the same way the real schema is.
 let usersRow = { photo_url: null, is_verified: false };
+let currentUserBanned = false;
 const find = (frag) => dbCalls.find((c) => c.sql.includes(frag));
 const sorted = () => [...photos].sort((a, b) => a.position - b.position);
 
@@ -95,7 +96,10 @@ inject('../services/cloudinary', {
 });
 inject('../services/photoSafety', { checkPhotoSafety: async () => safeVerdict });
 inject('../middleware/auth', {
-  requireAuth: (req, _res, next) => { req.user = { id: req.headers['x-test-uid'] || 'user-me' }; next(); },
+  requireAuth: (req, _res, next) => { req.user = { id: req.headers['x-test-uid'] || 'user-me', is_banned: currentUserBanned }; next(); },
+  // Real conditional — proves the write routes actually stack this, not
+  // just that the stub never gets in the way.
+  refuseBanned: (req, res, next) => (req.user?.is_banned ? res.status(403).json({ banned: true }) : next()),
 });
 inject('../services/auditLog', { audit: async () => {} });
 
@@ -116,9 +120,30 @@ test.beforeEach(() => {
   pushCalls = [];
   uploadImpl = async (userId) => ({ url: 'https://res.cloudinary.com/x/gallery/new.jpg', publicId: `haveniq/users/${userId}/gallery/new` });
   safeVerdict = { safe: true };
+  currentUserBanned = false;
 });
 
 const seed = (n) => { photos = Array.from({ length: n }, (_, i) => ({ id: `p${i}`, url: `u${i}`, public_id: `pid${i}`, position: i })); };
+
+// ── Ban enforcement ──
+test('a banned user is refused on all three write routes', async () => {
+  currentUserBanned = true;
+  seed(1);
+
+  const post = await request(app).post('/users/me/photos').attach('photo', Buffer.from('img'), 'a.jpg');
+  assert.equal(post.status, 403);
+  assert.equal(post.body.banned, true);
+
+  const del = await request(app).delete('/users/me/photos/p0');
+  assert.equal(del.status, 403);
+  assert.equal(del.body.banned, true);
+
+  const reorder = await request(app).patch('/users/me/photos/reorder').send({ order: ['p0'] });
+  assert.equal(reorder.status, 403);
+  assert.equal(reorder.body.banned, true);
+
+  assert.equal(uploadCalls, 0, 'refused before ever touching Cloudinary');
+});
 
 // ── GET /users/:id/photos ──
 test('GET: owner sees own photos, ordered by position', async () => {
