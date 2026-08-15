@@ -23,11 +23,19 @@ const VALID_CATEGORIES = [
 let tableReady = false;
 async function ensureTable() {
   if (tableReady) return;
+  // reporter_id / reported_id are nullable with ON DELETE SET NULL — NOT the
+  // ON DELETE CASCADE this table originally shipped with. A safety report is
+  // evidence about a pattern of behavior, not the reporter's or reported
+  // person's data to erase by deleting their account (GDPR Art. 17 itself
+  // carves out an exception for records needed for "establishment, exercise
+  // or defence of legal claims", which a filed safety report is). This
+  // mirrors the already-correct precedent set by user_reports and
+  // audit_log.user_id elsewhere in this schema — this table was the outlier.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS roommate_safety_reports (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      reporter_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      reported_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reporter_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      reported_id UUID REFERENCES users(id) ON DELETE SET NULL,
       category    TEXT NOT NULL,
       detail      TEXT,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -43,6 +51,60 @@ async function ensureTable() {
   await pool.query(`
     ALTER TABLE roommate_safety_reports ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open'
   `).catch((e) => console.error('[roommate-safety-reports] add status column:', e.message));
+
+  // Denormalized snapshot of who a report was filed by/against, taken at
+  // filing time. Once reporter_id/reported_id go SET NULL on account
+  // deletion, a bare live JOIN against users has nothing left to show a
+  // founder reviewing an old report — these columns are what keeps a report
+  // legible ("this was about Jane Doe, jane@school.edu") after the person
+  // behind it is gone.
+  await pool.query(`
+    ALTER TABLE roommate_safety_reports ADD COLUMN IF NOT EXISTS reporter_name  TEXT;
+    ALTER TABLE roommate_safety_reports ADD COLUMN IF NOT EXISTS reporter_email TEXT;
+    ALTER TABLE roommate_safety_reports ADD COLUMN IF NOT EXISTS reported_name  TEXT;
+    ALTER TABLE roommate_safety_reports ADD COLUMN IF NOT EXISTS reported_email TEXT;
+  `).catch((e) => console.error('[roommate-safety-reports] add snapshot columns:', e.message));
+
+  // One-time backfill for rows filed before this column existed, while the
+  // referenced users are still around to read from. Rows whose users are
+  // already gone by now predate this fix and stay un-backfilled — nothing
+  // to source the snapshot from — but every report about a still-live user
+  // gets one going forward.
+  await pool.query(`
+    UPDATE roommate_safety_reports r SET reporter_name = u.first_name, reporter_email = u.email
+      FROM users u WHERE u.id = r.reporter_id AND r.reporter_name IS NULL;
+    UPDATE roommate_safety_reports r SET reported_name = u.first_name, reported_email = u.email
+      FROM users u WHERE u.id = r.reported_id AND r.reported_name IS NULL;
+  `).catch((e) => console.error('[roommate-safety-reports] backfill snapshot columns:', e.message));
+
+  // Existing deployments created this table before the CASCADE -> SET NULL
+  // change above — CREATE TABLE IF NOT EXISTS is a no-op there, so the old
+  // constraints (and NOT NULL) need an explicit migration. Guarded on the
+  // constraint's current delete-rule so this is a no-op once applied.
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'roommate_safety_reports_reporter_id_fkey' AND confdeltype != 'n'
+      ) THEN
+        ALTER TABLE roommate_safety_reports ALTER COLUMN reporter_id DROP NOT NULL;
+        ALTER TABLE roommate_safety_reports DROP CONSTRAINT roommate_safety_reports_reporter_id_fkey;
+        ALTER TABLE roommate_safety_reports ADD CONSTRAINT roommate_safety_reports_reporter_id_fkey
+          FOREIGN KEY (reporter_id) REFERENCES users(id) ON DELETE SET NULL;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'roommate_safety_reports_reported_id_fkey' AND confdeltype != 'n'
+      ) THEN
+        ALTER TABLE roommate_safety_reports ALTER COLUMN reported_id DROP NOT NULL;
+        ALTER TABLE roommate_safety_reports DROP CONSTRAINT roommate_safety_reports_reported_id_fkey;
+        ALTER TABLE roommate_safety_reports ADD CONSTRAINT roommate_safety_reports_reported_id_fkey
+          FOREIGN KEY (reported_id) REFERENCES users(id) ON DELETE SET NULL;
+      END IF;
+    END $$;
+  `).catch((e) => console.error('[roommate-safety-reports] migrate FK delete-rule:', e.message));
+
   tableReady = true;
 }
 
@@ -136,11 +198,25 @@ router.post('/', requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "Can't report yourself" });
     }
 
+    // Snapshot both names/emails at filing time — see ensureTable's comment.
+    // req.user already has the reporter's; the reported person needs a
+    // lookup. A missing row here just means the INSERT below fails on the
+    // FK constraint, same as before this change.
+    const { rows: reportedUser } = await pool.query(
+      'SELECT first_name, email FROM users WHERE id = $1',
+      [reportedId],
+    );
+
     const { rows } = await pool.query(
-      `INSERT INTO roommate_safety_reports (reporter_id, reported_id, category, detail)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO roommate_safety_reports
+         (reporter_id, reported_id, category, detail, reporter_name, reporter_email, reported_name, reported_email)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [reporterId, reportedId, category, (detail || '').slice(0, 2000)],
+      [
+        reporterId, reportedId, category, (detail || '').slice(0, 2000),
+        req.user.first_name || null, req.user.email || null,
+        reportedUser[0]?.first_name || null, reportedUser[0]?.email || null,
+      ],
     );
 
     res.json({ ok: true, id: rows[0].id });
@@ -199,23 +275,36 @@ const VALID_STATUSES = new Set(['open', 'reviewed']);
 router.get('/admin', requireAuth, requireFounder, async (req, res) => {
   try {
     await ensureTable();
+    // LEFT JOIN, not JOIN — reporter_id/reported_id go NULL when that
+    // account is deleted (ON DELETE SET NULL), and the report must still
+    // show up. COALESCE onto the filing-time snapshot (reporter_name/
+    // reported_name/reported_email) so a report about a since-deleted
+    // account stays legible instead of just vanishing from this list.
     const { rows: allReports } = await pool.query(
       `SELECT
          r.id, r.category, r.detail, r.created_at, r.status,
-         reporter.id AS reporter_id, reporter.first_name AS reporter_first_name,
-         reported.id AS reported_id, reported.first_name AS reported_first_name
+         r.reporter_id, COALESCE(reporter.first_name, r.reporter_name) AS reporter_first_name,
+         COALESCE(reporter.email, r.reporter_email) AS reporter_email,
+         r.reported_id, COALESCE(reported.first_name, r.reported_name) AS reported_first_name,
+         COALESCE(reported.email, r.reported_email) AS reported_email
        FROM roommate_safety_reports r
-       JOIN users reporter ON reporter.id = r.reporter_id
-       JOIN users reported ON reported.id = r.reported_id
+       LEFT JOIN users reporter ON reporter.id = r.reporter_id
+       LEFT JOIN users reported ON reported.id = r.reported_id
        ORDER BY r.created_at DESC`,
     );
 
+    // Group into patterns keyed by whoever was reported. reported_id alone
+    // isn't safe once deletions can null it out — every deleted person's
+    // reports would collapse into one `null` bucket together. Falling back
+    // to the snapshotted email keeps DIFFERENT deleted people's reports
+    // from merging into a single false "pattern".
     const byReported = new Map();
     for (const r of allReports) {
-      const bucket = byReported.get(r.reported_id)
+      const key = r.reported_id || (r.reported_email ? `email:${r.reported_email}` : `report:${r.id}`);
+      const bucket = byReported.get(key)
         ?? { reportedId: r.reported_id, name: r.reported_first_name, reporterIds: new Set() };
-      bucket.reporterIds.add(r.reporter_id);
-      byReported.set(r.reported_id, bucket);
+      bucket.reporterIds.add(r.reporter_id || (r.reporter_email ? `email:${r.reporter_email}` : `report:${r.id}`));
+      byReported.set(key, bucket);
     }
     const patterns = [...byReported.values()]
       .filter(b => b.reporterIds.size > 1)
