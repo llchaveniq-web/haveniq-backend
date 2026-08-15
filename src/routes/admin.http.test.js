@@ -44,7 +44,7 @@ const fakePool = {
           id: 'u-1', first_name: 'Sam', last_name: 'Lee', email,
           school: 'Test U', is_verified: true, is_banned: false, ban_reason: null,
           quiz_completed: true, created_at: '2026-01-01T00:00:00.000Z',
-          last_active_at: '2026-06-01T00:00:00.000Z',
+          last_active_at: '2026-06-01T00:00:00.000Z', totp_enabled: email === 'locked@school.edu',
         }] };
       }
       return { rows: [] }; // no such user
@@ -53,6 +53,10 @@ const fakePool = {
       const locked = params[0] === 'locked@school.edu'
         ? new Date('2026-06-29T12:00:00.000Z') : null;
       return { rows: [{ locked_until: locked }] };
+    }
+    if (sql.includes('SELECT id, email, totp_enabled FROM users WHERE id')) {
+      if (params[0] === 'missing') return { rows: [] };
+      return { rows: [{ id: params[0], email: 'found@school.edu', totp_enabled: params[0] === 'u-2fa-on' }] };
     }
     if (sql.includes('SELECT email FROM users WHERE id') || sql.includes('SELECT id, email FROM users WHERE id')) {
       if (params[0] === 'missing') return { rows: [] };
@@ -167,6 +171,7 @@ test('non-founder gets 403 on each account-support route', async () => {
     () => asStranger(request(app).get('/admin/users/lookup?email=found@school.edu')),
     () => asStranger(request(app).post('/admin/users/u-1/resend-otp')),
     () => asStranger(request(app).post('/admin/users/u-1/unlock')),
+    () => asStranger(request(app).post('/admin/users/u-2fa-on/reset-2fa')),
     () => asStranger(request(app).get('/admin/metrics')),
     () => asStranger(request(app).get('/admin/users/u-1/subscription')),
     () => asStranger(request(app).get('/admin/api-keys')),
@@ -197,6 +202,12 @@ test('lookup: locked user surfaces locked_until as an ISO string', async () => {
   const res = await asFounder(request(app).get('/admin/users/lookup?email=locked@school.edu'));
   assert.equal(res.status, 200);
   assert.equal(res.body.user.locked_until, '2026-06-29T12:00:00.000Z');
+});
+
+test('lookup: surfaces totp_enabled so a founder can see WHY someone is locked out', async () => {
+  const res = await asFounder(request(app).get('/admin/users/lookup?email=locked@school.edu'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.user.totp_enabled, true);
 });
 
 test('lookup: unknown email → { user: null }', async () => {
@@ -241,6 +252,31 @@ test('unlock: clears the lockout and returns locked_until null', async () => {
 
 test('unlock: unknown user → 404', async () => {
   const res = await asFounder(request(app).post('/admin/users/missing/unlock'));
+  assert.equal(res.status, 404);
+});
+
+// ── reset-2fa ────────────────────────────────────────────────────────────────
+// The one lockout resend-otp/unlock can't fix: lost phone + all 10 recovery
+// codes used, previously a permanent dead end with no admin recourse at all.
+test('reset-2fa: a user WITH 2FA enabled gets disabled, and it\'s audit-logged', async () => {
+  const res = await asFounder(request(app).post('/admin/users/u-2fa-on/reset-2fa'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body, { disabled: true });
+  const update = dbCalls.find(c => /UPDATE users/.test(c.sql) && /totp_enabled = FALSE/.test(c.sql));
+  assert.ok(update, 'the three totp columns were cleared');
+  assert.match(update.sql, /totp_secret = NULL/);
+  assert.match(update.sql, /totp_recovery_codes = '\{\}'/);
+  assert.deepEqual(update.params, ['u-2fa-on']);
+});
+
+test('reset-2fa: a user WITHOUT 2FA enabled → 400, never silently "succeeds"', async () => {
+  const res = await asFounder(request(app).post('/admin/users/u-1/reset-2fa'));
+  assert.equal(res.status, 400);
+  assert.ok(!dbCalls.some(c => /UPDATE users/.test(c.sql) && /totp_enabled = FALSE/.test(c.sql)));
+});
+
+test('reset-2fa: unknown user → 404', async () => {
+  const res = await asFounder(request(app).post('/admin/users/missing/reset-2fa'));
   assert.equal(res.status, 404);
 });
 
