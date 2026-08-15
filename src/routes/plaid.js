@@ -20,6 +20,8 @@
 // access_token is a server-side secret — never exposed to the client.
 
 const router = require('express').Router();
+const crypto = require('crypto');
+const jwt    = require('jsonwebtoken');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { audit } = require('../services/auditLog');
@@ -297,13 +299,81 @@ router.post('/disconnect', requireAuth, async (req, res) => {
   }
 });
 
+// ── Plaid webhook signature verification ──────────────────────────────────
+// Plaid signs every webhook with an ES256 JWT in the Plaid-Verification
+// header. Verifying it: (1) decode the JWT header (unverified) to read
+// `kid`, (2) fetch — and cache — the matching public key from Plaid,
+// (3) verify the JWT signature with that key, (4) reject a stale JWT
+// (>5 min old — replay guard), (5) reject unless the JWT's
+// request_body_sha256 matches the SHA256 of the ACTUAL raw body on this
+// request — proves this exact payload was signed, not just some valid
+// Plaid JWT replayed against a different one.
+//
+// Keys are cached indefinitely per kid — Plaid's own guidance, since a kid
+// is immutable once issued; they just rotate to a new kid occasionally.
+const verificationKeyCache = new Map(); // kid -> JWK
+const WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
+
+async function verifyPlaidWebhook(req) {
+  const token = req.headers['plaid-verification'];
+  if (!token || typeof token !== 'string' || !req.rawBody) return false;
+
+  const client = getClient();
+  if (!client) return false;
+
+  const decodedHeader = jwt.decode(token, { complete: true });
+  const kid = decodedHeader?.header?.kid;
+  if (!kid) return false;
+
+  try {
+    let jwk = verificationKeyCache.get(kid);
+    if (!jwk) {
+      const r = await client.webhookVerificationKeyGet({ key_id: kid });
+      jwk = r.data.key;
+      if (jwk) verificationKeyCache.set(kid, jwk);
+    }
+    if (!jwk) return false;
+
+    const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+    const payload = jwt.verify(token, publicKey, { algorithms: ['ES256'] });
+
+    if (!payload.iat || Date.now() - payload.iat * 1000 > WEBHOOK_MAX_AGE_MS) {
+      console.error('[plaid/webhook] rejected: JWT too old (possible replay)');
+      return false;
+    }
+
+    const expectedHash = crypto.createHash('sha256').update(req.rawBody).digest('hex');
+    if (payload.request_body_sha256 !== expectedHash) {
+      console.error('[plaid/webhook] rejected: body hash mismatch');
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error('[plaid/webhook] signature verification failed:', err?.response?.data || err.message);
+    return false;
+  }
+}
+
 // ── POST /plaid/webhook ───────────────────────────────────────────────────
 // Plaid posts events here for item-level changes (ITEM_REMOVED, ERROR,
-// PENDING_EXPIRATION, etc.). Public endpoint — Plaid signs requests but
-// we keep validation light for sandbox; production should verify
-// `Plaid-Verification` JWT.
+// PENDING_EXPIRATION, etc.). Public endpoint — no requireAuth, but every
+// request is signature-verified above. Production NEVER trusts an unsigned
+// body — mirrors how identity.js's Stripe Identity webhook 503s when its
+// signing secret is unconfigured, rather than silently accepting anything.
+// Sandbox/dev is lenient (warns, proceeds) so local testing works without
+// real Plaid webhook infrastructure.
 router.post('/webhook', async (req, res) => {
   try {
+    const verified = await verifyPlaidWebhook(req);
+    if (!verified) {
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[plaid/webhook] refused: signature verification failed');
+        return res.status(401).json({ error: 'Invalid webhook signature' });
+      }
+      console.warn('[plaid/webhook] proceeding WITHOUT a verified signature (non-production only)');
+    }
+
     const { webhook_type, webhook_code, item_id } = req.body || {};
     console.log(`[plaid/webhook] ${webhook_type}/${webhook_code} for item ${item_id}`);
     if (webhook_type === 'ITEM' && webhook_code === 'ERROR') {
