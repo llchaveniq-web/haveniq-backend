@@ -42,9 +42,11 @@ inject('../db/pool', {
     return { rows: [], rowCount: 0 };
   },
 });
+let currentUserBanned = false;
 inject('../middleware/auth', {
-  requireAuth: (req, _res, next) => { req.user = { id: 'u1', email: 'a@ohio.edu', school: 'Ohio University' }; next(); },
-  refuseBanned: (_q, _s, n) => n(),
+  requireAuth: (req, _res, next) => { req.user = { id: 'u1', email: 'a@ohio.edu', school: 'Ohio University', is_banned: currentUserBanned }; next(); },
+  // Real conditional — proves PATCH /me actually stacks this middleware.
+  refuseBanned: (req, res, next) => (req.user?.is_banned ? res.status(403).json({ banned: true }) : next()),
 });
 
 let pushCalls = [];
@@ -62,9 +64,18 @@ test.beforeEach(() => {
   usersRow = { photo_url: null, is_verified: false };
   updateCalls = [];
   pushCalls = [];
+  currentUserBanned = false;
 });
 
 const CLOUDINARY_URL = 'https://res.cloudinary.com/haveniq/image/upload/v1/users/u1/photo.jpg';
+
+test('a banned user is refused on PATCH /me entirely', async () => {
+  currentUserBanned = true;
+  const res = await patch({ bio: 'trying to sneak an edit in' });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.banned, true);
+  assert.equal(updateCalls.length, 0, 'refused before touching the DB at all');
+});
 
 test('a non-Cloudinary photoUrl is rejected (the moderation bypass this closes)', async () => {
   const res = await patch({ photoUrl: 'https://evil.example.com/whatever.jpg' });
