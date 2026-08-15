@@ -588,7 +588,14 @@ router.get('/me/export', requireAuth, async (req, res) => {
 // remove their quiz_answers, push_tokens, connect_requests, conversations,
 // compatibility_scores, profile_views, etc. Cloudinary asset is removed
 // separately (best-effort) so we don't keep orphan photos in storage.
-router.delete('/me', requireAuth, async (req, res) => {
+//
+// refuseBanned is deliberate here (unlike login/support routes, which stay
+// open to banned users so they can sign in and appeal): without it, a
+// banned account could delete itself and re-signup with the same email —
+// a fresh INSERT defaults is_banned to false — fully undoing the ban in
+// seconds. Deletion is destructive, not an appeal path, so it gets no
+// exception.
+router.delete('/me', requireAuth, refuseBanned, async (req, res) => {
   try {
     // Audit BEFORE deletion so we still have user_id on the row. The FK
     // on audit_log.user_id is ON DELETE SET NULL so the row survives;
