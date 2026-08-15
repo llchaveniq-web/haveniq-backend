@@ -6,6 +6,7 @@ const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { notDemo } = require('../lib/demoFilter');
 const { generateApiSecret, hashApiKey } = require('../lib/apiKeys');
+const { audit } = require('../services/auditLog');
 
 // ── Founder review queue ─────────────────────────────────────────────────
 //
@@ -475,7 +476,8 @@ router.get('/users/lookup', requireAuth, requireFounder, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, first_name, last_name, email, school, is_verified,
               COALESCE(is_banned, FALSE) AS is_banned, ban_reason,
-              quiz_completed, created_at, last_active_at
+              quiz_completed, created_at, last_active_at,
+              COALESCE(totp_enabled, FALSE) AS totp_enabled
          FROM users WHERE LOWER(email) = $1 LIMIT 1`,
       [email],
     );
@@ -536,6 +538,43 @@ router.post('/users/:id/unlock', requireAuth, requireFounder, async (req, res) =
   } catch (err) {
     console.error('[admin/users/:id/unlock] failed:', err);
     res.status(500).json({ error: 'unlock failed' });
+  }
+});
+
+// POST /admin/users/:id/reset-2fa — the one lockout OTP unlock/resend can't
+// fix: a user who lost their phone AND used all 10 recovery codes. Until
+// now that was, by twoFactor.js's own comment, "a support request, by
+// design" — but no admin tool actually existed to act on it. This clears
+// the exact same three columns the self-service /auth/2fa/disable route
+// clears (totp_enabled, totp_secret, totp_recovery_codes) — the user must
+// run /2fa/setup again for a brand new secret + codes if they want 2FA
+// back on. Requires the founder to have already verified the user's
+// identity out-of-band (email/support thread) before calling this — this
+// route can't verify that itself, which is exactly why it's founder-only
+// and audit-logged rather than self-service.
+router.post('/users/:id/reset-2fa', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT id, email, totp_enabled FROM users WHERE id = $1',
+      [req.params.id],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'user not found' });
+    if (!rows[0].totp_enabled) {
+      return res.status(400).json({ error: '2FA is not currently enabled for this user.' });
+    }
+    await pool.query(
+      `UPDATE users
+          SET totp_enabled = FALSE,
+              totp_secret = NULL,
+              totp_recovery_codes = '{}'
+        WHERE id = $1`,
+      [req.params.id],
+    );
+    audit(req, 'admin.user.reset2fa', { userId: req.params.id }).catch(() => {});
+    res.json({ disabled: true });
+  } catch (err) {
+    console.error('[admin/users/:id/reset-2fa] failed:', err);
+    res.status(500).json({ error: 'reset failed' });
   }
 });
 
