@@ -519,7 +519,7 @@ router.get('/me/export', requireAuth, async (req, res) => {
     const [
       profile, quiz, snapshots, consent, telemetry,
       requests, messages, views, scores, reviews, pulses, pushTokens,
-      checklists,
+      checklists, vouches, safetyReportsFiled,
     ] = await Promise.all([
       pool.query('SELECT * FROM users                   WHERE id            = $1', [userId]),
       pool.query('SELECT * FROM quiz_answers            WHERE user_id       = $1', [userId]),
@@ -535,6 +535,18 @@ router.get('/me/export', requireAuth, async (req, res) => {
       pool.query('SELECT id, user_id, platform, created_at FROM push_tokens WHERE user_id = $1', [userId]),
       pool.query(`SELECT * FROM match_checklists
                   WHERE request_id IN (SELECT id FROM connect_requests WHERE from_user = $1 OR to_user = $1)`, [userId]),
+      // roommate_vouches is created lazily by roommateVouches.js's own
+      // ensureTable() (not part of the boot migration) — .catch keeps a
+      // fresh DB that's never taken a vouch write from 500ing the export.
+      pool.query('SELECT * FROM roommate_vouches WHERE from_user_id = $1 OR about_user_id = $1 ORDER BY created_at DESC', [userId])
+        .catch(() => ({ rows: [] })),
+      // Reports this user FILED, not reports about them — a report under
+      // active safety review shouldn't tip off its subject via their own
+      // "download my data" export. See roommateSafety.js's ensureTable
+      // comment for why reporter_id/reported_id are nullable (deletion
+      // survival), unrelated to this scoping choice.
+      pool.query('SELECT id, reported_id, category, detail, status, created_at FROM roommate_safety_reports WHERE reporter_id = $1 ORDER BY created_at DESC', [userId])
+        .catch(() => ({ rows: [] })),
     ]);
 
     // Strip security-sensitive secrets from the user's own row before export.
@@ -571,6 +583,8 @@ router.get('/me/export', requireAuth, async (req, res) => {
       match_pulses:          pulses.rows,
       push_tokens:           pushTokens.rows,  // token strings redacted by SELECT
       shared_checklists:     checklists.rows,
+      roommate_vouches:      vouches.rows,
+      safety_reports_filed:  safetyReportsFiled.rows,  // reports filed BY this user only, not ones about them
     };
 
     res.setHeader('Content-Type', 'application/json');
@@ -1347,6 +1361,33 @@ router.post('/me/push-token', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('push-token error:', err);
     res.status(500).json({ error: 'Failed to save push token' });
+  }
+});
+
+// ── DELETE /users/me/push-token ─────────────────────────────────────────
+// Unregister a push token. Neither /auth/logout nor /auth/logout-all used
+// to touch push_tokens at all — only account deletion did, via CASCADE.
+// On a shared/resold/lent device where the app isn't reinstalled, that left
+// the PREVIOUS account's push token live indefinitely: whoever logs in next
+// on that physical device keeps receiving the old owner's message previews,
+// connect-request names, and vouch alerts. The client calls this with its
+// stored token as part of sign-out, before dropping its local session.
+// Scoped to the caller's own row (token + user_id) so this can't be used to
+// strip someone else's registration. No token in the body clears every
+// token this user has ever registered (used by logout-all's server-side path).
+router.delete('/me/push-token', requireAuth, async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (token !== undefined && (typeof token !== 'string' || !token)) {
+      return res.status(400).json({ error: 'token must be a non-empty string' });
+    }
+    const { rowCount } = token
+      ? await pool.query('DELETE FROM push_tokens WHERE token = $1 AND user_id = $2', [token, req.user.id])
+      : await pool.query('DELETE FROM push_tokens WHERE user_id = $1', [req.user.id]);
+    res.json({ success: true, removed: rowCount });
+  } catch (err) {
+    console.error('push-token unregister error:', err);
+    res.status(500).json({ error: 'Failed to remove push token' });
   }
 });
 

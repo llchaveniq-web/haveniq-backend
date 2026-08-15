@@ -19,6 +19,9 @@ let reverseAlreadyReported = false;
 let insertedOutcome = null;
 inject('../db/pool', {
   query: async (sql, params) => {
+    // Every test here is about an already-matched pair — the interaction
+    // gate (areConnected) is exercised separately in matchOutcomes.interactionGate.http.test.js.
+    if (/FROM connect_requests/.test(sql)) return { rows: [{ '?column?': 1 }] };
     if (/INSERT INTO match_outcomes/.test(sql)) { insertedOutcome = params; return { rows: [] }; }
     if (/SELECT 1 FROM match_outcomes/.test(sql)) return { rows: reverseAlreadyReported ? [{ '?column?': 1 }] : [] };
     return { rows: [] };
