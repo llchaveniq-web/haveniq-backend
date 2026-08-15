@@ -17,12 +17,27 @@ let verdict = { safe: true, safety_reason: null, score: 88, summary: 'Clear face
 let dbCalls = [];
 let deletedFor = [];
 let audits = [];
+// applyPrimaryPhotoChange (lib/primaryPhoto.js) reads this before writing.
+let usersRow = { photo_url: 'https://res.cloudinary.com/x/old.jpg', is_verified: false };
 
 class ModerationRejectedError extends Error {
   constructor(reason) { super(reason); this.name = 'ModerationRejectedError'; this.userError = true; }
 }
 
-inject('../db/pool', { query: async (sql, params = []) => { dbCalls.push({ sql, params }); return { rows: [] }; } });
+inject('../db/pool', {
+  query: async (sql, params = []) => {
+    dbCalls.push({ sql, params });
+    if (/SELECT photo_url, is_verified FROM users WHERE id = \$1/.test(sql)) {
+      return { rows: [{ ...usersRow }] };
+    }
+    if (/UPDATE users SET photo_url = \$1/.test(sql)) {
+      usersRow = sql.includes('is_verified = FALSE')
+        ? { photo_url: params[0], is_verified: false }
+        : { ...usersRow, photo_url: params[0] };
+    }
+    return { rows: [] };
+  },
+});
 inject('../services/photoSafety', { checkPhotoSafety: async () => verdict });
 inject('../services/cloudinary', {
   uploadProfilePhoto: async () => ({ url: 'https://res.cloudinary.com/x/u.jpg' }),
@@ -42,12 +57,15 @@ const usersRouter = require('./users');
 const app = express();
 app.use(express.json());
 app.use('/users', usersRouter);
+let pushCalls = [];
+app.set('sendPushToUser', (userId, payload) => { pushCalls.push({ userId, payload }); return Promise.resolve(); });
 
 const URL_OK = 'https://res.cloudinary.com/haveniq/image/upload/v1/haveniq/users/user-me.jpg';
 const post = (body) => request(app).post('/users/me/photo/quality-check').send(body);
 
 test.beforeEach(() => {
-  dbCalls = []; deletedFor = []; audits = [];
+  dbCalls = []; deletedFor = []; audits = []; pushCalls = [];
+  usersRow = { photo_url: 'https://res.cloudinary.com/x/old.jpg', is_verified: false };
   verdict = { safe: true, safety_reason: null, score: 88, summary: 'Clear face.', issues: [], suggestion: null, good_enough: true };
 });
 
@@ -84,10 +102,20 @@ test('unsafe verdict: deletes the asset, nulls photo_url, audits, returns the re
   assert.equal(res.body.safe, false);
   assert.equal(res.body.safety_reason, 'Not appropriate for a school platform.');
   assert.deepEqual(deletedFor, ['user-me'], 'unsafe photo must be deleted from Cloudinary');
-  const nulled = dbCalls.find((c) => c.sql.includes('photo_url = NULL'));
+  const nulled = dbCalls.find((c) => /UPDATE users SET photo_url = \$1/.test(c.sql));
   assert.ok(nulled, 'photo_url must be nulled');
-  assert.deepEqual(nulled.params, ['user-me']);
+  assert.equal(nulled.params[0], null);
+  assert.equal(usersRow.photo_url, null);
   assert.equal(audits[0].event, 'photo.rejected.unsafe');
+});
+
+test('unsafe verdict while previously verified → nulling the photo also re-queues review', async () => {
+  usersRow = { photo_url: 'https://res.cloudinary.com/x/old.jpg', is_verified: true };
+  verdict = { safe: false, safety_reason: 'nope', score: 0, summary: '', issues: [], suggestion: null, good_enough: false };
+  const res = await post({ url: URL_OK });
+  assert.equal(res.status, 200);
+  assert.equal(usersRow.is_verified, false, 'a verified account with its only photo just nulled must re-enter review');
+  assert.equal(pushCalls.length, 1);
 });
 
 test('unsafe verdict: still returns the verdict even if cleanup throws (best-effort)', async () => {
