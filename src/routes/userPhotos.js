@@ -15,6 +15,7 @@ const pool    = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { uploadUserGalleryPhoto, deleteByPublicId, ModerationRejectedError } = require('../services/cloudinary');
 const { checkPhotoSafety } = require('../services/photoSafety');
+const { applyPrimaryPhotoChange } = require('../lib/primaryPhoto');
 const { audit } = require('../services/auditLog');
 
 const MAX_PHOTOS = 6;
@@ -58,16 +59,29 @@ async function areConnected(a, b) {
 
 // Keep the legacy users.photo_url pointed at the current position-0 gallery
 // photo (or NULL when the gallery is empty), so nothing that reads photo_url
-// ever sees a stale/deleted image.
+// ever sees a stale/deleted image. Returns { reverified } — true when this
+// change dropped a previously-verified account back to pending review (see
+// lib/primaryPhoto.js) so callers can tell the user why.
 async function syncPrimaryPhoto(userId) {
   const { rows } = await pool.query(
     'SELECT url FROM user_photos WHERE user_id = $1 ORDER BY position ASC LIMIT 1',
     [userId],
   );
-  await pool.query(
-    'UPDATE users SET photo_url = $1, updated_at = NOW() WHERE id = $2',
-    [rows[0]?.url ?? null, userId],
-  );
+  const { reverified } = await applyPrimaryPhotoChange(pool, userId, rows[0]?.url ?? null);
+  return { reverified };
+}
+
+// Best-effort push explaining the re-review — never blocks the response it's
+// called from. Reuses the same fire-and-forget convention as every other
+// push in the app (see roommateVouches.js, matchOutcomes.js).
+function notifyReverification(req, userId) {
+  const sendPush = req.app.get('sendPushToUser');
+  if (!sendPush) return;
+  sendPush(userId, {
+    title: 'Your profile is being re-reviewed',
+    body: 'Your photo changed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+    data: { screen: 'verify-edu' },
+  }).catch(() => {});
 }
 
 // ── GET /users/:id/photos ───────────────────────────────────────────────────
@@ -138,10 +152,14 @@ router.post('/me/photos', requireAuth, photoUpload, async (req, res) => {
       return res.status(409).json({ error: `You can have at most ${MAX_PHOTOS} photos.` });
     }
 
-    if (ins[0].position === 0) await syncPrimaryPhoto(req.user.id);
+    let reverified = false;
+    if (ins[0].position === 0) {
+      ({ reverified } = await syncPrimaryPhoto(req.user.id));
+      if (reverified) notifyReverification(req, req.user.id);
+    }
 
     audit(req, 'photo.gallery.upload').catch(() => {});
-    res.json(ins[0]);
+    res.json({ ...ins[0], reverified });
   } catch (err) {
     // Cloudinary AI moderation rejection — user error, surface the reason.
     if (err instanceof ModerationRejectedError) {
@@ -176,13 +194,14 @@ router.delete('/me/photos/:photoId', requireAuth, async (req, res) => {
       'UPDATE user_photos SET position = position - 1 WHERE user_id = $1 AND position > $2',
       [req.user.id, position],
     );
-    await syncPrimaryPhoto(req.user.id);
+    const { reverified } = await syncPrimaryPhoto(req.user.id);
+    if (reverified) notifyReverification(req, req.user.id);
 
     // Best-effort blob removal after the DB is consistent.
     await deleteByPublicId(publicId);
 
     audit(req, 'photo.gallery.delete').catch(() => {});
-    res.json({ success: true });
+    res.json({ success: true, reverified });
   } catch (err) {
     console.error('[user-photos] delete failed:', err.message);
     res.status(500).json({ error: 'Failed to delete photo' });
@@ -215,14 +234,15 @@ router.patch('/me/photos/reorder', requireAuth, async (req, res) => {
         [i, order[i], req.user.id],
       );
     }
-    await syncPrimaryPhoto(req.user.id);
+    const { reverified } = await syncPrimaryPhoto(req.user.id);
+    if (reverified) notifyReverification(req, req.user.id);
 
     const { rows: out } = await pool.query(
       'SELECT id, url, position FROM user_photos WHERE user_id = $1 ORDER BY position ASC',
       [req.user.id],
     );
     audit(req, 'photo.gallery.reorder').catch(() => {});
-    res.json(out);
+    res.json({ photos: out, reverified });
   } catch (err) {
     console.error('[user-photos] reorder failed:', err.message);
     res.status(500).json({ error: 'Failed to reorder photos' });

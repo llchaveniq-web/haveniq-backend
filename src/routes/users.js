@@ -6,6 +6,7 @@ const { requireAuth } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { checkPhotoSafety } = require('../services/photoSafety');
+const { applyPrimaryPhotoChange } = require('../lib/primaryPhoto');
 const { audit } = require('../services/auditLog');
 const { isFounder } = require('../utils/founders');
 const { notDemo } = require('../lib/demoFilter');
@@ -292,7 +293,15 @@ const validators = {
   age:             v => Number.isInteger(v) && v >= 18 && v <= 99,
   gender:          v => typeof v === 'string' && GENDERS.has(v),
   looking_for:     v => Array.isArray(v) && v.length <= 10 && v.every(x => typeof x === 'string' && LOOKING_FOR.has(x)),
-  photo_url:       v => typeof v === 'string' && v.length <= 500 && /^https?:\/\//.test(v),
+  // Cloudinary-hosted only — NOT a generic https check. This is a photo of
+  // the user shown to strangers; the dedicated upload routes (POST
+  // /users/me/photo, /users/me/photos) are the only places a photo actually
+  // passes Cloudinary's + checkPhotoSafety's moderation, and the account
+  // gets dropped back to pending review when this actually changes (see the
+  // handler below). A generic https:// check here would let a client hand
+  // this route ANY external image URL — completely unmoderated, and with no
+  // record it was ever a "changed photo" at all.
+  photo_url:       v => typeof v === 'string' && v.length <= 500 && /^https:\/\/res\.cloudinary\.com\//.test(v),
   budget_min:      v => Number.isInteger(v) && v >= 0 && v <= 100000,
   budget_max:      v => Number.isInteger(v) && v >= 0 && v <= 100000,
   move_in_timeline:v => typeof v === 'string' && TIMELINES.has(v),
@@ -407,6 +416,30 @@ router.patch('/me', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
 
+    // Same rule as lib/primaryPhoto.js's applyPrimaryPhotoChange (used by the
+    // dedicated upload routes): if the primary photo is actually changing
+    // and the account is currently verified, that verification no longer
+    // applies to what's now on display — drop back to pending review. This
+    // route doesn't go through applyPrimaryPhotoChange directly (it's one
+    // field in a larger batched UPDATE), but the policy must stay identical
+    // or a client could bundle a photo swap into a generic profile save and
+    // keep the badge. The photo_url validator above already requires a
+    // Cloudinary-hosted URL — i.e. one that actually went through
+    // Cloudinary's + checkPhotoSafety's moderation at upload time, not an
+    // arbitrary external image.
+    let reverified = false;
+    if (changed.includes('photoUrl')) {
+      const { rows: curRows } = await pool.query(
+        'SELECT photo_url, is_verified FROM users WHERE id = $1',
+        [req.user.id],
+      );
+      const cur = curRows[0];
+      if (cur && cur.photo_url !== req.body.photoUrl && cur.is_verified === true) {
+        updates.push('is_verified = FALSE');
+        reverified = true;
+      }
+    }
+
     // Content moderation on the public bio. A bio is user-generated content
     // shown on the student's profile card + match detail to everyone they
     // match with, so it gets the SAME screen as a message: block egregious
@@ -459,7 +492,16 @@ router.patch('/me', requireAuth, async (req, res) => {
       require('../services/textInsight').extractForUser(req.user.id).catch(() => {});
     }
 
-    res.json({ success: true, user: safeUser });
+    if (reverified) {
+      const sendPush = req.app.get('sendPushToUser');
+      sendPush?.(req.user.id, {
+        title: 'Your profile is being re-reviewed',
+        body: 'Your photo changed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+        data: { screen: 'verify-edu' },
+      }).catch(() => {});
+    }
+
+    res.json({ success: true, user: safeUser, reverified });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update profile' });
@@ -704,10 +746,15 @@ router.post('/me/photo/quality-check', requireAuth, async (req, res) => {
       try { await deleteProfilePhoto(req.user.id); }
       catch (e) { console.error('[photo-quality] delete after unsafe verdict failed:', e.message); }
       try {
-        await pool.query(
-          'UPDATE users SET photo_url = NULL, updated_at = NOW() WHERE id = $1',
-          [req.user.id],
-        );
+        const { reverified } = await applyPrimaryPhotoChange(pool, req.user.id, null);
+        if (reverified) {
+          const sendPush = req.app.get('sendPushToUser');
+          sendPush?.(req.user.id, {
+            title: 'Your profile is being re-reviewed',
+            body: 'Your photo was removed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+            data: { screen: 'verify-edu' },
+          }).catch(() => {});
+        }
       } catch (e) { console.error('[photo-quality] DB null after unsafe verdict failed:', e.message); }
       audit(req, 'photo.rejected.unsafe', { reason: out.safety_reason }).catch(() => {});
     }
@@ -734,13 +781,18 @@ router.post('/me/photo', requireAuth, photoUpload, async (req, res) => {
 
     const url = await uploadProfilePhoto(req.user.id, req.file.buffer);
 
-    await pool.query(
-      'UPDATE users SET photo_url = $1, updated_at = NOW() WHERE id = $2',
-      [url, req.user.id]
-    );
+    const { reverified } = await applyPrimaryPhotoChange(pool, req.user.id, url);
+    if (reverified) {
+      const sendPush = req.app.get('sendPushToUser');
+      sendPush?.(req.user.id, {
+        title: 'Your profile is being re-reviewed',
+        body: 'Your photo changed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+        data: { screen: 'verify-edu' },
+      }).catch(() => {});
+    }
 
     audit(req, 'photo.upload').catch(() => {});
-    res.json({ url });
+    res.json({ url, reverified });
   } catch (err) {
     console.error('photo upload error:', err);
     // Moderation rejection — user error, not a server bug. Surface the

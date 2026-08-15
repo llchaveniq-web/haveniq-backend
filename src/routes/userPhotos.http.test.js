@@ -16,6 +16,9 @@ let photos = [];            // the current user's gallery rows
 let connected = false;      // areConnected() result
 let idSeq = 0;
 let dbCalls = [];
+// The users row applyPrimaryPhotoChange (lib/primaryPhoto.js) reads/writes —
+// separate from `photos` (user_photos) the same way the real schema is.
+let usersRow = { photo_url: null, is_verified: false };
 const find = (frag) => dbCalls.find((c) => c.sql.includes(frag));
 const sorted = () => [...photos].sort((a, b) => a.position - b.position);
 
@@ -43,7 +46,15 @@ const fakePool = {
       const top = sorted()[0];
       return { rows: top ? [{ url: top.url }] : [] };
     }
-    if (sql.startsWith('UPDATE users SET photo_url')) return { rows: [] };
+    // applyPrimaryPhotoChange's read-before-write.
+    if (sql.includes('SELECT photo_url, is_verified FROM users WHERE id')) {
+      return { rows: [{ ...usersRow }] };
+    }
+    if (sql.startsWith('UPDATE users SET photo_url')) {
+      usersRow.photo_url = params[0];
+      if (sql.includes('is_verified = FALSE')) usersRow.is_verified = false;
+      return { rows: [] };
+    }
     if (sql.includes('SELECT public_id, position FROM user_photos')) {
       const p = photos.find((x) => x.id === params[0]);
       return { rows: p ? [{ public_id: p.public_id, position: p.position }] : [] };
@@ -95,10 +106,14 @@ const photosRouter = require('./userPhotos');
 const app = express();
 app.use(express.json());
 app.use('/users', photosRouter);
+let pushCalls = [];
+app.set('sendPushToUser', (userId, payload) => { pushCalls.push({ userId, payload }); return Promise.resolve(); });
 
 test.beforeEach(() => {
   photos = []; connected = false; idSeq = 0; dbCalls = [];
   uploadCalls = 0; deleted = [];
+  usersRow = { photo_url: null, is_verified: false };
+  pushCalls = [];
   uploadImpl = async (userId) => ({ url: 'https://res.cloudinary.com/x/gallery/new.jpg', publicId: `haveniq/users/${userId}/gallery/new` });
   safeVerdict = { safe: true };
 });
@@ -202,8 +217,80 @@ test('PATCH reorder: rewrites positions and syncs photo_url to the new first', a
   seed(3);                                   // p0,p1,p2
   const res = await request(app).patch('/users/me/photos/reorder').send({ order: ['p2', 'p0', 'p1'] });
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body.map((p) => p.id), ['p2', 'p0', 'p1']);
-  assert.deepEqual(res.body.map((p) => p.position), [0, 1, 2]);
+  assert.deepEqual(res.body.photos.map((p) => p.id), ['p2', 'p0', 'p1']);
+  assert.deepEqual(res.body.photos.map((p) => p.position), [0, 1, 2]);
   const sync = find('UPDATE users SET photo_url');
   assert.equal(sync.params[0], 'u2', 'photo_url = new position-0 url');
+});
+
+// ── Re-verification: any REAL primary-photo change drops a verified account
+//    back to pending review (lib/primaryPhoto.js). ──
+test('POST first photo while previously verified → is_verified resets + reverified:true', async () => {
+  usersRow = { photo_url: null, is_verified: true };
+  const res = await request(app).post('/users/me/photos').attach('photo', Buffer.from('img'), 'a.jpg');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.reverified, true);
+  assert.equal(usersRow.is_verified, false);
+  assert.equal(pushCalls.length, 1, 'user is notified why');
+  assert.match(pushCalls[0].payload.body, /re-checking your account/);
+});
+
+test('POST first photo while NOT verified → no reset, no push, reverified:false', async () => {
+  usersRow = { photo_url: null, is_verified: false };
+  const res = await request(app).post('/users/me/photos').attach('photo', Buffer.from('img'), 'a.jpg');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.reverified, false);
+  assert.equal(pushCalls.length, 0);
+});
+
+test('POST a 2nd (non-primary) photo never re-verifies, even if verified', async () => {
+  seed(1);
+  usersRow = { photo_url: 'u0', is_verified: true };
+  const res = await request(app).post('/users/me/photos').attach('photo', Buffer.from('img'), 'a.jpg');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.position, 1);
+  assert.equal(res.body.reverified, false, 'no primary-photo change happened at all');
+  assert.equal(usersRow.is_verified, true, 'still verified — nothing about the primary photo changed');
+  assert.equal(pushCalls.length, 0);
+});
+
+test('DELETE removing the primary photo while verified → resets is_verified', async () => {
+  seed(3);
+  usersRow = { photo_url: 'u0', is_verified: true };
+  const res = await request(app).delete('/users/me/photos/p0');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.reverified, true);
+  assert.equal(usersRow.is_verified, false);
+  assert.equal(pushCalls.length, 1);
+});
+
+test('DELETE removing a NON-primary photo while verified → does NOT reset', async () => {
+  seed(3);
+  usersRow = { photo_url: 'u0', is_verified: true };
+  const res = await request(app).delete('/users/me/photos/p2');   // last, not primary
+  assert.equal(res.status, 200);
+  assert.equal(res.body.reverified, false, 'position-0 url (u0) never changed');
+  assert.equal(usersRow.is_verified, true);
+  assert.equal(pushCalls.length, 0);
+});
+
+test('PATCH reorder promoting a different photo to primary while verified → resets is_verified', async () => {
+  seed(3);
+  usersRow = { photo_url: 'u0', is_verified: true };
+  const res = await request(app).patch('/users/me/photos/reorder').send({ order: ['p2', 'p0', 'p1'] });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.reverified, true);
+  assert.equal(usersRow.is_verified, false);
+  assert.equal(pushCalls.length, 1);
+});
+
+test('PATCH reorder that leaves the SAME photo at position 0 → does NOT re-verify (no real change)', async () => {
+  seed(3);
+  usersRow = { photo_url: 'u0', is_verified: true };
+  // p0 stays first; only p1/p2 swap.
+  const res = await request(app).patch('/users/me/photos/reorder').send({ order: ['p0', 'p2', 'p1'] });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.reverified, false, 'position-0 url is unchanged');
+  assert.equal(usersRow.is_verified, true);
+  assert.equal(pushCalls.length, 0);
 });
