@@ -26,6 +26,29 @@ const STRESS_STRETCH_VALUES = new Set(['smooth', 'bumpy', 'clashed']);
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { screenMessage } = require('../lib/contentFilter');
+
+// Two users are "connected" when an accepted connect_request exists in EITHER
+// direction — same relationship userPhotos.js's areConnected() treats as a
+// real match. This route had NO check at all that the reporter and
+// otherUserId had ever interacted: any authenticated user could self-report
+// 'moved_in_together' about an arbitrary user id, which was enough on its
+// own to pass roommateVouches.js's everMovedInTogether gate — letting two
+// colluding (or throwaway) accounts fabricate a mutually-confirmed public
+// "lived together" track record with zero real relationship behind it, and
+// silently pollute the weight-learning training set this whole table exists
+// to build (see the file header). Requiring a real accepted connection
+// doesn't fully stop determined collusion, but it raises the cost from
+// "free" to "requires actually going through the match flow."
+async function areConnected(a, b) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM connect_requests
+      WHERE status = 'accepted'
+        AND ((from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1))
+      LIMIT 1`,
+    [a, b],
+  );
+  return rows.length > 0;
+}
 const sentry = require('../utils/sentry');
 const DISCORD_HOOK = process.env.DISCORD_WEBHOOK_URL || '';
 
@@ -268,8 +291,12 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
   // (NaN → 400), so this endpoint never worked. Validate as a non-empty string.
   if (!otherUserId || typeof otherUserId !== 'string') return res.status(400).json({ error: 'otherUserId required' });
   if (!ALLOWED_OUTCOMES.has(outcome)) return res.status(400).json({ error: 'invalid outcome' });
+  if (otherUserId === req.user.id) return res.status(400).json({ error: "Can't log an outcome about yourself" });
 
   try {
+    if (!(await areConnected(req.user.id, otherUserId))) {
+      return res.status(403).json({ error: "You haven't matched with this person" });
+    }
     const sanitized = sanitizeDetails(details);
     // Promote the prediction ↔ outcome pair into columns as it arrives (still
     // kept in details too, for back-compat with the calibration reader).

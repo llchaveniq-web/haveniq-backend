@@ -162,9 +162,13 @@ router.get('/conversations', requireAuth, async (req, res) => {
         photoUrl:   r.photo_url,       // ← the profile photo (Cloudinary URL)
         isVerified: r.is_verified,
         trustScore: r.trust_score,
-        // Real Stripe-Identity state — powers the thread's anti-scam
-        // share-contact gate (both parties must be ID-verified to exchange
-        // contact info). Non-null = ID-verified.
+        // Stripe Identity (paid govt-ID + selfie check) state. Non-null =
+        // ID-verified. Display/badge only (app/government-id-verify.tsx says
+        // so honestly: "gates nothing"). The thread's actual anti-scam
+        // share-contact gate is isVerified above (.edu review status) — see
+        // app/thread/[id].tsx's canShareContact. This field previously had a
+        // comment claiming IT powered that gate; it never did, and does not
+        // gate anything server-side anywhere in this codebase today.
         identityVerifiedAt: r.identity_verified_at,
         lastActiveAt: r.last_active_at,
         // FALSE means this partner never finished the setup screen — which is

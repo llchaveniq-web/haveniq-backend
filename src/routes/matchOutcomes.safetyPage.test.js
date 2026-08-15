@@ -11,7 +11,13 @@ function inject(relPath, exportsObj) {
   require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: exportsObj };
 }
 
-inject('../db/pool', { query: async () => ({ rows: [] }) });
+// These outcomes are always about an already-matched pair — a real
+// accepted connect_request stays 'accepted' forever (blocking only
+// cancels still-PENDING requests, matches.js), so this stub reflects a
+// pair that matched at some point, whatever's since happened between them.
+inject('../db/pool', {
+  query: async (sql) => (/FROM connect_requests/.test(sql) ? { rows: [{ '?column?': 1 }] } : { rows: [] }),
+});
 inject('../middleware/auth', { requireAuth: (req, _res, next) => { req.user = { id: 'user-9' }; next(); } });
 inject('../utils/sentry', { captureError: () => {} });   // no real Sentry init in tests
 process.env.DISCORD_WEBHOOK_URL = 'https://discord.test/hook';

@@ -33,7 +33,7 @@ function logSignIn(pool, userId, method, req) {
 // OTP hash + attempt cap are shared with the founder support endpoints
 // (routes/admin.js resend/unlock) via lib/otp so they can never drift.
 const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
-const { signToken, requireAuth } = require('../middleware/auth');
+const { signToken, requireAuth, sessionRevoked } = require('../middleware/auth');
 const { setSessionCookie, clearSessionCookie, readTokenCookie } = require('../lib/sessionCookie');
 const { signChallengeToken } = require('./twoFactor');
 const analytics = require('../services/analytics');
@@ -737,8 +737,21 @@ router.post('/refresh', refreshLimitIp, async (req, res) => {
       return res.status(401).json({ error: 'Token too old to refresh. Sign in again.' });
     }
 
-    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [decoded.userId]);
+    const { rows } = await pool.query('SELECT id, tokens_valid_after FROM users WHERE id = $1', [decoded.userId]);
     if (!rows[0]) return res.status(401).json({ error: 'User not found' });
+
+    // Without this check, /refresh completely defeated /auth/logout-all: that
+    // route exists specifically to kill a stolen token before its 7-day expiry
+    // by stamping tokens_valid_after, but this endpoint is the one path that's
+    // allowed to consume an ALREADY-expired-or-expiring token — an attacker
+    // holding the stolen token could refresh it right after the victim's
+    // logout-all call and walk away with a brand-new, fully valid session,
+    // since a fresh token's iat is always after any past revocation cutoff.
+    // requireAuth checks this on every normal request; /refresh needs the
+    // same check applied to the OLD token being exchanged, before minting.
+    if (sessionRevoked(decoded.iat, rows[0].tokens_valid_after)) {
+      return res.status(401).json({ error: 'Session ended. Please sign in again.' });
+    }
 
     logSignIn(pool, decoded.userId, 'refresh', req);
     const fresh = signToken(decoded.userId);
@@ -769,6 +782,12 @@ router.post('/logout', (req, res) => {
 router.post('/logout-all', requireAuth, async (req, res) => {
   try {
     await pool.query('UPDATE users SET tokens_valid_after = NOW() WHERE id = $1', [req.user.id]);
+    // "Everywhere" includes push — every device this account was ever
+    // signed into should stop getting notifications too, not just stop
+    // accepting API calls. The single-device path (DELETE /me/push-token)
+    // handles ordinary sign-out; this covers "someone else might still
+    // have my session" the same way tokens_valid_after does for API auth.
+    await pool.query('DELETE FROM push_tokens WHERE user_id = $1', [req.user.id]).catch(() => {});
     clearSessionCookie(res);
     res.json({ success: true });
   } catch (err) {

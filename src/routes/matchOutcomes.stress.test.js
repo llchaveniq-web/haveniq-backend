@@ -18,6 +18,7 @@ let patternRow = [];          // rows returned for the compatibility_scores look
 let lookupSql = null;
 inject('../db/pool', {
   query: async (sql, params) => {
+    if (/FROM connect_requests/.test(sql)) return { rows: [{ '?column?': 1 }] };
     if (/INSERT INTO match_outcomes/.test(sql)) { inserts.push(params); return { rows: [] }; }
     if (/FROM compatibility_scores/.test(sql)) { lookupSql = sql; return { rows: patternRow }; }
     return { rows: [] };
