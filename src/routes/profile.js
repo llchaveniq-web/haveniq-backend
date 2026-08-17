@@ -27,12 +27,21 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { NO_DASH_RULE, stripDashesDeep } = require('../lib/textStyle');
+const { flatten } = require('../services/scoring');
+const QUIZ_QUESTIONS = require('../data/quizQuestions');
+const questionsById = Object.fromEntries(QUIZ_QUESTIONS.map((q) => [q.id, q]));
 
 // ── Schema bootstrap (idempotent — runs on first call) ─────────────────
 async function ensureTable() {
+  // users.id is UUID (see db/schema.sql). These were declared BIGINT, so the
+  // FK never type-checked and CREATE TABLE has failed on every single call
+  // since this file was written — caught by the .catch() below and logged,
+  // never surfaced, so the whole compatibility-profile feature (synthesis,
+  // GET/PATCH/DELETE /me/profile, and /explain's second data source) has
+  // been silently dead: every query against a table that doesn't exist.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS compatibility_profiles (
-      user_id           BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      user_id           UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       profile           JSONB NOT NULL,
       data_signature    TEXT NOT NULL,
       synthesized_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -47,7 +56,7 @@ async function ensureTable() {
   // No OAuth complexity, same signal value. Future: replace with real OAuth.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS profile_external_signals (
-      user_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       source       TEXT NOT NULL,
       content      TEXT NOT NULL,
       added_at     TIMESTAMPTZ DEFAULT NOW(),
@@ -64,10 +73,12 @@ async function gatherUserData(userId) {
        FROM users WHERE id = $1`,
       [userId]
     ),
+    // quiz_answers has ONE row per user with a JSONB `answers` column
+    // ({ "14": 1, "48": 2, ... } question_id -> chosen option index) — NOT
+    // a row per answer. This used to select question_id/answer_value
+    // columns that don't exist, so `quiz` below was always [].
     pool.query(
-      `SELECT question_id, answer_value, created_at
-       FROM quiz_answers WHERE user_id = $1
-       ORDER BY question_id`,
+      `SELECT answers FROM quiz_answers WHERE user_id = $1`,
       [userId]
     ).catch(() => ({ rows: [] })),
     pool.query(
@@ -107,6 +118,20 @@ async function gatherUserData(userId) {
         questions_rate: (messages.filter((m) => (m.body || '').includes('?')).length / messages.length).toFixed(2),
       };
 
+  // Flatten the JSONB answers map and attach question text + the chosen
+  // option so Claude gets something meaningful instead of bare ids — same
+  // reader routes/users.js's About You reveal uses.
+  const answersFlat = flatten(quiz.rows[0]?.answers);
+  const quizAnswers = Object.entries(answersFlat)
+    .map(([qid, idx]) => {
+      const q = questionsById[Number(qid)];
+      const chosen = q?.options?.[idx];
+      if (!q || chosen === undefined) return null;
+      return { question_id: Number(qid), category: q.category, question: q.text, answer: chosen };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.question_id - b.question_id);
+
   return {
     user: {
       first_name: user.first_name,
@@ -116,7 +141,7 @@ async function gatherUserData(userId) {
       bio: user.bio,
       days_on_platform: Math.floor((Date.now() - new Date(user.created_at).getTime()) / 86400000),
     },
-    quiz: quiz.rows,
+    quiz: quizAnswers,
     message_style: styleSummary,
     external_signals: signals.rows,  // [{source: 'spotify', content: '...'}, ...]
     behavior_summary: behavior.rows,

@@ -13,7 +13,9 @@ const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = requir
 // Pre-match photo gallery (owner decision 2026-07-22: faces visible while choosing).
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { loadDrift } = require('../services/pulseDrift');
-const { calculateCompatibility, topFrictionTopic, matchingV11Enabled } = require('../services/scoring');
+const { calculateCompatibility, topFrictionTopic, matchingV11Enabled, flatten } = require('../services/scoring');
+const QUIZ_QUESTIONS = require('../data/quizQuestions');
+const questionsById = Object.fromEntries(QUIZ_QUESTIONS.map((q) => [q.id, q]));
 const { computeFrictions } = require('../services/friction');
 const { loadCertifiedModels } = require('../services/dimensionModel');
 const { buildSuites } = require('../services/suiteOptimizer');
@@ -56,6 +58,49 @@ async function mayViewMatchDetail(viewerId, viewerSchool, targetId) {
     [viewerId, targetId],
   );
   return cr.length > 0;
+}
+
+// Real quiz-answer overlap between two users, for the AI narrative routes
+// below (openers, explain). quiz_answers has ONE row per user with a JSONB
+// `answers` column ({ "14": 1, "48": 2, ... } question_id -> chosen option
+// index, sometimes wrapped as { type: 'option', index: N } — see scoring.js's
+// flatten()). This route used to query a (user_id, question_id, answer_value)
+// row-per-answer shape that has never existed in this schema, so it always
+// silently returned nothing (wrapped in a bare .catch) — while the prompts
+// below confidently asserted specific "you both said X" claims about real
+// students anyway. hasQuizData tells the prompt when it genuinely has
+// nothing to work with, so it stops inventing instead of staying quiet.
+async function loadQuizOverlap(viewerId, targetId) {
+  const { rows } = await pool.query(
+    `SELECT user_id, answers FROM quiz_answers WHERE user_id IN ($1, $2)`,
+    [viewerId, targetId],
+  ).catch(() => ({ rows: [] }));
+
+  const myFlat    = flatten(rows.find((r) => r.user_id === viewerId)?.answers);
+  const theirFlat = flatten(rows.find((r) => r.user_id === targetId)?.answers);
+
+  const agreements = [];
+  const divergences = [];
+  for (const [qid, myIdx] of Object.entries(myFlat)) {
+    if (!(qid in theirFlat)) continue;
+    const q = questionsById[Number(qid)];
+    if (!q) continue; // retired/unmapped question id — skip rather than guess at its topic
+    const theirIdx = theirFlat[qid];
+    const myOpt = q.options?.[myIdx];
+    const theirOpt = q.options?.[theirIdx];
+    if (myOpt === undefined || theirOpt === undefined) continue;
+    if (myIdx === theirIdx) {
+      agreements.push({ question_id: Number(qid), category: q.category, text: q.text, both: myOpt });
+    } else {
+      divergences.push({ question_id: Number(qid), category: q.category, text: q.text, you: myOpt, them: theirOpt });
+    }
+  }
+
+  return {
+    hasQuizData: Object.keys(myFlat).length > 0 && Object.keys(theirFlat).length > 0,
+    agreements,
+    divergences,
+  };
 }
 
 // Best-effort parent notification on a student's FIRST accepted match.
@@ -1166,21 +1211,7 @@ router.get('/:userId/openers', requireAuth, aiLimiter, async (req, res) => {
     }
 
     // Pull quiz answers for both, find overlap on the same questions
-    const quizRows = await pool.query(
-      `SELECT user_id, question_id, answer_value
-       FROM quiz_answers
-       WHERE user_id IN ($1, $2)`,
-      [viewerId, targetId]
-    ).catch(() => ({ rows: [] }));
-    const myAnswers   = new Map(quizRows.rows.filter((r) => r.user_id === viewerId).map((r) => [r.question_id, r.answer_value]));
-    const theirAnswers = new Map(quizRows.rows.filter((r) => r.user_id === targetId).map((r) => [r.question_id, r.answer_value]));
-    const shared = [];
-    for (const [qid, val] of myAnswers) {
-      if (theirAnswers.has(qid) && theirAnswers.get(qid) === val) {
-        shared.push({ question_id: qid, both_answered: val });
-        if (shared.length >= 6) break;
-      }
-    }
+    const { agreements: shared } = await loadQuizOverlap(viewerId, targetId);
 
     const prompt = `You are a coach helping a college student write a great opener for a roommate-matching app. The student is matched with someone they don't know yet. Generate 3 short, real, NOT cringe opener messages they can tap and send.
 
@@ -1322,22 +1353,7 @@ router.get('/:userId/explain', requireAuth, aiLimiter, async (req, res) => {
     }
 
     // Quiz overlap analysis — which questions agree, which diverge?
-    const { rows: quizRows } = await pool.query(
-      `SELECT user_id, question_id, answer_value
-       FROM quiz_answers
-       WHERE user_id IN ($1, $2)`,
-      [viewerId, targetId]
-    ).catch(() => ({ rows: [] }));
-    const myAns    = new Map(quizRows.filter((r) => r.user_id === viewerId).map((r) => [r.question_id, r.answer_value]));
-    const theirAns = new Map(quizRows.filter((r) => r.user_id === targetId).map((r) => [r.question_id, r.answer_value]));
-    const agreements = [];
-    const divergences = [];
-    for (const [qid, val] of myAns) {
-      if (!theirAns.has(qid)) continue;
-      const theirs = theirAns.get(qid);
-      if (theirs === val) agreements.push({ question_id: qid, both: val });
-      else divergences.push({ question_id: qid, you: val, them: theirs });
-    }
+    const { hasQuizData, agreements, divergences } = await loadQuizOverlap(viewerId, targetId);
 
     // Synthesized Compatibility Profiles (if either user has one)
     let myProfile = null, theirProfile = null;
@@ -1382,17 +1398,18 @@ TARGET ("them"):
   }) : '(not synthesized yet)'}
 
 QUIZ OVERLAP:
-  Both agreed on ${agreements.length} question(s).
+${hasQuizData ? `  Both agreed on ${agreements.length} question(s).
   Diverged on ${divergences.length} question(s).
-  Sample agreements: ${agreements.slice(0, 4).map(a => `Q${a.question_id}="${a.both}"`).join(', ') || 'none'}
-  Sample divergences: ${divergences.slice(0, 3).map(d => `Q${d.question_id}: you="${d.you}" / them="${d.them}"`).join(', ') || 'none'}
+  Sample agreements: ${agreements.slice(0, 4).map(a => `[${a.category}] "${a.text}" — both chose "${a.both}"`).join(' | ') || 'none'}
+  Sample divergences: ${divergences.slice(0, 3).map(d => `[${d.category}] "${d.text}" — you said "${d.you}", they said "${d.them}"`).join(' | ') || 'none'}` : `  Not available — one or both users haven't completed enough of the quiz yet. Do NOT invent, imply, or guess at any quiz-based agreement or tension. "agreements" and "tension_points" must be empty arrays; base "story" only on the compatibility score and the profile fields above.`}
 
 VOICE RULES:
 - Sound like a college friend pointing something out, not a marketing email.
 - Use first names. Use specific details. NO emojis. NO exclamation points.
 - Honesty over flattery — if there's a real difference, name it.
 - "Talk about it" framing for divergences, not "this is a red flag" framing.
-- NEVER mention question numbers or "Q14"/Q-ids — the user has no idea what those refer to. Paraphrase the topic instead.
+- NEVER mention question numbers or Q-ids — the user has no idea what those refer to. Use the topic/category instead.
+- Every claim in "agreements" and "tension_points" must trace back to something listed in QUIZ OVERLAP above or a profile field above. Never state a specific shared opinion or difference that wasn't actually given to you.
 - 50-90 words total in 'story'. Brevity matters.
 - ${NO_DASH_RULE}
 
@@ -1441,8 +1458,12 @@ No markdown fence. No explanation outside JSON.`;
     // Defensive shape
     payload.headline       = typeof payload.headline === 'string' ? stripDashes(payload.headline.slice(0, 200)) : '';
     payload.story          = typeof payload.story === 'string' ? stripDashes(payload.story.slice(0, 1000)) : '';
-    payload.agreements     = Array.isArray(payload.agreements) ? stripDashesDeep(payload.agreements.slice(0, 3)) : [];
-    payload.tension_points = Array.isArray(payload.tension_points) ? stripDashesDeep(payload.tension_points.slice(0, 2)) : [];
+    // Hard backstop, not just a prompt instruction: with no real quiz data to
+    // draw from, any "agreements"/"tension_points" the model still returned
+    // would necessarily be invented, so they're dropped regardless of what
+    // it produced.
+    payload.agreements     = hasQuizData && Array.isArray(payload.agreements) ? stripDashesDeep(payload.agreements.slice(0, 3)) : [];
+    payload.tension_points = hasQuizData && Array.isArray(payload.tension_points) ? stripDashesDeep(payload.tension_points.slice(0, 2)) : [];
     payload.vibe           = typeof payload.vibe === 'string' ? stripDashes(payload.vibe.slice(0, 60)) : '';
 
     if (!payload.headline || !payload.story) {
