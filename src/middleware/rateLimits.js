@@ -114,6 +114,23 @@ const aiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+/**
+ * User search — a GET, so the blanket writeLimiter below (which only counts
+ * mutating methods) never applies to it, but it's still a scriptable
+ * enumeration surface: 8 fuzzy-matched results per query, no per-query cost
+ * beyond the generic global 200/15min. 60/hour per user is well above
+ * normal "looking for one specific person" use (a handful of queries) while
+ * bounding a script that walks the alphabet to harvest a school's directory.
+ */
+const search = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  message: { error: 'Too many searches. Try again in a bit.' },
+  keyGenerator: userOrIpKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // ── Blanket per-IP cap on state-changing requests ───────────────────────────
 // The global limiter (server.js) counts ALL requests at 200 / 15 min, which is
 // sized for read traffic: feed refreshes, presence polls, thread opens. Writes
@@ -145,4 +162,4 @@ const writeLimiter = rateLimit({
   },
 });
 
-module.exports = { writeLimiter, writeReview, submitRule, submitNomination, quickAction, safetyReport, safetyBlock, aiLimiter };
+module.exports = { writeLimiter, writeReview, submitRule, submitNomination, quickAction, safetyReport, safetyBlock, aiLimiter, search };
