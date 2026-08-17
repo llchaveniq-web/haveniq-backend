@@ -20,6 +20,10 @@
 //      didn't, so a banned account kept accumulating fresh
 //      compatibility_scores rows against real, currently-active users
 //      every time anyone else edited their quiz).
+//   5. The unverified quarantine used to be a bare early `return` — no log,
+//      no event, no signal anywhere that this ever happens. It now fires an
+//      analytics event, so "how many people are stuck pending review" is
+//      answerable from data instead of a support ticket guess.
 //
 // Pool stubbed; real scoring/dimension/drift/text-insight services run for
 // real (they're pure computation once given empty DB inputs). node --test.
@@ -35,6 +39,7 @@ let queries = [];
 let usersById = new Map();
 let candidateRows = [];
 let insertedScoreParams = null;
+let trackedEvents = [];
 
 inject('../db/pool', {
   query: async (sql, params = []) => {
@@ -55,6 +60,10 @@ inject('../db/pool', {
     return { rows: [] };
   },
 });
+inject('../services/analytics', {
+  track: (event, userId, props) => { trackedEvents.push({ event, userId, props }); },
+  EVENTS: { scoring_skipped_unverified: 'scoring_skipped_unverified' },
+});
 
 const { scoreNewMatches } = require('./quiz');
 
@@ -66,6 +75,7 @@ test.beforeEach(() => {
   usersById = new Map();
   candidateRows = [];
   insertedScoreParams = null;
+  trackedEvents = [];
 });
 
 test('unverified submitter: scoreNewMatches writes NOTHING (quarantined until reviewed)', async () => {
@@ -77,6 +87,25 @@ test('unverified submitter: scoreNewMatches writes NOTHING (quarantined until re
   assert.equal(queries.length, 1, 'only the initial submitter lookup ran — no candidate query, no insert');
   assert.match(queries[0].sql, /SELECT school, dealbreakers, validation_score, move_in_timeline, is_verified/);
   assert.equal(insertedScoreParams, null);
+});
+
+test('unverified submitter: the quarantine is now OBSERVABLE — it fires an event instead of vanishing silently', async () => {
+  usersById.set('u-pending', { school: 'UCLA', dealbreakers: [], validation_score: null, move_in_timeline: null, is_verified: false });
+
+  await scoreNewMatches('u-pending', SUBMITTER_ANSWERS);
+
+  assert.equal(trackedEvents.length, 1);
+  assert.equal(trackedEvents[0].event, 'scoring_skipped_unverified');
+  assert.equal(trackedEvents[0].userId, 'u-pending');
+});
+
+test('a verified submitter never fires the skipped-unverified event', async () => {
+  usersById.set('u-verified', { school: 'UCLA', dealbreakers: [], validation_score: null, move_in_timeline: null, is_verified: true });
+  candidateRows = [];
+
+  await scoreNewMatches('u-verified', SUBMITTER_ANSWERS);
+
+  assert.equal(trackedEvents.length, 0);
 });
 
 test('verified submitter: candidate query excludes is_verified = FALSE users', async () => {

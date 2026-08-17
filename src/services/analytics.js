@@ -110,6 +110,7 @@ const EVENTS = {
   match_created:              'match_created',            // { user_a_id, user_b_id, score, tier }
   connect_request_received:   'connect_request_received', // fires on recipient
   connect_request_expired:    'connect_request_expired',  // never answered, auto-aged
+  scoring_skipped_unverified: 'scoring_skipped_unverified', // quiz submitted but is_verified=false blocked scoring entirely — was previously invisible
 
   // ── Messaging ────────────────────────────────────────────────────
   message_received:           'message_received',         // fires on recipient
