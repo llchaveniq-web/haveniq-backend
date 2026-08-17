@@ -169,35 +169,36 @@ module.exports = [
   },
   {
     "id": 65,
-    "category": "lifestyle",
-    "text": "The apartment thermostat lives at…",
+    "category": "stress",
+    "text": "When you're stressed or overwhelmed at home, you tend to…",
     "options": [
-      "Cool. I run warm and like it crisp",
-      "On the cooler side",
-      "On the warmer side",
-      "Warm. I'm always cold"
+      "I go quiet and need space",
+      "I get short or irritable",
+      "I want to talk it out right away",
+      "I shut down and keep it in",
+      "I clean or organize to cope"
     ]
   },
   {
     "id": 66,
-    "category": "nervous system",
-    "text": "A roommate comes in at 1 AM with the light on and some noise. You…",
+    "category": "stress",
+    "text": "After a rough day, what do you need at home?",
     "options": [
-      "Sleep right through it",
-      "Stir but fall back asleep",
-      "Wake up and it takes a while",
-      "I'm up for the night. I need dark and quiet"
+      "Total quiet, on my own",
+      "Someone to vent to",
+      "Low-key company, no pressure",
+      "Space first, then talk"
     ]
   },
   {
     "id": 67,
-    "category": "lifestyle / executive function",
-    "text": "Rent and the utility split are due. Honestly, you're usually…",
+    "category": "stress",
+    "text": "In a disagreement with a roommate, you're more likely to…",
     "options": [
-      "Paid early, every time",
-      "On time without being reminded",
-      "On time if someone reminds me",
-      "Often a few days late. Money's tight or I forget"
+      "Push to resolve it now, even if it's tense",
+      "Need to step away and cool off first",
+      "Go along to keep the peace",
+      "Get quiet and let it simmer"
     ]
   }
 ];

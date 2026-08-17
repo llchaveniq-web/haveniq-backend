@@ -26,6 +26,7 @@ const { loadFeatures: loadTextInsightFeatures } = require('../services/textInsig
 // from the mutual, verified roommate_vouches system (gated on real match
 // history), not src/routes/vouches.js's public unverified testimonials.
 const { computeTrackRecord, bothMovedInTogether } = require('./roommateVouches');
+const { buildStressHeadline, fallbackHeadline } = require('../services/stressInsight');
 const { logDecision, getUserCategoryWeights, personalRankScore } = require('../services/decisionLearning');
 const { safetyReport, safetyBlock, aiLimiter } = require('../middleware/rateLimits');
 const { audit } = require('../services/auditLog');
@@ -101,6 +102,34 @@ async function loadQuizOverlap(viewerId, targetId) {
     agreements,
     divergences,
   };
+}
+
+// Upgrades compatibility_scores.under_pressure.headline from the
+// deterministic per-pattern fallback to buildStressHeadline()'s
+// pair-specific sentence, the first time it's checked for a pair. No-op
+// (cheap: one indexed SELECT) once already upgraded or when the pair has
+// no stress data at all. See the call site in GET /:userId/explain for why
+// this lives there and not on the primary match-detail route.
+async function maybeUpgradeStressHeadline(viewerId, targetId) {
+  const { rows } = await pool.query(
+    `SELECT under_pressure FROM compatibility_scores
+      WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+      LIMIT 1`,
+    [viewerId, targetId],
+  );
+  const underPressure = rows[0]?.under_pressure;
+  if (!underPressure) return;
+  if (underPressure.headline !== fallbackHeadline(underPressure.pattern)) return; // already upgraded
+
+  const headline = await buildStressHeadline(underPressure);
+  if (headline === underPressure.headline) return; // Claude call itself fell back — nothing to persist
+
+  await pool.query(
+    `UPDATE compatibility_scores
+        SET under_pressure = under_pressure || jsonb_build_object('headline', $3::text)
+      WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)`,
+    [viewerId, targetId, headline],
+  );
 }
 
 // Best-effort parent notification on a student's FIRST accepted match.
@@ -1348,6 +1377,20 @@ router.get('/:userId/explain', requireAuth, aiLimiter, async (req, res) => {
     return res.status(403).json({ error: 'not a match' });
   }
 
+  // Fire-and-forget: upgrade the "Under pressure" headline from its
+  // deterministic per-pattern fallback (written at quiz-submit time) to a
+  // pair-specific one, the first time either side opens match detail. This
+  // is the exact surface quiz.js's own design comment names for that
+  // upgrade — "generated lazily on the match-detail surface (where /explain
+  // already does cached per-pair Claude work)" — but nothing ever actually
+  // called it, so every pair has only ever shown one of five canned
+  // sentences. Runs unconditionally (cheap no-op once already upgraded,
+  // since a real Claude sentence never collides with the fixed fallback
+  // text) and never blocks or fails this response — this is a nice-to-have
+  // riding along on an already-async page, not a dependency of it.
+  maybeUpgradeStressHeadline(viewerId, targetId).catch((e) =>
+    console.error('[matches/:userId/explain] stress headline upgrade failed:', e.message));
+
   const cacheKey = `${viewerId}:${targetId}`;
   const cached = explainerCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
@@ -1647,6 +1690,13 @@ router.get('/:userId', (req, res, next) => {
       console.error('[matches/:userId movedInMutuallyConfirmed]', mErr.message);
     }
 
+    // The "Under pressure" pair-specific headline upgrade (fallback →
+    // buildStressHeadline) is kicked off from GET /:userId/explain instead of
+    // here — that's the surface this feature's own design comment (quiz.js)
+    // names as where it should happen, and it's already an async,
+    // separately-fetched, Claude-latency endpoint the client doesn't block
+    // the main match-detail paint on. Doing it here too would add a second
+    // Claude round-trip to the primary page load for no benefit.
     return res.json(dto);
   } catch (err) {
     console.error('[matches/:userId]', err);

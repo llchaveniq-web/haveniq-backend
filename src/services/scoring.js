@@ -226,6 +226,14 @@ function scoreStress(A, B) {
     earned: Math.round((score / 100) * STRESS_POINTS),
     max: STRESS_POINTS,
     clashes: parts.map(p => ({ qid: p.qid, clash: p.clash })),
+    // Per-question style pair ({ 65: { a, b }, ... }) — stressInsight.js's
+    // buildStressHeadline() needs this to write the pair-SPECIFIC sentence.
+    // Previously dropped here, so nothing downstream could ever call it with
+    // real data; the lazy Claude-headline path documented in quiz.js was
+    // unreachable and every user only ever saw the canned per-pattern
+    // fallback. Stored in compatibility_scores.under_pressure alongside
+    // score/pattern, so a match-detail read has everything it needs already.
+    styles: s,
   };
 }
 
@@ -890,13 +898,20 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
 // Plain-language friction topic per question (deep-matching #4 suites). The
 // single largest weighted answer-gap between two users → the dimension most
 // likely to strain that pairing. Reuses the scored set + option counts.
+// 65/66/67 deliberately absent: they're the stress dimension (categorical,
+// scored by the clash matrix — see STRESS_* below), not part of the
+// ordinal QUESTION_POINTS set topFrictionTopic() walks below, so they can
+// never be selected here regardless of what a label says. They used to sit
+// here as stale "thermostat & temperature" / "sleep sensitivity" / "bills &
+// paying on time" labels — leftover from before those ids were reclaimed
+// for stress, and dead code even then (unreachable, since the loop below
+// only considers QUESTION_POINTS keys).
 const FRICTION_TOPICS = {
   49: 'sleep schedules', 50: 'cleanliness', 51: 'substances at home',
   48: 'guests & hosting', 52: 'overnight guests', 54: 'alcohol',
   53: 'study environment', 55: 'food & kitchen', 56: 'money & spending',
   14: 'communication', 57: 'chores', 60: 'conflict repair',
   62: 'boundaries', 63: 'conflict repair',
-  65: 'thermostat & temperature', 66: 'sleep sensitivity', 67: 'bills & paying on time',
   68: 'morning routines',
 };
 
