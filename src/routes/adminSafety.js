@@ -216,7 +216,7 @@ router.post('/users/:id/unban', requireAuth, requireModerator, async (req, res) 
 router.get('/users/:id', requireAuth, requireModerator, async (req, res) => {
   try {
     const userId = req.params.id;
-    const [profile, reportsAgainst, reportsFiled, blockCount] = await Promise.all([
+    const [profile, reportsAgainst, reportsFiled, blockCount, roommateSafetyReportsAgainst] = await Promise.all([
       pool.query(
         `SELECT id, email, first_name, last_name, school, photo_url,
                 is_banned, ban_reason, banned_at, is_paused,
@@ -243,6 +243,21 @@ router.get('/users/:id', requireAuth, requireModerator, async (req, res) => {
         `SELECT COUNT(*)::int AS n FROM user_blocks WHERE blocked_id = $1`,
         [userId],
       ),
+      // The dedicated roommate-safety-report flow (routes/roommateSafety.js)
+      // is a SEPARATE table from user_reports — before this, a moderator
+      // reviewing a user here (the actual ban/no-ban decision screen) had no
+      // visibility into it at all, so a "Physical aggression"/"Threats"
+      // report a student filed through that surface simply never appeared
+      // here. Soft-fails to [] if the table hasn't been created yet
+      // (self-healing table — see roommateSafety.js's ensureTable), same as
+      // "this user has no roommate-safety reports" would read.
+      pool.query(
+        `SELECT id, category, detail, status, created_at, reporter_id
+           FROM roommate_safety_reports
+          WHERE reported_id = $1
+          ORDER BY created_at DESC LIMIT 50`,
+        [userId],
+      ).catch(() => ({ rows: [] })),
     ]);
     if (profile.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     res.json({
@@ -250,6 +265,7 @@ router.get('/users/:id', requireAuth, requireModerator, async (req, res) => {
       reportsAgainst: reportsAgainst.rows,
       reportsFiled:   reportsFiled.rows,
       blockCount:     blockCount.rows[0].n,
+      roommateSafetyReportsAgainst: roommateSafetyReportsAgainst.rows,
     });
   } catch (err) {
     console.error('[admin/safety/users :id] failed:', err.message);
