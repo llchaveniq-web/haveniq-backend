@@ -574,6 +574,7 @@ async function sendPushToUser(userId, { title, body, data }) {
 // Export for use in routes
 app.set('io', io);
 app.set('sendPushToUser', sendPushToUser);
+app.set('isUserOnline', isUserOnline);
 
 // ── Schema bootstrap ──────────────────────────────────────────────────────
 // Apply src/db/migrate_missing.sql in the background AFTER server.listen
