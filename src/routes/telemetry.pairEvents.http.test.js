@@ -13,6 +13,9 @@ function inject(relPath, exportsObj) {
 let telemetryInserts = [];
 let pairInserts = [];
 let pairInsertThrows = false;
+// Every existing test below is about a CONSENTED pair — consent enforcement
+// itself gets its own dedicated tests further down, toggling this false.
+let consented = true;
 
 inject('../db/pool', {
   connect: async () => ({
@@ -23,6 +26,9 @@ inject('../db/pool', {
     release: () => {},
   }),
   query: async (sql, params) => {
+    if (/SELECT 1 FROM pair_consent/.test(sql)) {
+      return { rows: consented ? [{ '?column?': 1 }] : [] };
+    }
     if (/INSERT INTO pair_events/.test(sql)) {
       if (pairInsertThrows) throw new Error('pair table exploded');
       pairInserts.push(params);
@@ -55,7 +61,7 @@ const post = (events) =>
   request(app).post('/telemetry/batch').send({ deviceId: 'dev-1', events });
 
 test.beforeEach(() => {
-  telemetryInserts = []; pairInserts = []; pairInsertThrows = false;
+  telemetryInserts = []; pairInserts = []; pairInsertThrows = false; consented = true;
   require('../services/pairEvents')._resetTableReady();
 });
 
@@ -105,4 +111,28 @@ test('a malformed pair_event is dropped and reported, not stored', async () => {
 test('a batch with no pair_events reports zeroes', async () => {
   const res = await post([moodEvt('m1')]);
   assert.deepEqual(res.body.pairEvents, { stored: 0, dropped: 0 });
+});
+
+// ── Consent enforcement — the fix ──
+// Previously POST /telemetry/batch called persistBatch() directly with NO
+// consent check at all, unlike POST /pairs/:pairId/events which did. Since
+// this batch endpoint is the ordinary, everyday path pair_event telemetry
+// arrives through, a non-consented pair's conflict data was landing in the
+// research-exportable dataset regardless of the "explicitly consented
+// cohort" invariant the codebase claims. Consent is now enforced INSIDE
+// persistBatch itself (services/pairEvents.js), so every caller gets it —
+// these tests exercise that through this specific, previously-unguarded route.
+test('a NON-consented pair\'s event is silently dropped, never stored, via the ordinary telemetry batch', async () => {
+  consented = false;
+  const res = await post([pairEvt('p1', 100, 'signal', 'pulse')]);
+  assert.equal(res.status, 200, 'a student\'s batch must still succeed either way');
+  assert.equal(pairInserts.length, 0, 'never reaches the INSERT');
+  assert.deepEqual(res.body.pairEvents, { stored: 0, dropped: 1 });
+});
+
+test('a CONSENTED pair\'s event still stores normally through the same path', async () => {
+  consented = true;
+  const res = await post([pairEvt('p1', 100, 'signal', 'pulse')]);
+  assert.equal(pairInserts.length, 1);
+  assert.deepEqual(res.body.pairEvents, { stored: 1, dropped: 0 });
 });

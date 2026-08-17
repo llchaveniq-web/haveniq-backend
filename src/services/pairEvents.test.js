@@ -112,11 +112,17 @@ test('an array meta is refused', () => {
 });
 
 // ── Batch persistence ──
-function fakeDb(existingIds = new Set()) {
+// `consented` defaults true so every existing persistBatch test below (none
+// of which are ABOUT consent — that's covered in its own test block further
+// down) keeps exercising the same normalize/insert behavior it always has.
+function fakeDb(existingIds = new Set(), { consented = true } = {}) {
   const inserts = [];
   return {
     inserts,
     query: async (sql, params) => {
+      if (/SELECT 1 FROM pair_consent/.test(sql)) {
+        return { rows: consented ? [{ '?column?': 1 }] : [] };
+      }
       if (/INSERT INTO pair_events/.test(sql)) {
         if (existingIds.has(params[0])) return { rowCount: 0 };   // ON CONFLICT DO NOTHING
         existingIds.add(params[0]);

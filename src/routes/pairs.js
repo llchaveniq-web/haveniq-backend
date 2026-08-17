@@ -15,7 +15,16 @@
  * could read the other's private pulses out of it. Research/internal only.
  *
  * CONSENT: no pair is tracked without a `pair_consent` row. v1 is a small,
- * explicitly consented cohort.
+ * explicitly consented cohort. Enforced in TWO places now: here at ingest
+ * (before persistBatch is even called) AND inside pairEvents.persistBatch
+ * itself, because that function is also reached directly from the ordinary
+ * telemetry batch (routes/telemetry.js), which used to have no consent
+ * check at all — see pairEvents.js's persistBatch comment.
+ *
+ * DE-IDENTIFICATION: /:pairId/timeline pseudonymizes every id it returns
+ * (lib/researchPseudonym.js) and audit-logs the real pairKey queried — a
+ * research-role account is still an ordinary authenticated user, and raw
+ * ids were trivially resolvable via GET /users/:id otherwise.
  */
 
 const router = require('express').Router();
@@ -24,6 +33,8 @@ const { requireResearch } = require('../middleware/requireResearch');
 const { hasValidInternalKey } = require('../middleware/requireInternalKey');
 const pairEvents = require('../services/pairEvents');
 const pool = require('../db/pool');
+const { pseudoPairKey, pseudonymizeEvent } = require('../lib/researchPseudonym');
+const { audit } = require('../services/auditLog');
 
 /** Is this user one of the two people in `pairKey`? */
 function isMemberOfPair(userId, pairKey) {
@@ -89,7 +100,11 @@ router.get('/:pairId/timeline', async (req, res, next) => {
 }, async (req, res) => {
   try {
     const pairKey = String(req.params.pairId || '');
-    const events = await pairEvents.timeline(pairKey);
+    // Real pairKey in the audit trail (an investigation into misuse needs
+    // it); the response below is pseudonymized — see lib/researchPseudonym.js.
+    // req.user is absent for the internal-key caller, which audit() handles.
+    audit(req, 'research.pairs.timeline.view', { pairKey }).catch(() => {});
+    const events = (await pairEvents.timeline(pairKey)).map(pseudonymizeEvent);
 
     // Episode roll-up: the shape a cohort query groups on. Reported here so an
     // analyst can see the arms without re-deriving them from every row.
@@ -103,7 +118,7 @@ router.get('/:pairId/timeline', async (req, res, next) => {
     }
 
     res.json({
-      pairId: pairKey,
+      pairId: pseudoPairKey(pairKey),
       consented: await pairEvents.hasConsent(pairKey),
       count: events.length,
       events,                                   // [] when nothing recorded — never padded

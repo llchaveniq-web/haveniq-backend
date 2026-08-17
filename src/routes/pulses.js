@@ -2,6 +2,8 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const analytics = require('../services/analytics');
+const { sanitizeNoteText } = require('../lib/textSanitize');
+const { maybePageSafety } = require('../services/checkinSafety');
 
 // ── GET /pulses/pending ──────────────────────────────────────────────────
 // Returns up to one outcome-pulse prompt the user currently owes. We pick
@@ -72,6 +74,14 @@ router.get('/pending', requireAuth, async (req, res) => {
 // day_marker) means re-submitting the same pulse is rejected at the DB
 // level — keeps the outcome dataset clean for fundraising decks.
 //
+// `note` used to go straight to the DB with zero cleaning — no PII
+// redaction, no length cap, no content screening, and no crisis/threat
+// paging — despite being mutually visible to the other roommate the same
+// way matchOutcomes.js's check-in note is. sanitizeNoteText/maybePageSafety
+// are the exact same functions matchOutcomes.js uses (see lib/textSanitize.js,
+// services/checkinSafety.js), so a self-harm or threat signal in a pulse note
+// now gets caught exactly like it already does for match-outcome check-ins.
+//
 // Body: { requestId, dayMarker (30|60|90), status, note? }
 router.post('/', requireAuth, async (req, res) => {
   try {
@@ -93,11 +103,13 @@ router.post('/', requireAuth, async (req, res) => {
     );
     if (!own[0]) return res.status(403).json({ error: 'Not your match' });
 
+    const cleanNote = sanitizeNoteText(note);
+
     await pool.query(
       `INSERT INTO match_pulses (request_id, responder_id, day_marker, status, note)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (request_id, responder_id, day_marker) DO NOTHING`,
-      [requestId, req.user.id, dayMarker, status, note ?? null],
+      [requestId, req.user.id, dayMarker, status, cleanNote],
     );
 
     analytics.track(analytics.EVENTS.pulse_submitted, req.user.id, {
@@ -106,6 +118,14 @@ router.post('/', requireAuth, async (req, res) => {
     });
 
     res.json({ recorded: true });
+    // Page on a crisis/threat note AFTER responding — best-effort, non-blocking.
+    maybePageSafety({
+      reporterId: req.user.id,
+      rawNote: typeof note === 'string' ? note : '',
+      sanitizedNote: cleanNote || '',
+      stage: String(dayMarker),
+      source: 'pulse',
+    });
   } catch (err) {
     console.error('pulse submit failed:', err);
     res.status(500).json({ error: 'Failed to record pulse' });

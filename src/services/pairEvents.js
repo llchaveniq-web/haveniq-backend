@@ -196,6 +196,20 @@ async function ensureTable(db = pool) {
 /**
  * Persist the pair_events in one telemetry batch. Returns {stored, dropped}.
  * Dedups on the client event id, so retries are idempotent.
+ *
+ * Consent is enforced HERE — not at each call site. POST /pairs/:pairId/events
+ * (routes/pairs.js) already checks hasConsent() before calling this, but this
+ * function is ALSO reached directly from the ordinary telemetry batch
+ * (routes/telemetry.js's POST /telemetry/batch), which never checked consent
+ * at all — meaning a non-consented pair's conflict data was being persisted
+ * (and was then exportable via routes/research.js) through the one path the
+ * app actually uses day to day, defeating the "explicitly consented cohort,
+ * no row, no tracking" invariant this whole dataset depends on for its
+ * ethical basis. Checking it once here, rather than trusting every future
+ * caller to remember, is what actually holds that invariant — the same
+ * reasoning as reusing this one normalize/persist path in the first place
+ * (see routes/pairs.js's own comment: "there is ONE validator and one
+ * insert — a second copy would drift").
  */
 async function persistBatch(events, userId, db = pool) {
   const rows = (Array.isArray(events) ? events : [])
@@ -206,8 +220,20 @@ async function persistBatch(events, userId, db = pool) {
   if (!rows.length) return { stored: 0, dropped: seen };
 
   await ensureTable(db);
-  let stored = 0;
+
+  // One consent check per DISTINCT pair in the batch, not per event — a
+  // batch is capped at 100 events but could still repeat the same pair.
+  const consentCache = new Map();
+  const consentedRows = [];
   for (const r of rows) {
+    if (!consentCache.has(r.pairKey)) {
+      consentCache.set(r.pairKey, await hasConsent(r.pairKey, db));
+    }
+    if (consentCache.get(r.pairKey)) consentedRows.push(r);
+  }
+
+  let stored = 0;
+  for (const r of consentedRows) {
     const { rowCount } = await db.query(
       `INSERT INTO pair_events (id, user_id, pair_id, pair_key, t, kind, subtype, topic, value, meta, episode_id, arm)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
@@ -220,7 +246,7 @@ async function persistBatch(events, userId, db = pool) {
     );
     stored += rowCount;
   }
-  return { stored, dropped: seen - rows.length };
+  return { stored, dropped: seen - stored };
 }
 
 // `t` is BIGINT, which node-postgres hands back as a STRING. The client's local
