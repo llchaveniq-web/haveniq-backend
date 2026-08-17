@@ -7,7 +7,7 @@ const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectR
 const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
-const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
+const { MATCH_MIN_SCORE, CONNECT_DECLINE_COOLDOWN_DAYS } = require('../lib/matchConfig');
 const { isViable, applyCampusRanking } = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 // Pre-match photo gallery (owner decision 2026-07-22: faces visible while choosing).
@@ -742,21 +742,43 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
       });
     }
 
-    // Check if already connected or pending
+    // Check if already connected or pending. A DECLINED request is the one
+    // status allowed to be retried, and only past CONNECT_DECLINE_COOLDOWN_DAYS
+    // — a real "no" shouldn't be re-askable the next day (that's just
+    // pestering), but it was never supposed to be a lifetime ban either.
+    // pending/accepted always block a fresh send outright.
     const { rows: existing } = await pool.query(
-      `SELECT status FROM connect_requests
+      `SELECT id, status, updated_at FROM connect_requests
        WHERE (from_user = $1 AND to_user = $2) OR (from_user = $2 AND to_user = $1)`,
       [req.user.id, toUserId]
     );
 
-    if (existing[0]) {
-      return res.status(409).json({ error: 'Request already exists', status: existing[0].status });
+    const existingRow = existing[0];
+    const declineCooledDown = existingRow?.status === 'declined'
+      && (Date.now() - new Date(existingRow.updated_at).getTime()) >= CONNECT_DECLINE_COOLDOWN_DAYS * 86400000;
+
+    if (existingRow && !declineCooledDown) {
+      return res.status(409).json({ error: 'Request already exists', status: existingRow.status });
     }
 
-    await pool.query(
-      'INSERT INTO connect_requests (from_user, to_user, status) VALUES ($1, $2, $3)',
-      [req.user.id, toUserId, 'pending']
-    );
+    if (existingRow) {
+      // Revive the SAME row (updating from_user/to_user to this attempt's
+      // direction) instead of inserting a second one — the table's
+      // UNIQUE(from_user, to_user) constraint, and every other query in this
+      // file, assume at most one connect_requests row per pair.
+      await pool.query(
+        `UPDATE connect_requests
+           SET from_user = $1, to_user = $2, status = 'pending',
+               decline_reason = NULL, updated_at = NOW()
+         WHERE id = $3`,
+        [req.user.id, toUserId, existingRow.id],
+      );
+    } else {
+      await pool.query(
+        'INSERT INTO connect_requests (from_user, to_user, status) VALUES ($1, $2, $3)',
+        [req.user.id, toUserId, 'pending']
+      );
+    }
 
     // Outcome scaffolding: stamp the 'connect' funnel step + snapshot the score
     // and school for later per-school weight-learning. Best-effort, non-blocking.
