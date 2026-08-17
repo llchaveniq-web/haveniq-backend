@@ -56,6 +56,18 @@ router.get('/:conversationId', requireAuth, async (req, res) => {
 
 // PUT /agreements/:conversationId — upsert one rule. Either roommate can set or
 // update any topic; we stamp who did it. Body: { topic, value }.
+//
+// Read-modify-write on a single shared JSONB array, done under SELECT ... FOR
+// UPDATE inside a transaction — without it, two roommates saving different
+// rules within the same window (the exact scenario this feature exists for:
+// sitting together setting up quiet hours + guest policy at once) race a
+// plain read-then-write, and whichever PUT lands second silently overwrites
+// the array as it looked at ITS OWN read time, discarding the other
+// roommate's already-saved rule with no error and no conflict indicator.
+// Same lock-then-modify shape twoFactor.js already uses for recovery-code
+// consumption. A pre-insert (ON CONFLICT DO NOTHING) guarantees the row
+// exists before the lock, so the very first write for a conversation is
+// covered too — FOR UPDATE can't lock a row that doesn't exist yet.
 router.put('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
   try {
     await ensureTable();
@@ -74,40 +86,54 @@ router.put('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
       return res.status(422).json({ code: 'content_blocked', error: 'That can\'t be saved. Keep the agreement respectful.' });
     }
 
-    const { rows } = await pool.query(
-      'SELECT items FROM shared_agreements WHERE conversation_id = $1',
-      [req.params.conversationId],
-    );
-    const items = Array.isArray(rows[0]?.items) ? rows[0].items : [];
-    const idx = items.findIndex(i => i && i.topic === topic.trim());
-    const prev = idx >= 0 ? items[idx] : null;
-    // A rule counts as agreed only once BOTH roommates have accepted its current
-    // text (that's the "joint act of agreeing"). Whoever writes/edits a rule has,
-    // by definition, agreed to their own wording — so they seed acceptedBy. If
-    // the wording CHANGES, prior agreement no longer applies (you agreed to
-    // different terms), so it resets to just the editor; re-saving identical text
-    // keeps the agreement intact.
-    const valueChanged = !prev || prev.value !== value.trim();
-    const acceptedBy = valueChanged
-      ? [req.user.id]
-      : Array.from(new Set([...(Array.isArray(prev.acceptedBy) ? prev.acceptedBy : []), req.user.id]));
-    const entry = {
-      topic:      topic.trim(),
-      value:      value.trim(),
-      setBy:      req.user.id,
-      setByName:  req.user.first_name || 'Roommate',
-      acceptedBy,
-      updatedAt:  new Date().toISOString(),
-    };
-    if (idx >= 0) items[idx] = entry; else items.push(entry);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO shared_agreements (conversation_id, items, updated_at)
+         VALUES ($1, '[]'::jsonb, NOW())
+         ON CONFLICT (conversation_id) DO NOTHING`,
+        [req.params.conversationId],
+      );
+      const { rows } = await client.query(
+        'SELECT items FROM shared_agreements WHERE conversation_id = $1 FOR UPDATE',
+        [req.params.conversationId],
+      );
+      const items = Array.isArray(rows[0]?.items) ? rows[0].items : [];
+      const idx = items.findIndex(i => i && i.topic === topic.trim());
+      const prev = idx >= 0 ? items[idx] : null;
+      // A rule counts as agreed only once BOTH roommates have accepted its current
+      // text (that's the "joint act of agreeing"). Whoever writes/edits a rule has,
+      // by definition, agreed to their own wording — so they seed acceptedBy. If
+      // the wording CHANGES, prior agreement no longer applies (you agreed to
+      // different terms), so it resets to just the editor; re-saving identical text
+      // keeps the agreement intact.
+      const valueChanged = !prev || prev.value !== value.trim();
+      const acceptedBy = valueChanged
+        ? [req.user.id]
+        : Array.from(new Set([...(Array.isArray(prev.acceptedBy) ? prev.acceptedBy : []), req.user.id]));
+      const entry = {
+        topic:      topic.trim(),
+        value:      value.trim(),
+        setBy:      req.user.id,
+        setByName:  req.user.first_name || 'Roommate',
+        acceptedBy,
+        updatedAt:  new Date().toISOString(),
+      };
+      if (idx >= 0) items[idx] = entry; else items.push(entry);
 
-    await pool.query(
-      `INSERT INTO shared_agreements (conversation_id, items, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (conversation_id) DO UPDATE SET items = $2, updated_at = NOW()`,
-      [req.params.conversationId, JSON.stringify(items)],
-    );
-    res.json({ items });
+      await client.query(
+        `UPDATE shared_agreements SET items = $2, updated_at = NOW() WHERE conversation_id = $1`,
+        [req.params.conversationId, JSON.stringify(items)],
+      );
+      await client.query('COMMIT');
+      res.json({ items });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   } catch (err) {
     console.error('[agreements] put failed:', err.message);
     res.status(500).json({ error: 'Could not save the agreement' });
@@ -129,27 +155,40 @@ router.post('/:conversationId/accept', requireAuth, refuseBanned, async (req, re
     if (!(await isMember(req.params.conversationId, req.user.id))) {
       return res.status(403).json({ error: 'Not authorized' });
     }
-    const { rows } = await pool.query(
-      'SELECT items FROM shared_agreements WHERE conversation_id = $1',
-      [req.params.conversationId],
-    );
-    const items = Array.isArray(rows[0]?.items) ? rows[0].items : [];
-    const idx = items.findIndex(i => i && i.topic === topic.trim());
-    // Can only agree to a rule that exists and has actual wording.
-    if (idx < 0 || !items[idx].value) {
-      return res.status(404).json({ error: 'No such rule to agree to' });
-    }
-    const accepted = new Set(Array.isArray(items[idx].acceptedBy) ? items[idx].acceptedBy : []);
-    accepted.add(req.user.id);
-    items[idx] = { ...items[idx], acceptedBy: Array.from(accepted) };
 
-    await pool.query(
-      `INSERT INTO shared_agreements (conversation_id, items, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (conversation_id) DO UPDATE SET items = $2, updated_at = NOW()`,
-      [req.params.conversationId, JSON.stringify(items)],
-    );
-    res.json({ items });
+    // Same lock-then-modify shape as the PUT above — an accept racing another
+    // accept (or a PUT) on the same shared array must not silently drop one
+    // of them. See the PUT handler's comment for the full rationale.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        'SELECT items FROM shared_agreements WHERE conversation_id = $1 FOR UPDATE',
+        [req.params.conversationId],
+      );
+      const items = Array.isArray(rows[0]?.items) ? rows[0].items : [];
+      const idx = items.findIndex(i => i && i.topic === topic.trim());
+      // Can only agree to a rule that exists and has actual wording.
+      if (idx < 0 || !items[idx].value) {
+        await client.query('COMMIT');
+        return res.status(404).json({ error: 'No such rule to agree to' });
+      }
+      const accepted = new Set(Array.isArray(items[idx].acceptedBy) ? items[idx].acceptedBy : []);
+      accepted.add(req.user.id);
+      items[idx] = { ...items[idx], acceptedBy: Array.from(accepted) };
+
+      await client.query(
+        `UPDATE shared_agreements SET items = $2, updated_at = NOW() WHERE conversation_id = $1`,
+        [req.params.conversationId, JSON.stringify(items)],
+      );
+      await client.query('COMMIT');
+      res.json({ items });
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   } catch (err) {
     console.error('[agreements] accept failed:', err.message);
     res.status(500).json({ error: 'Could not record your agreement' });
