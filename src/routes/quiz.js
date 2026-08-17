@@ -393,6 +393,17 @@ async function scoreNewMatches(userId, newAnswers) {
   // approve handlers (botAdmin.js, admin.js) call this function directly so
   // the account doesn't just sit invisible until its next quiz edit.
   //
+  // This used to be a silent early return — zero log, zero event, zero
+  // client-facing signal — so a user stuck in the review queue and the
+  // founder trying to diagnose "why is my feed empty" had nothing to go on.
+  // matches.js's GET /feed now also surfaces this to the client directly
+  // via `reason: 'pending_review'` when it's the reason a feed comes back
+  // empty; this event is the ops-facing half — lets "how many people are
+  // stuck on review" be answered from data instead of a support ticket.
+  if (userRow[0].is_verified !== true) {
+    analytics.track(analytics.EVENTS.scoring_skipped_unverified, userId, {});
+    return;
+  }
   // Banned accounts get the same quarantine — this query previously had NO
   // is_banned filter at all (matches.js's feed-read queries do filter it,
   // which kept a banned candidate from actually being SHOWN, but this
@@ -400,7 +411,6 @@ async function scoreNewMatches(userId, newAnswers) {
   // row pairing them with a real, currently-active user every time anyone
   // else's quiz was submitted or edited — one filter silently doing the
   // other's job instead of both holding the line).
-  if (userRow[0].is_verified !== true) return;
   if (userRow[0].is_banned === true) return;
   const myDealbreakers = Array.isArray(userRow[0].dealbreakers) ? userRow[0].dealbreakers : [];
   const myValidation   = userRow[0].validation_score != null ? Number(userRow[0].validation_score) : undefined;
