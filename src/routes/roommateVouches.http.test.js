@@ -38,7 +38,7 @@ inject('../db/pool', {
     // exact substring, so the order here matters.
     if (/INSERT INTO match_outcomes/.test(sql)) { corroborationInsertParams = params; corroborationInsertSql = sql; return { rows: [] }; }
     if (/SELECT 1 FROM match_outcomes/.test(sql)) return { rows: everMovedIn ? [{ '?column?': 1 }] : [] };
-    if (/SELECT id, status FROM roommate_vouches WHERE from_user_id/.test(sql)) {
+    if (/SELECT id, status, declined_at FROM roommate_vouches WHERE from_user_id/.test(sql)) {
       return { rows: existingRow ? [existingRow] : [] };
     }
     if (/INSERT INTO roommate_vouches/.test(sql)) {

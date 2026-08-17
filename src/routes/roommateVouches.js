@@ -31,6 +31,7 @@ const router  = require('express').Router();
 const pool    = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
 const { screenMessage } = require('../lib/contentFilter');
+const { VOUCH_DECLINE_COOLDOWN_DAYS } = require('../lib/matchConfig');
 
 let ready = false;
 async function ensureTables() {
@@ -51,6 +52,13 @@ async function ensureTables() {
     ON roommate_vouches (from_user_id, about_user_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_roommate_vouches_about
     ON roommate_vouches (about_user_id, status)`);
+  // declined_at mirrors confirmed_at — the timestamp of the LAST decline, so
+  // a retry can tell "just declined" from "declined a month ago" instead of
+  // falling back to created_at (which is the original ASK time, not the
+  // decline time, and would start a mis-tap's cooldown clock before the
+  // decline even happened).
+  await pool.query(`ALTER TABLE roommate_vouches ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ`)
+    .catch((e) => console.error('[roommate-vouches] add declined_at column:', e.message));
   ready = true;
 }
 
@@ -182,13 +190,47 @@ router.post('/:aboutUserId/request', requireAuth, refuseBanned, async (req, res)
       return res.status(403).json({ error: "HavenIQ doesn't have a moved-in record for you two — mark that you moved in together first." });
     }
 
-    // Idempotent — a vouch is one per direction per pair (unique index).
+    const notifyAboutUser = () => {
+      const sendPushToUser = req.app.get('sendPushToUser');
+      if (!sendPushToUser) return;
+      const senderName = req.user.first_name || 'A past roommate';
+      sendPushToUser(aboutUserId, {
+        title: 'You have a roommate vouch waiting ⭐',
+        body: `${senderName} wants to vouch for living with you — confirm it to add it to your track record.`,
+        data: { screen: 'circle' },
+      }).catch(err => console.error('[push] roommate vouch request send failed:', err));
+    };
+
+    // A vouch is one per direction per pair (unique index) — a fresh INSERT
+    // would violate it if a row already exists. pending/confirmed rows stay
+    // exactly as before (idempotent no-op response). A DECLINED row used to
+    // no-op the SAME way, forever — there was no path back, so a mis-tap
+    // decline or a "not yet, ask me later" permanently ate the sender's one
+    // shot, with the about_user never even seeing a second ask. Past
+    // VOUCH_DECLINE_COOLDOWN_DAYS, this now revives the row instead:
+    // pending again, with THIS attempt's would_live_again/note, and the
+    // about_user gets notified again — same "revive, don't duplicate"
+    // approach already used for connect_requests declines.
     const existing = await pool.query(
-      `SELECT id, status FROM roommate_vouches WHERE from_user_id = $1 AND about_user_id = $2`,
+      `SELECT id, status, declined_at FROM roommate_vouches WHERE from_user_id = $1 AND about_user_id = $2`,
       [fromUserId, aboutUserId],
     );
     if (existing.rows[0]) {
-      return res.json({ ok: true, id: existing.rows[0].id, status: existing.rows[0].status });
+      const row = existing.rows[0];
+      const declineCooledDown = row.status === 'declined' && row.declined_at
+        && (Date.now() - new Date(row.declined_at).getTime()) >= VOUCH_DECLINE_COOLDOWN_DAYS * 86400000;
+      if (!declineCooledDown) {
+        return res.json({ ok: true, id: row.id, status: row.status });
+      }
+      await pool.query(
+        `UPDATE roommate_vouches
+            SET status = 'pending', would_live_again = $1, note = $2,
+                declined_at = NULL, confirmed_at = NULL, created_at = NOW()
+          WHERE id = $3`,
+        [wouldLiveAgain, note, row.id],
+      );
+      notifyAboutUser();
+      return res.json({ ok: true, id: row.id, status: 'pending' });
     }
 
     const { rows } = await pool.query(
@@ -197,15 +239,7 @@ router.post('/:aboutUserId/request', requireAuth, refuseBanned, async (req, res)
       [fromUserId, aboutUserId, wouldLiveAgain, note],
     );
 
-    const sendPushToUser = req.app.get('sendPushToUser');
-    if (sendPushToUser) {
-      const senderName = req.user.first_name || 'A past roommate';
-      sendPushToUser(aboutUserId, {
-        title: 'You have a roommate vouch waiting ⭐',
-        body: `${senderName} wants to vouch for living with you — confirm it to add it to your track record.`,
-        data: { screen: 'circle' },
-      }).catch(err => console.error('[push] roommate vouch request send failed:', err));
-    }
+    notifyAboutUser();
 
     res.json({ ok: true, id: rows[0].id, status: rows[0].status });
   } catch (e) {
@@ -249,9 +283,10 @@ async function setStatus(req, res, status) {
     await ensureTables();
     const id = req.params.id;
     if (!UUID_RE.test(id)) return res.status(400).json({ error: 'bad id' });
-    const confirmedAtClause = status === 'confirmed' ? ', confirmed_at = NOW()' : '';
+    const timestampClause = status === 'confirmed' ? ', confirmed_at = NOW()'
+      : status === 'declined' ? ', declined_at = NOW()' : '';
     const { rows } = await pool.query(
-      `UPDATE roommate_vouches SET status = $1${confirmedAtClause}
+      `UPDATE roommate_vouches SET status = $1${timestampClause}
         WHERE id = $2 AND about_user_id = $3 AND status = 'pending'
         RETURNING from_user_id`,
       [status, id, String(req.user.id)],
