@@ -459,14 +459,25 @@ router.get('/bot-admin/pending-checkins', requireBotToken, async (req, res) => {
     //   - earliest mutual message was 55-65 days ago (window so we don't miss any)
     //   - we have NOT already logged a survey_60d outcome on either side
     // Soft-fails if messages table doesn't exist yet — returns empty list.
+    //
+    // messages has no recipient_id — the other participant is only knowable
+    // via the conversation it belongs to (conversations.user_a/user_b,
+    // canonically ordered by the table's own CHECK(user_a < user_b), so no
+    // LEAST/GREATEST needed once joined). The original query assumed a
+    // recipient_id column that has never existed in this schema; the whole
+    // SELECT threw on every call, was swallowed by the .catch() below, and
+    // this route has returned an empty pair list since the day it shipped —
+    // meaning the 60-day founder-outreach cron never actually fired, and
+    // match_outcomes.survey_60d (the input the weight-learning loop is
+    // waiting on) never accumulated.
     const { rows } = await pool.query(`
       WITH pair_first_msg AS (
         SELECT
-          LEAST(sender_id, recipient_id)    AS user_a,
-          GREATEST(sender_id, recipient_id) AS user_b,
-          MIN(created_at)                   AS first_msg_at
-        FROM messages
-        GROUP BY 1, 2
+          c.user_a, c.user_b,
+          MIN(m.created_at) AS first_msg_at
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        GROUP BY c.user_a, c.user_b
       )
       SELECT
         pfm.user_a, pfm.user_b, pfm.first_msg_at,

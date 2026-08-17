@@ -9,21 +9,38 @@ const { isDemoEmail, notDemo } = require('../lib/demoFilter');
 const { isFounderUser } = require('../utils/founders');
 const { recordPairingEvent } = require('../services/pairingOutcomes');
 
-// Email the recipient on a NEW message — but only the FIRST unread one in a
-// conversation (they were caught up), so a burst of messages emails once, not
-// per-message. The whole production app is web, where push tokens are never
-// registered, so without this a messaged student who isn't on the site never
-// knows. Best-effort; never blocks send; skips seeded demo accounts.
-async function maybeEmailNewMessage(conversationId, recipientId, senderFirstName) {
+// Email the recipient on a NEW message — but only when they're not already
+// live in the app, and at most once per conversation per cooldown window.
+// The whole production app is web, where push tokens are never registered,
+// so without SOME notification here a messaged student who isn't on the
+// site never knows. Best-effort; never blocks send; skips seeded demo
+// accounts.
+//
+// This used to gate on "is exactly 1 message unread right now" — meant as
+// "email once per burst, not once per message" — but during an ACTUAL
+// conversation that's backwards: the thread screen marks messages read on
+// a 3s poll, so between two people actively texting, each reply lands with
+// the recipient already caught up (n=1) and re-emails. A 40-message evening
+// emailed ~40 times. Two real fixes, not one: (1) skip entirely when the
+// recipient is online right now — they'll see it live, which is also the
+// state an active conversation is actually in; (2) when they're offline,
+// throttle by TIME (per conversation) instead of by unread-count, so a
+// rapid-fire burst while they're away still emails once, not once per
+// message. In-memory is fine here — this is a notification-volume
+// throttle, not a security boundary, so losing it on a restart just means
+// the next message re-evaluates cleanly (same tradeoff routes/profile.js's
+// synthesis rate limit already accepts).
+const lastEmailedAt = new Map(); // `${conversationId}:${recipientId}` -> timestamp
+const EMAIL_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
+async function maybeEmailNewMessage(conversationId, recipientId, senderFirstName, isUserOnline) {
   try {
-    const { rows: unread } = await pool.query(
-      `SELECT COUNT(*)::int AS n FROM messages
-        WHERE conversation_id = $1 AND sender_id <> $2 AND read = FALSE`,
-      [conversationId, recipientId],
-    );
-    // 1 == only the message we just inserted is unread → recipient was caught
-    // up → this is a fresh notification moment. >1 → already had unread → skip.
-    if (!unread[0] || unread[0].n !== 1) return;
+    if (typeof isUserOnline === 'function' && isUserOnline(recipientId)) return;
+
+    const cooldownKey = `${conversationId}:${recipientId}`;
+    const last = lastEmailedAt.get(cooldownKey) || 0;
+    if (Date.now() - last < EMAIL_COOLDOWN_MS) return;
+
     const { rows } = await pool.query(
       'SELECT email, first_name FROM users WHERE id = $1',
       [recipientId],
@@ -31,6 +48,7 @@ async function maybeEmailNewMessage(conversationId, recipientId, senderFirstName
     const r = rows[0];
     if (!r || !r.email) return;
     if (isDemoEmail(r.email)) return;
+    lastEmailedAt.set(cooldownKey, Date.now());
     await sendNewMessageEmail(r.email, r.first_name || 'there', senderFirstName || 'Your match', recipientId);
   } catch (err) {
     console.error('[message email] send failed:', err);
@@ -393,9 +411,10 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
       }).catch(err => console.error('[push] HTTP message send failed:', err));
     }
 
-    // Email the recipient too (push never reaches web users). Throttled to the
-    // first unread message in the conversation.
-    maybeEmailNewMessage(req.params.conversationId, otherUserId, req.user.first_name).catch(() => {});
+    // Email the recipient too (push never reaches web users). Skipped when
+    // they're online right now; throttled to once per EMAIL_COOLDOWN_MS
+    // per conversation otherwise.
+    maybeEmailNewMessage(req.params.conversationId, otherUserId, req.user.first_name, req.app.get('isUserOnline')).catch(() => {});
 
     // If the sender's own message signals self-harm/crisis, attach supportive
     // resources to the response (the message is still delivered) — clients show

@@ -240,6 +240,26 @@ router.get('/matched/:userId', requireAuth, async (req, res) => {
 
     const sharedAnswers = computeSharedAnswers(answersMe, answersOther);
 
+    // computeSharedAnswers is an EXACT-MATCH intersection — two people can
+    // each answer 5+ questions (clearing the gate above) while sharing zero
+    // exactly-matching answers, either because they answered different
+    // questions or answered the same ones differently. The prompt below
+    // still demands three specific "you both [verb] [behavior]" claims
+    // "grounded in one of the shared answers above" — with nothing to
+    // ground them in, the model fabricates. Fail the same honest way the
+    // too-little-quiz-data case above does, rather than ask Claude to
+    // invent specifics about two real people.
+    if (sharedAnswers.length === 0) {
+      return res.json({
+        ready: false,
+        reason: 'you both need a bit more quiz overlap before the full reveal lands.',
+        otherUser: {
+          firstName: otherRow.first_name, lastInitial: otherRow.last_name?.[0] || '',
+          photoUrl: otherRow.photo_url, school: otherRow.school,
+        },
+      });
+    }
+
     // 3. Canonical-pair cache key. user_a < user_b is enforced by the
     // table CHECK, so sort the pair before lookup AND hash the answers
     // in the SAME canonical order — otherwise alternating-perspective

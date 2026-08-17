@@ -10,7 +10,7 @@
 // that must behave identically everywhere it's checked.
 
 const sentry = require('../utils/sentry');
-const { screenMessage } = require('../lib/contentFilter');
+const { screenMessage, detectThreatSignal } = require('../lib/contentFilter');
 const DISCORD_HOOK = process.env.DISCORD_WEBHOOK_URL || '';
 
 function maybePageSafety({ reporterId, rawNote, sanitizedNote, stage, source }) {
@@ -18,7 +18,11 @@ function maybePageSafety({ reporterId, rawNote, sanitizedNote, stage, source }) 
     if (!rawNote || !rawNote.trim()) return;
     const screen = screenMessage(rawNote);
     const isCrisis = !!screen.crisis;                                      // self-harm language
-    const isThreat = screen.action === 'block' && screen.category === 'threat';
+    // Deliberately broader than screenMessage's own threat category — a
+    // check-in note reporting on someone ELSE'S behavior ("my roommate
+    // said he will hurt you") has no first-person "I'll" for the stricter,
+    // block-worthy rule to gate on. See detectThreatSignal's own comment.
+    const isThreat = detectThreatSignal(rawNote);
     if (!isCrisis && !isThreat) return;
     pageCheckinSafetyFlag({
       reporterId,
