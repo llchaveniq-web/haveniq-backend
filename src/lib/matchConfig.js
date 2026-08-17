@@ -30,4 +30,14 @@ const CONNECT_DECLINE_COOLDOWN_DAYS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 30;
 })();
 
-module.exports = { MATCH_MIN_SCORE, CONNECT_DECLINE_COOLDOWN_DAYS };
+// Same idea, for a declined roommate-vouch request (routes/roommateVouches.js
+// POST /:aboutUserId/request). Previously permanent: a declined vouch request
+// silently no-opped forever on retry — the sender was told { ok: true } with
+// no way to ever try again, and the about_user never saw a second ask even
+// if a mis-tap or bad timing was the reason for the decline.
+const VOUCH_DECLINE_COOLDOWN_DAYS = (() => {
+  const n = parseInt(process.env.VOUCH_DECLINE_COOLDOWN_DAYS, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 30;
+})();
+
+module.exports = { MATCH_MIN_SCORE, CONNECT_DECLINE_COOLDOWN_DAYS, VOUCH_DECLINE_COOLDOWN_DAYS };
