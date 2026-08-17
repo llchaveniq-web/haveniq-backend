@@ -15,7 +15,14 @@ function inject(relPath, exportsObj) {
 }
 
 inject('../db/pool', {
-  query: async () => ({ rows: [{ id: 'rev-1', created_at: '2026-07-07T00:00:00Z' }] }),
+  query: async (sql) => {
+    // No existing review by default — the dedup check must not itself
+    // trigger the 409 it exists to enforce (see the dedicated dedup test
+    // file for that behavior).
+    if (/SELECT id FROM \w+_reviews_shared\s+WHERE reviewer_id/.test(sql)) return { rows: [] };
+    if (/ALTER TABLE/.test(sql)) return { rows: [] };
+    return { rows: [{ id: 'rev-1', created_at: '2026-07-07T00:00:00Z' }] };
+  },
 });
 inject('../middleware/auth', {
   requireAuth: (req, _res, next) => { req.user = { id: req.headers['x-test-uid'] || 'me' }; next(); },

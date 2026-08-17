@@ -4,17 +4,23 @@ const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
 const { notDemo }     = require('../lib/demoFilter');
+const { search: searchLimiter } = require('../middleware/rateLimits');
 
 // ── GET /search?q=... ─────────────────────────────────────────────────────
 // Single-bar search across:
 //   1. Users at the caller's school (first name / last name fuzzy match)
 //   2. Groups the caller is a member of (name match)
 // Capped at 8 results per bucket. Demo accounts hidden unless caller is a
-// founder. Paused users excluded.
+// founder. Paused users excluded. is_banned excluded — this is a separate
+// query path from matches.js's feed queries, and it had drifted from
+// every other discovery surface in the app (matches.js, quiz.js,
+// activityPulse.js, profile.js, users.js all filter is_banned); a banned
+// account stayed fully searchable by name/photo/school, the one place
+// "banned = invisible" didn't actually hold.
 //
 // Uses pg_trgm's similarity operator for typo-tolerant matching; that
 // extension is created in migrate_missing.sql so it's already on prod.
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', requireAuth, searchLimiter, async (req, res) => {
   const q = (req.query.q || '').toString().trim();
   if (q.length < 2) return res.json({ users: [], groups: [] });
 
@@ -37,6 +43,7 @@ router.get('/', requireAuth, async (req, res) => {
        ${galleryJoin('u.id', 'ph')}
        WHERE u.id != $2
          AND u.is_paused = FALSE
+         AND COALESCE(u.is_banned, FALSE) = FALSE
          AND ($3::text IS NULL OR u.school = $3)
          AND (
            u.first_name ILIKE $4 OR u.last_name ILIKE $4
