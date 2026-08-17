@@ -1,6 +1,8 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
+const { audit } = require('../services/auditLog');
+const analytics = require('../services/analytics');
 // The patch as written imported `requireAdmin` — which does NOT exist in this
 // repo (importing it made the admin route handler `undefined`, and Express
 // throws at module load → the server never boots). The real admin gate is
@@ -137,6 +139,43 @@ async function postSafetyAlert({ title, description, fields }) {
   }
 }
 
+// Categories severe enough that even a LONE, first-ever report against
+// someone should page a human immediately — not wait for a second distinct
+// reporter. Must match the frontend's ROOMMATE_SAFETY_REASONS wording
+// exactly (see VALID_CATEGORIES above).
+const HIGH_SEVERITY_CATEGORIES = new Set([
+  'Threats or intimidation',
+  'Physical aggression',
+]);
+
+// Immediate page on a high-severity category, regardless of reporter count.
+// This used to not exist at all: the ONLY alert in this file was
+// maybeAlertPattern below, which requires a SECOND distinct reporter before
+// anything fires — so a lone report of physical aggression or threats was
+// silently indistinguishable from a lone report of "won't respect my
+// space." Fire-and-forget, never throws, never blocks or can fail the
+// POST response.
+async function maybeAlertSeverity(reporterId, reportedId, category) {
+  if (!HIGH_SEVERITY_CATEGORIES.has(category)) return;
+  try {
+    const { rows: u } = await pool.query('SELECT first_name FROM users WHERE id = $1', [reportedId]);
+    const name = u[0]?.first_name || 'a student';
+    await postSafetyAlert({
+      title: '🚨 Roommate safety report — HIGH SEVERITY',
+      description:
+        `**${name}** was just reported for **${category}**. This is a single-report ` +
+        `alert — high-severity categories page immediately, not just on a forming ` +
+        `pattern. Review now: GET /roommate-safety-reports/admin`,
+      fields: [
+        { name: 'Reported user', value: String(reportedId), inline: false },
+        { name: 'Category', value: category, inline: true },
+      ],
+    });
+  } catch (err) {
+    console.error('[roommate-safety-reports] severity alert failed:', err.message);
+  }
+}
+
 // Real-time pattern detector, fired the instant a NEW distinct reporter files
 // against an ALREADY-reported person — so a forming pattern surfaces immediately
 // instead of waiting for someone to load the /admin dashboard. Fire-and-forget
@@ -221,8 +260,22 @@ router.post('/', requireAuth, async (req, res) => {
 
     res.json({ ok: true, id: rows[0].id });
 
-    // Real-time pattern alert — fire-and-forget AFTER the response, so it can
-    // never delay or fail the student's report.
+    // Observability — this route previously had NONE (no audit row, no
+    // analytics event), unlike the generic matches.js report flow it
+    // mirrors. Fire-and-forget, matching every other write path in this
+    // file.
+    audit(req, 'roommate_safety_report.file', { reported: reportedId, category }).catch(() => {});
+    analytics.track(analytics.EVENTS.report_submitted, reporterId, {
+      target_user_id: reportedId,
+      reason: category,
+    });
+
+    // Real-time alerts — fire-and-forget AFTER the response, so they can
+    // never delay or fail the student's report. Two independent triggers:
+    // immediate on a high-severity category (even a lone, first report),
+    // and on a forming pattern (a second distinct reporter against the
+    // same person) — both can fire for the same report.
+    maybeAlertSeverity(reporterId, reportedId, category);
     maybeAlertPattern(reporterId, reportedId);
   } catch (err) {
     console.error('[roommate-safety-reports] POST failed', err);
