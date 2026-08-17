@@ -47,6 +47,11 @@ inject('../middleware/auth', {
   refuseBanned: (_req, _res, next) => next(),
 });
 
+let auditCalls = [];
+inject('../services/auditLog', {
+  audit: async (req, action, details) => { auditCalls.push({ userId: req.user?.id, action, details }); },
+});
+
 const express = require('express');
 const request = require('supertest');
 const app = express();
@@ -56,6 +61,8 @@ app.use('/research', require('./research'));
 const asStudent  = () => { currentUser = { id: 'student-9', email: 'student@ohio.edu' }; };
 const asFounder  = () => { currentUser = { id: 'founder-1', email: 'founder@haveniq.org' }; };
 const asResearch = () => { currentUser = { id: 'r-1', email: 'lab@uni.edu' }; };
+
+test.beforeEach(() => { auditCalls = []; });
 
 // ── Access control ──
 test('a normal student token cannot read the timeline', async () => {
@@ -96,9 +103,43 @@ test('the timeline joins BOTH sides of the pairing, ordered by t', async () => {
   const res = await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
   assert.equal(res.body.count, 3);
   assert.deepEqual(res.body.events.map(e => e.id), ['e1', 'e2', 'e3']);
-  // Both emitters present — that is the whole point of the dataset.
-  assert.deepEqual([...new Set(res.body.events.map(e => e.userId))].sort(), [A, B]);
+  // Both emitters present — that is the whole point of the dataset — but as
+  // two DISTINCT pseudonyms, not the raw ids (see the de-identification
+  // block below for the full pseudonymization contract).
+  assert.equal(new Set(res.body.events.map(e => e.userId)).size, 2);
   assert.match(lastSql, /ORDER BY t ASC/);
+});
+
+// ── De-identification (the fix) ──
+// Raw user_id/pair_id were trivially reversible by any research-role
+// account via the ordinary GET /users/:id lookup every user already has.
+// These lock: no raw id anywhere in the response, pseudonyms are STABLE
+// (same real id -> same pseudonym every time, across both endpoints), and
+// a real GET /research/... call is audit-logged with the REAL pairKey.
+test('no raw user id or pair key ever appears in the timeline response', async () => {
+  asFounder();
+  const res = await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
+  const body = JSON.stringify(res.body);
+  assert.ok(!body.includes(A), 'real id A must not leak into the response');
+  assert.ok(!body.includes(B), 'real id B must not leak into the response');
+  assert.ok(!body.includes(PAIR_KEY), 'the real pairKey must not leak into the response');
+});
+
+test('the SAME real id always pseudonymizes to the SAME value (de-identified, not de-linked)', async () => {
+  asFounder();
+  const res1 = await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
+  const res2 = await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
+  assert.deepEqual(res1.body.events.map(e => e.userId), res2.body.events.map(e => e.userId));
+  assert.equal(res1.body.pairKey, res2.body.pairKey);
+});
+
+test('the pseudonym is stable across BOTH research endpoints for the same real id', async () => {
+  asFounder();
+  const timeline = await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
+  const bulk = await request(app).get('/research/pair-events?since=0');
+  const timelinePseudo = timeline.body.events.find(e => e.id === 'e1').userId;
+  const bulkPseudo = bulk.body.events.find(e => e.id === 'e1').userId;
+  assert.equal(timelinePseudo, bulkPseudo, 'the same underlying user must pseudonymize identically everywhere');
 });
 
 test('t is a number, so the set compares directly with the client export', async () => {
@@ -156,4 +197,30 @@ test('vocabulary drift is surfaced rather than hidden', async () => {
   asFounder();
   const res = await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
   assert.deepEqual(res.body.summary.unknownSubtypes, [], 'all known today');
+});
+
+// ── Audit logging (the fix) ──
+// This was the one surface described in its own comment as the highest
+// re-identification risk in the app, and previously had ZERO audit trail.
+test('reading the timeline is audit-logged with the REAL pairKey, by the caller', async () => {
+  asFounder();
+  await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
+  assert.equal(auditCalls.length, 1);
+  assert.equal(auditCalls[0].userId, 'founder-1');
+  assert.equal(auditCalls[0].action, 'research.timeline.view');
+  assert.equal(auditCalls[0].details.pairKey, PAIR_KEY, 'audit trail keeps the real key even though the response does not');
+});
+
+test('reading the bulk export is also audit-logged', async () => {
+  asFounder();
+  await request(app).get('/research/pair-events?since=100&limit=2');
+  assert.equal(auditCalls.length, 1);
+  assert.equal(auditCalls[0].action, 'research.pairEvents.export');
+  assert.deepEqual(auditCalls[0].details, { since: 100, limit: 2 });
+});
+
+test('a 403 (unauthorized) request is never audit-logged as a real access', async () => {
+  asStudent();
+  await request(app).get(`/research/pairs/${PAIR_KEY}/timeline`);
+  assert.equal(auditCalls.length, 0, 'requireResearch runs before the handler, so a blocked request never reaches audit()');
 });

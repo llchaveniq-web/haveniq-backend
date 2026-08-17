@@ -10,12 +10,26 @@
  *
  * Everything here is read-only, and reports what the stream actually sent. A
  * pairing with no outcome comes back with no outcome.
+ *
+ * Two hardening fixes on top of the above:
+ *   - Responses are pseudonymized (lib/researchPseudonym.js) — raw ids were
+ *     trivially reversible by any research-role account via the ordinary
+ *     GET /users/:id lookup every user already has, which defeated the
+ *     de-identification this surface's own doc comment implies.
+ *   - Every read is audit-logged. This was, by its own description, the
+ *     one surface with the highest re-identification blast radius in the
+ *     app, and it previously had ZERO audit trail — unlike every other
+ *     sensitive admin surface (admin.js, adminSafety.js, support.js,
+ *     plaid.js), which all call audit(). If a research credential were
+ *     compromised or misused, there was no record to investigate it with.
  */
 
 const router = require('express').Router();
 const { requireAuth } = require('../middleware/auth');
 const { requireResearch } = require('../middleware/requireResearch');
 const pairEvents = require('../services/pairEvents');
+const { pseudoPairKey, pseudonymizeEvent } = require('../lib/researchPseudonym');
+const { audit } = require('../services/auditLog');
 
 const MAX_LIMIT = 50000;
 
@@ -40,9 +54,12 @@ router.get('/pairs/:pairKey/timeline', requireAuth, requireResearch, async (req,
   try {
     const pairKey = String(req.params.pairKey || '');
     if (!pairKey) return res.status(400).json({ error: 'pairKey required' });
-    const events = await pairEvents.timeline(pairKey);
+    // Audit logs the REAL pairKey (an investigation into misuse needs it);
+    // the response below carries only the pseudonym.
+    audit(req, 'research.timeline.view', { pairKey }).catch(() => {});
+    const events = (await pairEvents.timeline(pairKey)).map(pseudonymizeEvent);
     res.json({
-      pairKey,
+      pairKey: pseudoPairKey(pairKey),
       count: events.length,
       events,                        // [] when this pair has emitted nothing yet
       summary: summarize(events),
@@ -65,7 +82,8 @@ router.get('/pair-events', requireAuth, requireResearch, async (req, res) => {
       ? Math.min(MAX_LIMIT, Math.max(1, Math.trunc(rawLimit)))
       : MAX_LIMIT;
 
-    const events = await pairEvents.since(sinceMs, limit);
+    audit(req, 'research.pairEvents.export', { since: sinceMs, limit }).catch(() => {});
+    const events = (await pairEvents.since(sinceMs, limit)).map(pseudonymizeEvent);
     res.json({
       since: sinceMs,
       count: events.length,

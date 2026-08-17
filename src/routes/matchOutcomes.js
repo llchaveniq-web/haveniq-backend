@@ -25,7 +25,8 @@ const STRESS_STRETCH_VALUES = new Set(['smooth', 'bumpy', 'clashed']);
 
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
-const { screenMessage } = require('../lib/contentFilter');
+const { sanitizeNoteText } = require('../lib/textSanitize');
+const { maybePageSafety } = require('../services/checkinSafety');
 
 // Two users are "connected" when an accepted connect_request exists in EITHER
 // direction — same relationship userPhotos.js's areConnected() treats as a
@@ -49,8 +50,6 @@ async function areConnected(a, b) {
   );
   return rows.length > 0;
 }
-const sentry = require('../utils/sentry');
-const DISCORD_HOOK = process.env.DISCORD_WEBHOOK_URL || '';
 
 const ALLOWED_OUTCOMES = new Set([
   'met_in_person',
@@ -213,71 +212,17 @@ let _predColsBackfilled = false;
 // safety filter (egregious content dropped, not stored) and a PII scrub
 // (emails / phone numbers / @handles) before it lands — the founder and the
 // weight-learning step read these, and a note can name the other person.
+// sanitizeNoteText/maybePageSafety are shared with pulses.js (see
+// lib/textSanitize.js and services/checkinSafety.js) so this exact
+// cleaning/crisis-detection logic can't drift between the two check-in
+// surfaces that both take a free-text note about a roommate.
 function sanitizeDetails(details) {
   if (!details || typeof details !== 'object' || Array.isArray(details)) return details ?? null;
   const out = { ...details };
   if (typeof out.note === 'string' && out.note.trim()) {
-    let note = out.note.trim().slice(0, 2000)
-      .replace(/\b[\w.+-]+@[\w-]+\.[\w.-]+\b/gi, '[redacted]')  // emails
-      .replace(/(\+?\d[\d\s().-]{7,}\d)/g, '[redacted]')        // phone numbers
-      .replace(/@[A-Za-z0-9_.]{2,}/g, '[redacted]');           // social handles
-    try {
-      const screen = screenMessage(note);
-      if (screen && screen.action === 'block') note = '[removed by safety filter]';
-    } catch { /* screening is best-effort; never block the structured outcome */ }
-    out.note = note;
+    out.note = sanitizeNoteText(out.note);
   }
   return out;
-}
-
-// Safety push. A check-in note that trips the crisis (self-harm) or threat
-// filter shouldn't wait for someone to pull the flags endpoint — page the
-// founder now. Fire-and-forget: a webhook failure must never reach the student,
-// and the excerpt is the ALREADY PII-redacted stored note, capped short.
-function maybePageSafety(reporterId, rawDetails, sanitized) {
-  try {
-    const rawNote = rawDetails && typeof rawDetails.note === 'string' ? rawDetails.note : '';
-    if (!rawNote.trim()) return;
-    const screen = screenMessage(rawNote);
-    const isCrisis = !!screen.crisis;                                      // self-harm language
-    const isThreat = screen.action === 'block' && screen.category === 'threat';
-    if (!isCrisis && !isThreat) return;
-    pageCheckinSafetyFlag({
-      reporterId,
-      stage: (rawDetails && rawDetails.stage) || null,
-      kind:  isCrisis ? 'crisis' : 'threat',
-      noteExcerpt: (sanitized && typeof sanitized.note === 'string' ? sanitized.note : '').slice(0, 300),
-    }).catch(() => {});
-  } catch { /* never throw into the request path */ }
-}
-
-async function pageCheckinSafetyFlag({ reporterId, stage, kind, noteExcerpt }) {
-  const crisis = kind === 'crisis';
-  try {
-    sentry.captureError(new Error('signal:checkin_safety_flag'), { kind, reporterId, stage });
-  } catch { /* best-effort */ }
-  if (!DISCORD_HOOK) return;
-  await fetch(DISCORD_HOOK, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      embeds: [{
-        title: crisis
-          ? '\u{1F6A8} signal:checkin_safety_flag — CRISIS'
-          : '\u{1F6A8} signal:checkin_safety_flag — THREAT',
-        description: crisis
-          ? 'A student’s check-in note tripped the self-harm / crisis filter. Reach out — they may need support (988).'
-          : 'A student’s check-in note tripped the threat filter. Review and follow up.',
-        color: 0xC0392B,
-        fields: [
-          { name: 'Reporter (user id)', value: `\`${reporterId || '?'}\``, inline: true },
-          { name: 'Stage', value: `\`${stage || '?'}\``, inline: true },
-          { name: 'Note (PII-redacted)', value: (noteExcerpt || '—').slice(0, 900), inline: false },
-        ],
-        footer: { text: 'Check-in safety • paged on crisis/threat filter hit' },
-      }],
-    }),
-  }).catch(() => {});
 }
 
 // ── POST /users/me/match-outcomes ──────────────────────────────────────
@@ -421,7 +366,13 @@ router.post('/me/match-outcomes', requireAuth, async (req, res) => {
 
     res.json({ recorded: true });
     // Page on a crisis/threat note AFTER responding — best-effort, non-blocking.
-    maybePageSafety(req.user.id, details, sanitized);
+    maybePageSafety({
+      reporterId: req.user.id,
+      rawNote: details && typeof details.note === 'string' ? details.note : '',
+      sanitizedNote: sanitized && typeof sanitized.note === 'string' ? sanitized.note : '',
+      stage: (details && details.stage) || null,
+      source: 'match-outcome',
+    });
   } catch (err) {
     console.error('[match-outcomes] insert failed:', err);
     res.status(500).json({ error: 'failed to record outcome' });

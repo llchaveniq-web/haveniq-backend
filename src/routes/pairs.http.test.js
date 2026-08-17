@@ -43,6 +43,11 @@ inject('../middleware/auth', {
   refuseBanned: (_q, _s, n) => n(),
 });
 
+let auditCalls = [];
+inject('../services/auditLog', {
+  audit: async (req, action, details) => { auditCalls.push({ userId: req.user?.id, action, details }); },
+});
+
 const express = require('express');
 const request = require('supertest');
 const app = express();
@@ -67,6 +72,7 @@ const evt = (over = {}) => ({
 
 test.beforeEach(() => {
   stored = []; timelineRows = []; consented = new Set([PAIR]);
+  auditCalls = [];
   asUser(A);
   require('../services/pairEvents')._resetTableReady();
 });
@@ -188,4 +194,35 @@ test('an empty pair returns an honest empty timeline', async () => {
   assert.equal(res.body.count, 0);
   assert.deepEqual(res.body.events, []);
   assert.deepEqual(res.body.episodes, []);
+});
+
+// ── De-identification + audit logging (the fix) ──
+// Same fix as routes/research.js — this timeline route is the OTHER surface
+// that returns both sides of a real pairing to a human, gated the same way.
+test('no raw user id or pair key appears anywhere in the timeline response', async () => {
+  timelineRows = [
+    { id: 'a', user_id: A, pair_id: B, pair_key: PAIR, t: '100', kind: 'signal', subtype: 'conflict_flagged', topic: 'dishes', value: null, meta: null, episode_id: 'ep-1', arm: 'intervention', created_at: 'c1' },
+  ];
+  asUser('founder-1');
+  const res = await getTimeline();
+  const body = JSON.stringify(res.body);
+  assert.ok(!body.includes(A), 'real id A must not leak into the response');
+  assert.ok(!body.includes(B), 'real id B must not leak into the response');
+  assert.ok(!body.includes(PAIR), 'the real pairKey must not leak into the response');
+  assert.equal(new Set([res.body.events[0].userId, res.body.events[0].pairId]).size, 2, 'still two distinct (pseudonymized) people');
+});
+
+test('reading the timeline is audit-logged with the REAL pairKey', async () => {
+  asUser('founder-1');
+  await getTimeline();
+  assert.equal(auditCalls.length, 1);
+  assert.equal(auditCalls[0].userId, 'founder-1');
+  assert.equal(auditCalls[0].action, 'research.pairs.timeline.view');
+  assert.equal(auditCalls[0].details.pairKey, PAIR, 'audit trail keeps the real key even though the response does not');
+});
+
+test('a 403 (unauthorized) request to the timeline is never audit-logged as a real access', async () => {
+  asUser('stranger-9');
+  await getTimeline();
+  assert.equal(auditCalls.length, 0);
 });
