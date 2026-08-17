@@ -359,7 +359,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // still saw, and scored high with, excluded genders). Empty preference or an
     // undeclared / "Prefer not to say" gender stays inclusive.
     const { rows: meUserRows } = await pool.query(
-      `SELECT gender, looking_for, match_dealbreakers, is_verified,
+      `SELECT gender, looking_for, match_dealbreakers,
               school, budget_min, budget_max, move_in_timeline
          FROM users WHERE id = $1`,
       [userId],
@@ -559,20 +559,6 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       }
     })();
 
-    // An empty feed reads identically to the client whether it's a genuine
-    // cold-start (no compatible pool yet) or the viewer's own account is
-    // still pending signup review — scoreNewMatches() in quiz.js never
-    // scores an unverified user against anyone, on either side of the pair,
-    // so a pending-review account gets EXACTLY this response indefinitely,
-    // with nothing distinguishing it from "nobody's joined yet." The
-    // frontend's cold-start copy ("we'll match you the second a compatible
-    // student joins") is actively wrong for that user — the real blocker is
-    // review, not pool size. `reason` lets the client tell the two apart;
-    // omitted (not just falsy) when there's nothing unusual to report, so
-    // existing "matches.length === 0" checks on the array itself keep working.
-    if (matches.length === 0 && meUserRows[0]?.is_verified !== true) {
-      return res.json({ matches, reason: 'pending_review' });
-    }
     res.json(matches);
   } catch (err) {
     console.error(err);
