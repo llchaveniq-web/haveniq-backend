@@ -4,6 +4,7 @@ const pool    = require('../db/pool');
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
+const { aiLimiter } = require('../middleware/rateLimits');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
 const { checkPhotoSafety } = require('../services/photoSafety');
 const { applyPrimaryPhotoChange } = require('../lib/primaryPhoto');
@@ -742,7 +743,13 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
 //
 // Cost: ~$0.003 per check (one Claude vision call, small image). At 100
 // new signups/month + occasional re-uploads ≈ ~$1/month at scale.
-router.post('/me/photo/quality-check', requireAuth, refuseBanned, async (req, res) => {
+//
+// aiLimiter (40/hour/user) matches every other Claude-calling route in the
+// app (matches.js's openers/explain) — this one was missing it, so a
+// script could loop calls here well past the 100/normal-signup budget this
+// route's own cost comment assumes. Every other AI route in the codebase
+// already carries it; this was the one gap.
+router.post('/me/photo/quality-check', requireAuth, refuseBanned, aiLimiter, async (req, res) => {
   const { url } = req.body || {};
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'photo url required' });
@@ -750,6 +757,23 @@ router.post('/me/photo/quality-check', requireAuth, refuseBanned, async (req, re
   // Basic URL sanity — only accept HTTPS URLs from our Cloudinary CDN.
   if (!/^https:\/\/res\.cloudinary\.com\//.test(url)) {
     return res.status(400).json({ error: 'only Cloudinary-hosted photos accepted' });
+  }
+  // Ownership — the domain check above only proves it's SOME Cloudinary
+  // asset, not that it's THIS user's. Cloudinary public_ids are
+  // deterministic (haveniq/users/<id> for the primary photo,
+  // haveniq/users/<id>/gallery/<uuid> for gallery photos — see
+  // services/cloudinary.js), so any authenticated caller could otherwise
+  // point this at another public Cloudinary asset (anyone's, on any
+  // account) and get free, repeated Claude-vision analysis run against it
+  // at HavenIQ's expense — the rate limit above caps volume per caller,
+  // but without this check it still caps abuse of OTHER people's images,
+  // not just their own.
+  let requestedPath;
+  try { requestedPath = new URL(url).pathname; } catch { requestedPath = ''; }
+  const escapedId = String(req.user.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ownsPhoto = new RegExp(`(?:^|/)haveniq/users/${escapedId}(?:\\.[a-zA-Z0-9]+|/gallery/[^/]+)?(?:$|[/?])`).test(requestedPath);
+  if (!ownsPhoto) {
+    return res.status(403).json({ error: 'you can only quality-check your own photo' });
   }
 
   try {
@@ -1077,7 +1101,13 @@ function hashAnswers(rows) {
   return h.toString(16);
 }
 
-router.get('/me/about-you', requireAuth, async (req, res) => {
+// aiLimiter matches every other Claude-calling route (matches.js's
+// openers/explain, and quality-check above) — the DB cache below already
+// makes repeat hits with unchanged answers free (cache-hit, no Claude
+// call), but a user could still force real calls by repeatedly changing
+// their own answers between requests. Lower risk than the uncached
+// quality-check route, but the same defense costs nothing to add.
+router.get('/me/about-you', requireAuth, aiLimiter, async (req, res) => {
   await ensureAboutYouTable();
   const userId = req.user.id;
 
