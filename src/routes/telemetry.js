@@ -287,12 +287,19 @@ router.get('/my-data', requireAuth, async (req, res) => {
   }
 });
 
-// ─── DELETE /telemetry/my-data ───────────────────────────────────────────
-// GDPR Article 17 — Right to Erasure. Wipes every telemetry event AND the
-// per-user profile snapshot for this user. The user account itself stays
-// (handled by a separate /users/me DELETE endpoint if you build one).
-router.delete('/my-data', requireAuth, async (req, res) => {
-  const userId = req.user.id;
+// ─── eraseUserTelemetry ───────────────────────────────────────────────────
+// GDPR Article 17 — Right to Erasure. Wipes every telemetry event, the
+// per-user profile snapshot, pair_events, and conflict_pulses for this user.
+// Exported (see module.exports below, same pattern as sentryTunnel.js's
+// reportServerError) so DELETE /users/me can call it too — these four
+// tables use plain TEXT user_id columns with NO foreign key to users (see
+// their CREATE TABLE statements in services/pairEvents.js and
+// services/conflictPulses.js), so deleting the users row does nothing to
+// them on its own; without this, they silently survived account deletion
+// while the app told the student their data was "permanently removed."
+// conflict_pulses wasn't erased by the ORIGINAL version of this route
+// either — same class of gap, closed here rather than left for later.
+async function eraseUserTelemetry(userId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -317,14 +324,37 @@ router.delete('/my-data', requireAuth, async (req, res) => {
       // Table may not exist yet on a fresh DB — nothing to erase in that case.
       if (e.code !== '42P01') throw e;
     }
+    // Same reasoning as pair_events above — conflict_pulses is the other
+    // no-FK longitudinal table (see services/conflictPulses.js).
+    let conflictPulsesDeleted = 0;
+    try {
+      const r = await client.query('DELETE FROM conflict_pulses WHERE user_id = $1', [userId]);
+      conflictPulsesDeleted = r.rowCount;
+    } catch (e) {
+      if (e.code !== '42P01') throw e;
+    }
     await client.query('COMMIT');
-    res.json({ deleted: true, eventsDeleted, pairEventsDeleted });
+    return { eventsDeleted, pairEventsDeleted, conflictPulsesDeleted };
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Telemetry deletion failed:', err);
-    res.status(500).json({ error: 'deletion failed' });
+    throw err;
   } finally {
     client.release();
+  }
+}
+
+// ─── DELETE /telemetry/my-data ───────────────────────────────────────────
+// GDPR Article 17 — Right to Erasure, self-service entry point (the user
+// keeps their account but wants their behavioral data gone). The account-
+// deletion entry point is DELETE /users/me, which calls eraseUserTelemetry
+// too — see that route for why it doesn't just rely on this one.
+router.delete('/my-data', requireAuth, async (req, res) => {
+  try {
+    const result = await eraseUserTelemetry(req.user.id);
+    res.json({ deleted: true, ...result });
+  } catch (err) {
+    console.error('Telemetry deletion failed:', err);
+    res.status(500).json({ error: 'deletion failed' });
   }
 });
 
@@ -468,3 +498,4 @@ router.get('/reports/mine', requireAuth, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.eraseUserTelemetry = eraseUserTelemetry;

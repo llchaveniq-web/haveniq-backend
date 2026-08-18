@@ -19,6 +19,7 @@ const rateLimit = require('../lib/rateLimit');
 const { ipKeyGenerator } = require('../lib/rateLimit');
 const { sendParentInviteEmail, generateOTP, sendOTPEmail } = require('../services/email');
 const { reportServerError } = require('./sentryTunnel');
+const { eraseUserTelemetry } = require('./telemetry');
 
 // 10 MB image cap — generous for a modern phone photo, still prevents
 // abuse. Held in memory (no temp files on Railway's ephemeral disk) and
@@ -604,6 +605,18 @@ router.get('/me/export', requireAuth, async (req, res) => {
 // compatibility_scores, profile_views, etc. Cloudinary asset is removed
 // separately (best-effort) so we don't keep orphan photos in storage.
 //
+// telemetry_events / pair_events / conflict_pulses / user_profile_snapshot
+// use plain TEXT user_id columns with NO foreign key to users (see
+// eraseUserTelemetry in telemetry.js), so the cascade above never touches
+// them — this route used to just leave them in place while telling the
+// student "your data has been permanently removed," which wasn't true for
+// four tables holding exactly the sensitive longitudinal/behavioral data
+// most worth actually deleting. Awaited (not fire-and-forget like the
+// photo cleanup) so a genuine failure is caught and reported below, but a
+// failure here still doesn't block the account deletion itself — a user
+// who wants to leave and can't because of an unrelated telemetry-table
+// hiccup is a worse outcome than a rare, reported, partial cleanup.
+//
 // refuseBanned is deliberate here (unlike login/support routes, which stay
 // open to banned users so they can sign in and appeal): without it, a
 // banned account could delete itself and re-signup with the same email —
@@ -619,6 +632,17 @@ router.delete('/me', requireAuth, refuseBanned, async (req, res) => {
 
     // Best-effort photo cleanup — never block account deletion on this.
     deleteProfilePhoto(req.user.id).catch(() => {});
+
+    try {
+      await eraseUserTelemetry(req.user.id);
+    } catch (telemetryErr) {
+      reportServerError({
+        message: `Account deletion: telemetry erasure failed: ${telemetryErr && telemetryErr.message ? telemetryErr.message : 'unknown error'}`,
+        stack: telemetryErr && telemetryErr.stack,
+        route: 'DELETE /users/me',
+        userId: req.user.id,
+      });
+    }
 
     const { rowCount } = await pool.query(
       'DELETE FROM users WHERE id = $1',
