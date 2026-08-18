@@ -9,6 +9,7 @@
 // shipped — so the daily 60-day founder-outreach cron never surfaced a
 // single real pair, and match_outcomes.survey_60d (the input the
 // weight-learning loop needs 50 of) never accumulated. node --test.
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test_secret_at_least_thirty_two_chars_long_xxxx';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 

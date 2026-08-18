@@ -6,6 +6,7 @@
 // still counts toward livedWithCount (neutral fact) but is never quoted or
 // counted positive; zero qualifying rows returns null, not a zeroed object.
 // node --test.
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test_secret_at_least_thirty_two_chars_long_xxxx';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 

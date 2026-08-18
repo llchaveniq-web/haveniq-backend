@@ -13,6 +13,7 @@
 // publish, and tests sign real JWTs with the private half — this exercises
 // the actual crypto.createPublicKey/jwt.verify path, not a stubbed verdict.
 // node --test.
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test_secret_at_least_thirty_two_chars_long_xxxx';
 const test = require('node:test');
 const assert = require('node:assert');
 const crypto = require('crypto');

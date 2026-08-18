@@ -27,6 +27,7 @@
 //
 // Pool stubbed; real scoring/dimension/drift/text-insight services run for
 // real (they're pure computation once given empty DB inputs). node --test.
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test_secret_at_least_thirty_two_chars_long_xxxx';
 const test = require('node:test');
 const assert = require('node:assert');
 

@@ -60,7 +60,18 @@ test('fails closed: encrypted value read with wrong/missing key → null (never 
 test('fails closed: tampered ciphertext → null (GCM auth)', () => {
   withKey('a-strong-32+char-key-for-testing-000', () => {
     const enc = encryptToken(TOKEN);
-    const tampered = enc.slice(0, -2) + (enc.endsWith('A') ? 'B' : 'A');
+    // Flip a real decoded byte, not a base64 CHARACTER — flipping a text
+    // character is unreliable: depending on where it lands in the base64
+    // quantum, the flipped bits can fall entirely within the unused
+    // padding bits of that character, which decode to the SAME byte value
+    // despite the string being textually different (confirmed empirically
+    // flaky for totpCrypto's SECRET length; low but nonzero risk here too).
+    // Bit-flipping a real decoded byte and re-encoding has no such
+    // alignment ambiguity.
+    const prefix = 'enc:v1:';
+    const buf = Buffer.from(enc.slice(prefix.length), 'base64');
+    buf[buf.length - 1] ^= 0xff;
+    const tampered = prefix + buf.toString('base64');
     assert.equal(decryptToken(tampered), null);
   });
 });
