@@ -19,6 +19,14 @@ function inject(relPath, exportsObj) {
 }
 
 let deleteCalls = [];
+// eraseUserTelemetry (called by DELETE /me, see telemetry.js) uses
+// pool.connect() for its own transaction, not pool.query() directly — a
+// bare { query } mock would make it throw and silently fall into the
+// best-effort catch path on every run of this file's tests, without
+// either exercising or asserting the real erasure flow. Give it a working
+// connected client too so "a non-banned user can delete their account"
+// below is actually testing the full success path, not accidentally
+// always testing the failure fallback.
 inject('../db/pool', {
   query: async (sql, params) => {
     if (/DELETE FROM users WHERE id = \$1/.test(sql)) {
@@ -27,6 +35,13 @@ inject('../db/pool', {
     }
     return { rows: [], rowCount: 0 };
   },
+  connect: async () => ({
+    query: async (sql) => {
+      if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql)) return {};
+      return { rowCount: 0 };
+    },
+    release: () => {},
+  }),
 });
 
 let currentUserBanned = false;
