@@ -10,9 +10,12 @@
 --  IF NOT EXISTS makes this safe to re-run.
 --
 --  Security note: access_token is a server-side secret. Never expose it
---  via the API. In production we should encrypt at rest (pgcrypto or
---  app-level AES); sandbox usage doesn't expose real money but we should
---  still treat it carefully.
+--  via the API. Encrypted at rest at the application layer (AES-256-GCM,
+--  see lib/plaidCrypto.js) whenever PLAID_TOKEN_ENC_KEY is set on Railway —
+--  no schema change needed, the column stays TEXT and transparently holds
+--  either a legacy plaintext value or an `enc:v1:...` ciphertext. With no
+--  key configured, reads/writes fall back to plaintext (deploy-safe, not a
+--  security default — set the key before any real Plaid credentials go live).
 -- ═══════════════════════════════════════════════════════════════
 
 BEGIN;
