@@ -602,7 +602,13 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
 // suites[0]; the full screen uses 3) — NOT the apartment size. Returns
 // { suites: [] } whenever the eligible pool can't form even one valid group.
 const SUITE_POOL_CAP = 80;
-router.get('/suites', requireAuth, async (req, res) => {
+// suspicious.track, same non-blocking audit-log+alert pattern /feed uses
+// below — this route was the one candidate-pool route with NO visibility
+// into repeat hammering at all. Threshold set lower than /feed's 100/5min
+// (a plain SELECT) since each call here also runs an O(pool²) suite-
+// optimization pass over up to SUITE_POOL_CAP candidates — meaningfully
+// more expensive per hit, so it deserves to flag sooner, not later.
+router.get('/suites', requireAuth, suspicious.track('matches.suites', 30), async (req, res) => {
   try {
     const userId = req.user.id;
     const count = Math.min(10, Math.max(1, parseInt(req.query.size, 10) || 1));

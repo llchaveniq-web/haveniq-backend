@@ -54,6 +54,11 @@ inject('../middleware/auth', {
   refuseBanned: (req, res, next) => (req.user?.is_banned ? res.status(403).json({ banned: true }) : next()),
 });
 inject('../middleware/suspiciousActivity', { track: () => (_req, _res, next) => next() });
+// aiLimiter is now on this route (see aiCostRateLimitWiring.test.js for the
+// wiring guard) — stubbed to a pass-through here, same convention as
+// matches.explainOpeners.http.test.js, so real express-rate-limit/IP
+// extraction never becomes a factor for these route-logic tests.
+inject('../middleware/rateLimits', { aiLimiter: (_req, _res, next) => next() });
 inject('../services/email', { sendParentInviteEmail: async () => {}, generateOTP: () => '123456', sendOTPEmail: async () => {} });
 inject('./sentryTunnel', { reportServerError: () => {} });
 
@@ -103,6 +108,28 @@ test('400 when the url is not Cloudinary-hosted (no SSRF to arbitrary hosts)', a
   const res = await post({ url: 'https://evil.example.com/x.jpg' });
   assert.equal(res.status, 400);
   assert.match(res.body.error, /Cloudinary/i);
+});
+
+// ── Ownership (the domain check alone doesn't prove it's THIS user's photo) ──
+test('403 when the Cloudinary URL belongs to a DIFFERENT user\'s primary photo', async () => {
+  const res = await post({ url: 'https://res.cloudinary.com/haveniq/image/upload/v1/haveniq/users/someone-else.jpg' });
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /your own photo/i);
+});
+
+test('403 when the Cloudinary URL belongs to a different user\'s GALLERY photo', async () => {
+  const res = await post({ url: 'https://res.cloudinary.com/haveniq/image/upload/v1/haveniq/users/someone-else/gallery/abc-123.jpg' });
+  assert.equal(res.status, 403);
+});
+
+test('403 on a near-miss id (prefix collision must not pass — e.g. "user-me2" must not match "user-me")', async () => {
+  const res = await post({ url: 'https://res.cloudinary.com/haveniq/image/upload/v1/haveniq/users/user-me2.jpg' });
+  assert.equal(res.status, 403);
+});
+
+test('200 when the URL is this user\'s own GALLERY photo, not just the primary one', async () => {
+  const res = await post({ url: 'https://res.cloudinary.com/haveniq/image/upload/v1/haveniq/users/user-me/gallery/abc-123.jpg' });
+  assert.equal(res.status, 200);
 });
 
 // ── Safe path ──
