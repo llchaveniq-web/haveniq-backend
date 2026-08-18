@@ -26,6 +26,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { audit } = require('../services/auditLog');
 const analytics = require('../services/analytics');
+const { encryptToken, decryptToken } = require('../lib/plaidCrypto');
 const {
   Configuration, PlaidApi, PlaidEnvironments,
   Products, CountryCode,
@@ -114,8 +115,16 @@ router.get('/transactions', requireAuth, async (req, res) => {
     if (rows.length === 0) {
       return res.json({ connected: false, transactions: [], institutionName: null });
     }
-    const accessToken     = rows[0].access_token;
+    const accessToken     = decryptToken(rows[0].access_token);
     const institutionName = rows[0].institution_name;
+    // decryptToken returns null on a wrong/missing key or tampered ciphertext
+    // — fail closed rather than calling Plaid with garbage (which would
+    // otherwise surface as a confusing Plaid-side error instead of an
+    // honest one).
+    if (accessToken == null) {
+      console.error('[plaid/transactions] could not decrypt stored access_token for user', req.user.id);
+      return res.status(500).json({ error: 'Could not load transactions.' });
+    }
 
     const today = new Date();
     const start = new Date(today.getTime() - days * 24 * 60 * 60 * 1000);
@@ -221,7 +230,7 @@ router.post('/exchange', requireAuth, async (req, res) => {
              account_mask     = EXCLUDED.account_mask,
              is_active        = TRUE,
              updated_at       = NOW()`,
-      [req.user.id, itemId, accessToken, institutionName, institutionId, accountMask],
+      [req.user.id, itemId, encryptToken(accessToken), institutionName, institutionId, accountMask],
     );
 
     audit(req, 'plaid.connect', { institution: institutionName || null }).catch(() => {});
@@ -281,7 +290,9 @@ router.post('/disconnect', requireAuth, async (req, res) => {
     );
     if (client) {
       for (const r of rows) {
-        try { await client.itemRemove({ access_token: r.access_token }); }
+        const accessToken = decryptToken(r.access_token);
+        if (accessToken == null) continue; // undecryptable row — nothing to tell Plaid, DB update below still runs
+        try { await client.itemRemove({ access_token: accessToken }); }
         catch (_) { /* fire-and-forget — Plaid may already have removed it */ }
       }
     }
