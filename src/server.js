@@ -409,6 +409,7 @@ app.use('/',         require('./routes/activityPulse'));  // /activity-pulse
 app.use('/messages', require('./routes/messages'));
 app.use('/agreements', require('./routes/agreements')); // shared roommate agreement per conversation
 app.use('/telemetry', require('./routes/telemetry'));
+app.use('/analytics', require('./routes/analytics')); // named-event mirror to server-side PostHog (AnalyticsAPI.trackEvent)
 // Longitudinal pair dataset export. Research-role only — it is the one surface
 // that joins both sides of a pairing (see routes/research.js).
 app.use('/research', require('./routes/research'));

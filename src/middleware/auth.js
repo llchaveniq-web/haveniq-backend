@@ -131,10 +131,13 @@ async function optionalAuth(req, res, next) {
  */
 function refuseBanned(req, res, next) {
   if (req.user?.is_banned) {
+    // ban_reason is a moderator's free-text triage note — the 2026-05-24
+    // migration that adds the column says explicitly it's "founder-only,
+    // never shown to the banned user" (it can name the report/reporter
+    // that triggered the ban). Do not put it in the response body.
     return res.status(403).json({
-      error:     'Your account has been suspended. Contact support@haveniq.org if you believe this is in error.',
-      banned:    true,
-      banReason: req.user.ban_reason || null,
+      error:  'Your account has been suspended. Contact support@haveniq.org if you believe this is in error.',
+      banned: true,
     });
   }
   next();

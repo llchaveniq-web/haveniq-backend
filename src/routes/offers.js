@@ -2,6 +2,7 @@ const router = require('express').Router();
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
+const { quickAction } = require('../middleware/rateLimits');
 
 // ─── Partner offers — resource lead-gen ──────────────────────────────────
 //
@@ -33,8 +34,10 @@ router.get('/', requireAuth, async (req, res) => {
 
 // ── POST /offers/:id/click ───────────────────────────────────────────────
 // Records a click and returns the destination URL. The incremented
-// click_count is the billable pay-per-lead figure for that partner.
-router.post('/:id/click', requireAuth, async (req, res) => {
+// click_count is the billable pay-per-lead figure for that partner, so it
+// gets the same per-user/IP rate limit as other low-cost writes (60/hour) —
+// without it, a scripted loop could inflate what a partner gets billed for.
+router.post('/:id/click', requireAuth, quickAction, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE partner_offers
