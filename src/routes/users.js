@@ -646,8 +646,17 @@ router.get('/:id', requireAuth, suspicious.track('profile.lookup', 50), async (r
               ph.urls AS photo_urls
        FROM users u
        ${galleryJoin('u.id', 'ph')}
-       WHERE u.id = $1 AND u.is_paused = FALSE`,
-      [req.params.id]
+       WHERE u.id = $1 AND u.is_paused = FALSE AND COALESCE(u.is_banned, FALSE) = FALSE
+         -- Same block honoring as messages.js/matches.js — a block must
+         -- actually stop the blocked side from reading the other's profile,
+         -- not just hide the conversation. Checked both directions so
+         -- neither party can look the other up once either has blocked.
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks ub
+           WHERE (ub.blocker_id = $2 AND ub.blocked_id = u.id)
+              OR (ub.blocker_id = u.id AND ub.blocked_id = $2)
+         )`,
+      [req.params.id, req.user.id]
     );
 
     if (!rows[0]) return res.status(404).json({ error: 'User not found' });

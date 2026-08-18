@@ -14,6 +14,7 @@ const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { textToSpeech, transcribe } = require('../services/voice');
 const { analyzeVoiceEmotion } = require('../services/voiceEmotion');
 const analytics = require('../services/analytics');
+const { aiLimiter } = require('../middleware/rateLimits');
 const multer = require('multer');
 
 // In-memory upload for voice-interview audio answers (<= 25 MB).
@@ -244,7 +245,7 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
 
 // ── POST /quiz/submit ─────────────────────────────────────────────────────
 // Final submission — marks complete, triggers async match scoring
-router.post('/submit', requireAuth, async (req, res) => {
+router.post('/submit', requireAuth, aiLimiter, async (req, res) => {
   try {
     const { answers } = req.body || {};
     const err = validateAnswers(answers);
@@ -843,7 +844,7 @@ router.get('/personality', requireAuth, async (req, res) => {
 // ── POST /quiz/voice/tts ──────────────────────────────────────────────────
 // Text -> spoken audio (mp3). The voice-interview screen calls this to play
 // each question aloud.
-router.post('/voice/tts', requireAuth, async (req, res) => {
+router.post('/voice/tts', requireAuth, aiLimiter, async (req, res) => {
   try {
     const text = String(req.body?.text || '').trim().slice(0, 800);
     if (!text) return res.status(400).json({ error: 'text is required' });
@@ -859,7 +860,7 @@ router.post('/voice/tts', requireAuth, async (req, res) => {
 // ── POST /quiz/voice/transcribe ──────────────────────────────────────────
 // Multipart audio answer -> { text }. The voice-interview screen uploads the
 // student's recorded answer here and gets back the transcript.
-router.post('/voice/transcribe', requireAuth, voiceAudioUpload, async (req, res) => {
+router.post('/voice/transcribe', requireAuth, aiLimiter, voiceAudioUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'audio file is required' });
     const filename = req.file.originalname || 'answer.webm';
@@ -934,7 +935,7 @@ const MAX_VOICE_ANSWERS      = 10;
 const MAX_VOICE_QUESTION_LEN = 500;
 const MAX_VOICE_TEXT_LEN     = 5000;
 
-router.post('/voice/submit', requireAuth, async (req, res) => {
+router.post('/voice/submit', requireAuth, aiLimiter, async (req, res) => {
   try {
     const raw = Array.isArray(req.body && req.body.answers) ? req.body.answers : null;
     if (!raw) return res.status(400).json({ error: 'answers array required' });
@@ -996,7 +997,7 @@ router.post('/voice/submit', requireAuth, async (req, res) => {
 // signal, exactly like the voice interview.
 const MAX_WRITING_CHARS = 6000;
 
-router.post('/writing', requireAuth, async (req, res) => {
+router.post('/writing', requireAuth, aiLimiter, async (req, res) => {
   try {
     const sample = String((req.body && req.body.writingSample) || '').trim();
     if (!sample) return res.status(400).json({ error: 'writingSample is required' });
