@@ -37,8 +37,8 @@ inject('../db/pool', {
     if (/FROM user_blocks/.test(sql)) {
       return { rows: [] };
     }
-    if (/SELECT id, budget_min, budget_max, move_in_timeline FROM users/.test(sql)) {
-      return { rows: [{ id: VIEWER }, { id: TARGET }] };
+    if (/SELECT id, budget_min, budget_max, move_in_timeline, is_banned, is_paused FROM users/.test(sql)) {
+      return { rows: [{ id: VIEWER, is_banned: false, is_paused: false }, { id: TARGET, is_banned: false, is_paused: false }] };
     }
     if (/SELECT id, status, updated_at FROM connect_requests/.test(sql)) {
       return { rows: existingRow ? [existingRow] : [] };
