@@ -762,11 +762,21 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
     // conservative gate. Fails OPEN — missing / default (500–2000) / 'Flexible'
     // data never blocks; only a genuine hard conflict does.
     const { rows: logi } = await pool.query(
-      'SELECT id, budget_min, budget_max, move_in_timeline FROM users WHERE id = $1 OR id = $2',
+      'SELECT id, budget_min, budget_max, move_in_timeline, is_banned, is_paused FROM users WHERE id = $1 OR id = $2',
       [req.user.id, toUserId],
     );
     const meLog   = logi.find(u => u.id === req.user.id) || {};
     const themLog = logi.find(u => u.id === toUserId)    || {};
+    // Same class of stale-feed gap as the viability re-check above: the feed
+    // query already excludes banned/paused users (see GET /users/:id's same
+    // gate), but a cached card from before a ban/pause, or a direct API call,
+    // could still land here. refuseBanned above only covers the SENDER being
+    // banned — the target's status was never checked at all. Generic 404,
+    // same as the block check below, so this doesn't leak WHY a request
+    // can't be sent (banned vs paused vs never matched all look identical).
+    if (themLog.is_banned || themLog.is_paused) {
+      return res.status(404).json({ error: 'Match not found' });
+    }
     const viability = isViable(meLog, themLog);
     if (!viability.viable) {
       return res.status(403).json({
