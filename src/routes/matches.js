@@ -361,6 +361,17 @@ function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
   });
 }
 
+// SQL fetches this many top-scored candidates BEFORE the JS-side viability
+// filter (isViable, below) runs. matchViability.js's own comment notes the
+// typical campus pool is ~30 users, so 50 covers it — but a large school can
+// have hundreds of eligible candidates, and hard budget/move-in conflicts
+// among the top 50 by score would shrink the feed even though viable,
+// lower-scored candidates exist just past the old cutoff. Raised well above
+// the typical pool size so the filter has real headroom to work with; cheap
+// to raise further if a school's candidate count outgrows it (indexed on
+// (user_a, score DESC) / (user_b, score DESC), scoped to one user's rows).
+const FEED_POOL_CAP = 150;
+
 router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (req, res) => {
   try {
     const userId = req.user.id;
@@ -515,8 +526,13 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
            OR COALESCE((dq.answers->'51'->>'index')::int, (dq.answers->>'51')::int, 0) < 2
          )
          ${school ? 'AND u.school = $5' : ''}
-       ORDER BY cs.score DESC
-       LIMIT 50`,
+       -- u.id as a tiebreaker: score ties (common at the pool's edges) would
+       -- otherwise sort in whatever order Postgres happens to return matching
+       -- rows, which is not guaranteed stable across calls — the exact set of
+       -- candidates at the LIMIT boundary could flap between requests even
+       -- though nothing about either user changed.
+       ORDER BY cs.score DESC, u.id
+       LIMIT ${FEED_POOL_CAP}`,
       school
         ? [userId, myLookingFor, myGender, smokeFree, school]
         : [userId, myLookingFor, myGender, smokeFree]
