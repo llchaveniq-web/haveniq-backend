@@ -243,6 +243,113 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
   }
 });
 
+// ── POST /quiz/preview-cohort ─────────────────────────────────────────────
+// The anonymous-taker half of the mid-quiz hook, and the one lever the app's
+// own quiz checkpoint documents as still missing.
+//
+// The problem it solves: /preview-matches deliberately shows an ANONYMOUS
+// caller only the demo pool, because returning real students' names and photos
+// to an unauthenticated request would be a privacy breach (and a
+// seed-student bait-and-switch). But anonymous first-time takers ARE the main
+// funnel — they are the students deciding, with three competitor tabs open,
+// whether ten questions are worth answering. They currently get the least
+// evidence at the moment they most need it.
+//
+// So: give them the one true thing we can give away safely — HOW MANY real,
+// already-completed students their in-progress answers are compatible with.
+// No identities, ever. Never a name, photo, school-of-one, or anything that
+// could be narrowed to a person.
+//
+// PRIVACY DESIGN — three independent guards, all of which must hold:
+//
+//   1. AGGREGATE ONLY. The response carries a bucket label and nothing else.
+//      No ids, names, photos, schools or scores leave this handler.
+//   2. k-ANONYMITY FLOOR. Below MIN_COHORT compatible students we return
+//      { cohort: null } — the honest "not enough yet" state — rather than a
+//      small number that could be narrowed by re-querying. This also makes the
+//      hook self-arming per campus, exactly like the authed reveal: it stays
+//      silent until a school has a real pool, with nothing to flip by hand.
+//   3. BUCKETS, NOT COUNTS. Returning an exact integer would let a caller vary
+//      one answer at a time and watch it move, which is a differencing attack
+//      against individuals. Coarse buckets make that signal useless.
+//
+// Honesty contract, same as everywhere else in this codebase: this counts REAL
+// completed students (demo accounts excluded) or it returns nothing. It never
+// pads the number with the seed pool to look busier than the campus is.
+const MIN_COHORT = 8;           // k-anonymity floor
+const COHORT_BUCKETS = [        // ordered high → low; first match wins
+  { min: 100, label: '100+' },
+  { min: 50,  label: '50+'  },
+  { min: 25,  label: '25+'  },
+  { min: 10,  label: '10+'  },
+  { min: MIN_COHORT, label: 'a handful' },
+];
+
+function bucketCohort(n) {
+  for (const b of COHORT_BUCKETS) if (n >= b.min) return b.label;
+  return null;
+}
+
+router.post('/preview-cohort', optionalAuth, aiLimiter, async (req, res) => {
+  try {
+    const { answers } = req.body || {};
+    const err = validateAnswers(answers);
+    if (err) return res.status(400).json({ error: err });
+
+    // Same floor /preview-matches uses — too few answers and "compatible" is
+    // noise, so we say nothing rather than something shaky.
+    const answerCount = Object.keys(answers || {}).length;
+    if (answerCount < 5) return res.json({ cohort: null, compatible: 0 });
+
+    // REAL pool only: completed, active, not demo. Note this deliberately does
+    // NOT exclude the caller for an authed request — one row cannot move a
+    // bucket, and excluding it would require joining on identity we don't
+    // otherwise need here.
+    const { rows: candidates } = await pool.query(
+      `SELECT qa.answers
+         FROM quiz_answers qa
+         JOIN users u ON u.id = qa.user_id
+        WHERE qa.completed = TRUE
+          AND u.is_paused = FALSE
+          AND u.is_banned = FALSE
+          AND ${notDemo('u.email')}`,
+    );
+
+    // Cheap exit before any scoring work: if the whole real pool is under the
+    // floor, no answer set could clear it.
+    if (candidates.length < MIN_COHORT) return res.json({ cohort: null, compatible: 0 });
+
+    const normalize = (raw) => {
+      const flat = {};
+      for (const [k, v] of Object.entries(raw || {})) {
+        if (typeof v === 'number') { flat[k] = v; continue; }
+        if (v && typeof v === 'object') {
+          if (typeof v.index === 'number') flat[k] = v.index;
+          else if (typeof v.value === 'number') flat[k] = v.value;
+        }
+      }
+      return flat;
+    };
+    const flat = normalize(answers);
+    const dimensionModels = await loadCertifiedModels();
+
+    let compatible = 0;
+    for (const c of candidates) {
+      const result = calculateCompatibility(flat, normalize(c.answers), { dimensionModels });
+      if (result.isHardBlocked) continue;
+      if (result.finalPct >= MATCH_MIN_SCORE) compatible++;
+    }
+
+    // Below the floor → say nothing. The client renders its honest
+    // "you're ready to match" state instead of a number.
+    const cohort = bucketCohort(compatible);
+    res.json({ cohort, compatible: cohort ? compatible : 0 });
+  } catch (err) {
+    console.error('preview-cohort failed:', err);
+    res.status(500).json({ error: 'Failed to compute cohort' });
+  }
+});
+
 // ── POST /quiz/submit ─────────────────────────────────────────────────────
 // Final submission — marks complete, triggers async match scoring
 router.post('/submit', requireAuth, aiLimiter, async (req, res) => {
