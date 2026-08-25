@@ -69,7 +69,7 @@ router.get('/listings', requireAuth, async (req, res) => {
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
               total_rent_cents, per_person_rent_cents, photo_url,
-              contact_name, available_from, notes, created_at
+              contact_name, contact_email, contact_phone, available_from, notes, created_at
        FROM listings
        WHERE is_active = TRUE
          -- A listing a human has not cleared is not shown to a student.
@@ -112,6 +112,11 @@ router.get('/listings', requireAuth, async (req, res) => {
         perPerson:    r.per_person_rent_cents / 100,
         photoUrl:     r.photo_url,
         contactName:  r.contact_name,
+        // The browse list's Email and Call actions read these. They were
+        // absent from this DTO, so handleInquire always fell to its "no
+        // contact email" branch and the Call button never rendered.
+        contactEmail: r.contact_email,
+        contactPhone: r.contact_phone,
         availableFrom: r.available_from,
         notes:        r.notes,
         createdAt:    r.created_at,
@@ -130,7 +135,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
               total_rent_cents, per_person_rent_cents, photo_url,
-              contact_name, contact_email, available_from, notes, created_at
+              contact_name, contact_email, contact_phone, available_from, notes, created_at
        FROM listings
        WHERE id = $1 AND is_active = TRUE AND moderation_status = 'approved'`,
       [req.params.id],
@@ -152,6 +157,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       photoUrl:      r.photo_url,
       contactName:   r.contact_name,
       contactEmail:  r.contact_email,
+      contactPhone:  r.contact_phone,
       availableFrom: r.available_from,
       notes:         r.notes,
       createdAt:     r.created_at,
@@ -173,7 +179,7 @@ router.post('/listings', requireAuth, async (req, res) => {
 
   const {
     address, city, schoolNear, beds, baths,
-    totalRent, perPerson, photoUrl, contactName, contactEmail,
+    totalRent, perPerson, photoUrl, contactName, contactEmail, contactPhone,
     availableFrom, notes,
   } = req.body || {};
 
@@ -185,7 +191,7 @@ router.post('/listings', requireAuth, async (req, res) => {
   // than bolted on afterwards by a job that might not run. Rule-based and
   // pure, so this costs nothing and cannot fail.
   const risk = assessListing({
-    address, perPerson, photoUrl, contactEmail, contactPhone: null, notes,
+    address, perPerson, photoUrl, contactEmail, contactPhone, notes,
     contactName, description: notes,
   });
 
@@ -201,10 +207,10 @@ router.post('/listings', requireAuth, async (req, res) => {
       `INSERT INTO listings
          (address, city, school_near, beds, baths,
           total_rent_cents, per_person_rent_cents, photo_url,
-          contact_name, contact_email, available_from, notes, created_by,
+          contact_name, contact_email, contact_phone, available_from, notes, created_by,
           moderation_status, risk_score, risk_signals)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-               $14, $15, $16)
+               $14, $15, $16, $17)
        RETURNING id, address, city, school_near, beds,
                  per_person_rent_cents, created_by`,
       [
@@ -218,6 +224,7 @@ router.post('/listings', requireAuth, async (req, res) => {
         photoUrl ?? null,
         contactName ?? null,
         contactEmail ?? null,
+        contactPhone ?? null,
         availableFrom ?? null,
         notes ?? null,
         req.user.id,

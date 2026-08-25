@@ -860,3 +860,12 @@ UPDATE listings SET moderation_status = 'approved' WHERE moderation_status IS NU
 -- pending only, which is a tiny slice, so one partial index serves both.
 CREATE INDEX IF NOT EXISTS idx_listings_pending
   ON listings(created_at) WHERE moderation_status = 'pending';
+
+-- ── Listing contact phone ──────────────────────────── 2026-08-25 ──
+-- The app has always SENT contactPhone (it's required in CreateListingPayload)
+-- and always READ it (RealListing.contactPhone, the Call button's render
+-- guard) — but the column never existed, so the create route dropped it and
+-- every read returned undefined. The Call button could therefore never render
+-- on any listing, and nobody would have noticed from the app side: a missing
+-- optional field looks exactly like a landlord who didn't give a number.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS contact_phone TEXT;
