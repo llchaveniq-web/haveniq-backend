@@ -8,7 +8,12 @@ const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE, CONNECT_DECLINE_COOLDOWN_DAYS } = require('../lib/matchConfig');
-const { isViable, applyCampusRanking } = require('../services/matchViability');
+const {
+  isViable, applyCampusRanking,
+  // Used by /pool-composition, which needs each logistics axis judged
+  // independently rather than isViable's short-circuiting verdict.
+  budgetsConflict, moveInConflict, hasRealBudget, moveInDays,
+} = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 // Pre-match photo gallery (owner decision 2026-07-22: faces visible while choosing).
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
@@ -610,6 +615,211 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     res.status(500).json({ error: 'Failed to fetch matches' });
   }
 });
+
+// ── Pool composition ──────────────────────────────────────────────────────
+// Why this exists: HavenIQ's feed already applies FIVE narrowing rules, and a
+// student can see only two of them. Budget conflicts and move-in conflicts
+// (matchViability.isViable) silently drop real, high-scoring candidates and
+// nothing in the app has ever said so — a student with a tight range just sees
+// a thin deck and concludes "nobody's here", which is the wrong conclusion and
+// the one most likely to make them leave.
+//
+// Competitors sell filter DEPTH (SpareRoom's panel is a dozen knobs) and then
+// happily let you filter into an empty result set and show you the zero. The
+// answer for a ~30-person campus is not more knobs. It is telling the truth
+// about the knobs that are already turned, and making the invisible ones
+// adjustable. That is what this endpoint feeds.
+//
+// ── Two counts, and they are NOT the same number ──────────────────────────
+// Each filter reports both, because either one alone misleads:
+//
+//   blocks      — attributed, first-reason-wins in the order the feed applies
+//                 them. These PARTITION the removed set: they sum to exactly
+//                 (total - shown), so "why is my pool this size" adds up.
+//   wouldReturn — leave-one-out: candidates who pass every OTHER filter and
+//                 fail only this one. This is what loosening this filter
+//                 actually gives you back.
+//
+// wouldReturn <= blocks, always. They differ whenever a candidate conflicts on
+// more than one axis — someone outside your budget AND moving in a term later
+// is attributed to budget, but widening your budget will not return them.
+// Reporting `blocks` as the recovery number would promise people back who
+// would not come back, which is exactly the kind of small lie that costs trust
+// the first time a student widens a range and sees nothing appear.
+//
+// ── What is deliberately NOT returned ────────────────────────────────────
+// No candidate ids, no ranges, no "widen your max to $1,450" suggestion. That
+// suggestion is the tempting feature here and it is a privacy leak: on a thin
+// campus a threshold mined from the candidate set reveals one identifiable
+// person's budget_min by differencing. Counts only. The student adjusts their
+// OWN slider; we never quote someone else's number back at them.
+//
+// The non-negotiable predicates (banned, paused, quiz incomplete, blocked in
+// either direction, hard-blocked, below MATCH_MIN_SCORE, demo accounts) are
+// applied to the BASE set and never reported as filters. They are not the
+// viewer's choices and nothing in the UI can loosen them, so counting them as
+// "your filters removed 12 people" would be false.
+router.get('/pool-composition', requireAuth, suspicious.track('matches.poolComposition', 60), async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Exactly the viewer state /feed reads, loaded the same way.
+    const { rows: meUserRows } = await pool.query(
+      `SELECT gender, looking_for, match_dealbreakers,
+              school, budget_min, budget_max, move_in_timeline
+         FROM users WHERE id = $1`,
+      [userId],
+    );
+    const meRow        = meUserRows[0] || {};
+    const myGender     = meRow.gender ?? null;
+    const myLookingFor = Array.isArray(meRow.looking_for) ? meRow.looking_for : [];
+    const mySchool     = meRow.school ?? null;
+    const myBreakers   = (meRow.match_dealbreakers && typeof meRow.match_dealbreakers === 'object')
+      ? meRow.match_dealbreakers : {};
+    const smokeFree    = myBreakers.smokeFree === true;
+
+    // `school` here is the viewer's own school, used only when they've asked to
+    // stay on campus. ?school= mirrors /feed's query param so the two agree on
+    // what "my school only" means.
+    const scopedSchool = typeof req.query.school === 'string' && req.query.school.trim()
+      ? req.query.school.trim() : null;
+
+    const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
+    const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
+
+    // One query, not five. The adjustable predicates move OUT of the WHERE
+    // clause and into the SELECT list as booleans, so every candidate comes
+    // back tagged with which of the viewer's filters it fails. That keeps the
+    // SQL expressions character-for-character the ones /feed filters on —
+    // re-running the query per filter, or re-implementing gender/smoke logic
+    // in JS, would let this endpoint drift away from the real feed and start
+    // reporting a pool the student is not actually being served.
+    //
+    // Budget and move-in are evaluated in JS below for the same reason in
+    // reverse: /feed evaluates them in JS too (matchViability.isViable), so JS
+    // is where the truth already lives for those two.
+    const { rows } = await pool.query(
+      `SELECT
+         u.id,
+         u.budget_min,
+         u.budget_max,
+         u.move_in_timeline,
+         (
+           $2::text[] IS NULL OR array_length($2::text[], 1) IS NULL
+           OR u.gender IS NULL OR u.gender = 'Prefer not to say'
+           OR u.gender = ANY($2::text[])
+         ) AND (
+           u.looking_for IS NULL OR array_length(u.looking_for, 1) IS NULL
+           OR $3::text IS NULL OR $3::text = 'Prefer not to say'
+           OR $3::text = ANY(u.looking_for)
+         ) AS pass_gender,
+         (
+           $4::boolean = FALSE
+           OR COALESCE((dq.answers->'51'->>'index')::int, (dq.answers->>'51')::int, 0) < 2
+         ) AS pass_smoke,
+         ($5::text IS NULL OR u.school = $5::text) AS pass_school
+       FROM compatibility_scores cs
+       JOIN users u ON (
+         CASE WHEN cs.user_a = $1 THEN cs.user_b ELSE cs.user_a END = u.id
+       )
+       LEFT JOIN quiz_answers dq ON dq.user_id = u.id
+       WHERE (cs.user_a = $1 OR cs.user_b = $1)
+         AND cs.is_hard_blocked = FALSE
+         AND cs.score >= ${MATCH_MIN_SCORE}
+         AND u.is_paused = FALSE
+         AND u.is_banned = FALSE
+         AND u.quiz_completed = TRUE
+         AND NOT EXISTS (
+           SELECT 1 FROM user_blocks ub
+           WHERE (ub.blocker_id = $1 AND ub.blocked_id = u.id)
+              OR (ub.blocker_id = u.id AND ub.blocked_id = $1)
+         )
+         ${demoFilter}
+       ORDER BY cs.score DESC, u.id
+       LIMIT ${FEED_POOL_CAP}`,
+      [userId, myLookingFor, myGender, smokeFree, scopedSchool],
+    );
+
+    const meLogistics = {
+      budget_min:       meRow.budget_min,
+      budget_max:       meRow.budget_max,
+      move_in_timeline: meRow.move_in_timeline,
+    };
+
+    // Deliberately NOT isViable(): it short-circuits, reporting 'budget' and
+    // never looking at move-in. That is correct for the feed, which only needs
+    // a yes/no, but it is wrong here — a candidate who conflicts on both would
+    // be recorded as passing move-in, and the move-in leave-one-out count would
+    // then promise back people that widening the move-in window cannot return.
+    // Leave-one-out only means anything if each axis is judged on its own, so
+    // we call the two predicates isViable is built from, directly.
+    const verdicts = rows.map((r) => ({
+      gender:    r.pass_gender !== false,
+      smokeFree: r.pass_smoke  !== false,
+      school:    r.pass_school !== false,
+      budget:    !budgetsConflict(meLogistics, r),
+      moveIn:    !moveInConflict(meLogistics, r),
+    }));
+
+    // Order matters: it is the order /feed applies these, so first-reason-wins
+    // attribution below matches the order a candidate would really be dropped.
+    const ORDER = ['gender', 'smokeFree', 'school', 'budget', 'moveIn'];
+    const LABELS = {
+      gender:    'Roommate gender',
+      smokeFree: 'Smoke-free home',
+      school:    'My school only',
+      budget:    'Budget range',
+      moveIn:    'Move-in timing',
+    };
+    // Is this filter actually engaged? Derived from the VIEWER'S settings, not
+    // from the counts — a filter that happens to hide nobody today (everyone in
+    // the pool is at your school anyway) is still on, and reporting it as off
+    // would make the panel lie the moment the pool changes.
+    const ACTIVE = {
+      gender:    myLookingFor.length > 0,
+      smokeFree: smokeFree,
+      school:    scopedSchool != null,
+      budget:    hasRealBudget(meRow.budget_min, meRow.budget_max),
+      moveIn:    moveInDays(meRow.move_in_timeline) != null,
+    };
+
+    const blocks      = Object.fromEntries(ORDER.map(k => [k, 0]));
+    const wouldReturn = Object.fromEntries(ORDER.map(k => [k, 0]));
+    let shown = 0;
+
+    for (const v of verdicts) {
+      const failed = ORDER.filter(k => !v[k]);
+      if (failed.length === 0) { shown++; continue; }
+      // Attribution: first reason wins, so the counts PARTITION the removed
+      // set and sum to exactly (total - shown).
+      blocks[failed[0]]++;
+      // Leave-one-out: only a candidate failing this filter ALONE comes back
+      // when you loosen it.
+      if (failed.length === 1) wouldReturn[failed[0]]++;
+    }
+
+    res.json({
+      ok: true,
+      pool: {
+        // Everyone scoreable and reachable before any of YOUR filters.
+        total: rows.length,
+        // Everyone your feed can actually serve you right now.
+        shown,
+        filters: ORDER.map(key => ({
+          key,
+          label:       LABELS[key],
+          active:      ACTIVE[key],
+          blocks:      blocks[key],
+          wouldReturn: wouldReturn[key],
+        })),
+      },
+    });
+  } catch (e) {
+    console.error('[matches/pool-composition]', e.message);
+    res.status(500).json({ ok: false, error: 'Could not read your match pool' });
+  }
+});
+
 
 // ── GET /matches/suites ─────────────────────────────────────────────────────
 // Deep-matching #4: the best apartment-sized suites at the requester's school,
