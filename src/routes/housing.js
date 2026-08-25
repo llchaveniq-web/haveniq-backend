@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const { notifyNewListing } = require('../services/listingAlerts');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
@@ -121,7 +122,8 @@ router.post('/listings', requireAuth, async (req, res) => {
           total_rent_cents, per_person_rent_cents, photo_url,
           contact_name, contact_email, available_from, notes, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       RETURNING id`,
+       RETURNING id, address, city, school_near, beds,
+                 per_person_rent_cents, created_by`,
       [
         address,
         city ?? null,
@@ -139,9 +141,105 @@ router.post('/listings', requireAuth, async (req, res) => {
       ],
     );
     res.json({ id: rows[0].id });
+
+    // Fan out to anyone watching for a place like this. DETACHED on purpose:
+    // the listing is already created and the response already sent, so a dead
+    // Resend key or a stale push token can never fail a listing insert.
+    notifyNewListing(rows[0], req.app.get('sendPushToUser'))
+      .catch(err => console.error('[listingAlerts] fan-out failed:', err.message));
   } catch (err) {
     console.error('listing create failed:', err);
     res.status(500).json({ error: 'Failed to create listing' });
+  }
+});
+
+// —— GET /housing/alert ————————————————————————————————————————————
+// The caller's listing alert, or null. One per user by design (see the
+// listing_alerts migration for why).
+router.get('/alert', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT school_near, max_per_person_cents, min_beds, is_active, last_notified_at
+         FROM listing_alerts WHERE user_id = $1`,
+      [req.user.id],
+    );
+    if (!rows[0]) return res.json({ alert: null });
+    const a = rows[0];
+    res.json({
+      alert: {
+        schoolNear:   a.school_near,
+        // Cents in the column, dollars on the wire " + EM + " the app talks in dollars
+        // everywhere else, and a unit mismatch here would silently alert on a
+        // budget 100x too high.
+        maxPerPerson: a.max_per_person_cents == null ? null : Math.round(a.max_per_person_cents / 100),
+        minBeds:      a.min_beds,
+        isActive:     a.is_active,
+        lastNotifiedAt: a.last_notified_at,
+      },
+    });
+  } catch (err) {
+    console.error('alert fetch failed:', err);
+    res.status(500).json({ error: 'Failed to load alert' });
+  }
+});
+
+// —— PUT /housing/alert ————————————————————————————————————————————
+// Upsert. schoolNear is required; maxPerPerson / minBeds are optional and null
+// means "no opinion" rather than "match nothing".
+router.put('/alert', requireAuth, async (req, res) => {
+  const { schoolNear, maxPerPerson, minBeds, isActive } = req.body || {};
+
+  if (!schoolNear || typeof schoolNear !== 'string' || schoolNear.length > 200) {
+    return res.status(400).json({ error: 'schoolNear is required' });
+  }
+  const budget = maxPerPerson == null ? null : Number(maxPerPerson);
+  if (budget !== null && (!Number.isFinite(budget) || budget <= 0 || budget > 100000)) {
+    return res.status(400).json({ error: 'maxPerPerson must be a positive dollar amount' });
+  }
+  const beds = minBeds == null ? null : Number(minBeds);
+  if (beds !== null && (!Number.isInteger(beds) || beds < 1 || beds > 10)) {
+    return res.status(400).json({ error: 'minBeds must be between 1 and 10' });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO listing_alerts
+         (user_id, school_near, max_per_person_cents, min_beds, is_active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (user_id) DO UPDATE SET
+         school_near          = EXCLUDED.school_near,
+         max_per_person_cents = EXCLUDED.max_per_person_cents,
+         min_beds             = EXCLUDED.min_beds,
+         is_active            = EXCLUDED.is_active,
+         updated_at           = now()`,
+      [
+        req.user.id,
+        schoolNear,
+        budget === null ? null : Math.round(budget * 100),
+        beds,
+        isActive === false ? false : true,
+      ],
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('alert save failed:', err);
+    res.status(500).json({ error: 'Failed to save alert' });
+  }
+});
+
+// —— DELETE /housing/alert —————————————————————————————————————————
+// Deactivates rather than deletes, so turning it back on keeps the criteria
+// the student already chose instead of making them re-enter everything.
+router.delete('/alert', requireAuth, async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE listing_alerts SET is_active = FALSE, updated_at = now() WHERE user_id = $1',
+      [req.user.id],
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('alert delete failed:', err);
+    res.status(500).json({ error: 'Failed to turn off alert' });
   }
 });
 

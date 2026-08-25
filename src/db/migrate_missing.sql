@@ -784,3 +784,23 @@ CREATE INDEX IF NOT EXISTS idx_safety_reports_reporter ON roommate_safety_report
 -- tagged here so they're trivially findable for cleanup. This tag is the ONE
 -- thing that does NOT auto-revert when the flag flips off.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_via_skip_verification BOOLEAN DEFAULT false;
+
+-- —— Listing alerts (saved search — notify me about new places) ————— 2026-08-25 ——
+-- One alert per user (user_id IS the PK): the product question is "tell me
+-- about places near MY school under MY budget", not "manage a list of saved
+-- searches". A second row would be a feature nobody asked for and a fan-out
+-- multiplier on every listing insert.
+-- NULL max_per_person_cents / min_beds mean "no opinion", not "match nothing".
+CREATE TABLE IF NOT EXISTS listing_alerts (
+  user_id              UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  school_near          TEXT NOT NULL,
+  max_per_person_cents INTEGER CHECK (max_per_person_cents IS NULL OR max_per_person_cents > 0),
+  min_beds             INTEGER CHECK (min_beds IS NULL OR (min_beds BETWEEN 1 AND 10)),
+  is_active            BOOLEAN NOT NULL DEFAULT TRUE,
+  last_notified_at     TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- The fan-out query filters on school first, so that's the index that matters.
+CREATE INDEX IF NOT EXISTS idx_listing_alerts_school
+  ON listing_alerts(school_near) WHERE is_active = TRUE;
