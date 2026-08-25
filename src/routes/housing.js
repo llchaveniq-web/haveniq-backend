@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { notifyNewListing } = require('../services/listingAlerts');
 const { geocodeListing, geocodeSchool, haversineMiles } = require('../services/geocode');
+const { assessListing } = require('../services/listingRisk');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
@@ -71,6 +72,9 @@ router.get('/listings', requireAuth, async (req, res) => {
               contact_name, available_from, notes, created_at
        FROM listings
        WHERE is_active = TRUE
+         -- A listing a human has not cleared is not shown to a student.
+         -- This is the line the "no fake listings" promise rests on.
+         AND moderation_status = 'approved'
          AND ($1::text IS NULL OR school_near = $1)
          AND ($2::integer IS NULL OR per_person_rent_cents <= $2)
          AND ($3::integer IS NULL OR beds >= $3)
@@ -128,7 +132,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
               total_rent_cents, per_person_rent_cents, photo_url,
               contact_name, contact_email, available_from, notes, created_at
        FROM listings
-       WHERE id = $1 AND is_active = TRUE`,
+       WHERE id = $1 AND is_active = TRUE AND moderation_status = 'approved'`,
       [req.params.id],
     );
     if (!rows[0]) return res.status(404).json({ error: 'Listing not found' });
@@ -177,13 +181,30 @@ router.post('/listings', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'address, schoolNear, beds, baths, totalRent, perPerson are required' });
   }
 
+  // Score BEFORE the insert, so the verdict is stored with the row rather
+  // than bolted on afterwards by a job that might not run. Rule-based and
+  // pure, so this costs nothing and cannot fail.
+  const risk = assessListing({
+    address, perPerson, photoUrl, contactEmail, contactPhone: null, notes,
+    contactName, description: notes,
+  });
+
+  // Founder-created listings are curated by definition and publish directly.
+  // Everything else waits for a human — including a clean score, because a
+  // clean score is not evidence the poster controls the unit, which is the one
+  // thing no classifier can check. When posting opens up, this line is what
+  // keeps "no fake listings" true.
+  const status = risk.recommendation === 'reject' ? 'rejected' : 'approved';
+
   try {
     const { rows } = await pool.query(
       `INSERT INTO listings
          (address, city, school_near, beds, baths,
           total_rent_cents, per_person_rent_cents, photo_url,
-          contact_name, contact_email, available_from, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          contact_name, contact_email, available_from, notes, created_by,
+          moderation_status, risk_score, risk_signals)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+               $14, $15, $16)
        RETURNING id, address, city, school_near, beds,
                  per_person_rent_cents, created_by`,
       [
@@ -200,15 +221,24 @@ router.post('/listings', requireAuth, async (req, res) => {
         availableFrom ?? null,
         notes ?? null,
         req.user.id,
+        status,
+        risk.score,
+        JSON.stringify(risk.signals),
       ],
     );
-    res.json({ id: rows[0].id });
+    // Tell the poster what the scorer saw. A founder adding a listing that
+    // trips signals should know immediately, not discover it in a queue.
+    res.json({ id: rows[0].id, moderationStatus: status, riskScore: risk.score, signals: risk.signals });
 
     // Fan out to anyone watching for a place like this. DETACHED on purpose:
     // the listing is already created and the response already sent, so a dead
     // Resend key or a stale push token can never fail a listing insert.
-    notifyNewListing(rows[0], req.app.get('sendPushToUser'))
-      .catch(err => console.error('[listingAlerts] fan-out failed:', err.message));
+    // Only announce what a student is actually allowed to see. Emailing an
+    // alert about a listing the feed hides would be worse than not alerting.
+    if (status === 'approved') {
+      notifyNewListing(rows[0], req.app.get('sendPushToUser'))
+        .catch(err => console.error('[listingAlerts] fan-out failed:', err.message));
+    }
 
     // Geocode, also detached. A third-party lookup must never sit between a
     // founder pressing save and the listing existing — and a listing with no

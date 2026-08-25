@@ -835,3 +835,28 @@ CREATE TABLE IF NOT EXISTS school_coords (
   longitude    NUMERIC(9,6),
   attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ── Listing moderation ──────────────────────────────── 2026-08-25 ──
+-- The landing page promises "no fake listings". That promise only survives
+-- opening up listing creation if something stands between a poster and a
+-- student. This is that gate.
+--
+-- moderation_status lives ON the listing rather than in a side table, because
+-- the read path has to filter on it and a join per feed request to answer
+-- "is this allowed to be seen" is the wrong shape.
+--
+-- DEFAULT 'approved' is deliberate, and only safe because of the backfill on
+-- the next line: every listing that exists today was founder-created, and a
+-- default of 'pending' would retroactively hide curated inventory. New
+-- non-founder listings are set to 'pending' explicitly by the route.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS moderation_status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS risk_score        INTEGER;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS risk_signals      JSONB;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS reviewed_by       UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS reviewed_at       TIMESTAMPTZ;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS review_note       TEXT;
+UPDATE listings SET moderation_status = 'approved' WHERE moderation_status IS NULL;
+-- The feed filters on (is_active, moderation_status) together; the queue reads
+-- pending only, which is a tiny slice, so one partial index serves both.
+CREATE INDEX IF NOT EXISTS idx_listings_pending
+  ON listings(created_at) WHERE moderation_status = 'pending';

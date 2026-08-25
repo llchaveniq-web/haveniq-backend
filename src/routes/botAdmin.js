@@ -162,6 +162,83 @@ router.post('/signup/:userId/approve', requireBotToken, async (req, res) => {
   }
 });
 
+// -- GET /bot-admin/pending-listings ------------------------------------
+// Listings waiting on a human. Returns the SIGNALS behind the score, not just
+// the number: a reviewer needs to know which rule fired to tell a real concern
+// from a phrasing coincidence.
+router.get('/pending-listings', requireBotToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, address, city, school_near, beds, baths,
+             per_person_rent_cents, photo_url, contact_name, contact_email,
+             notes, created_at, created_by, risk_score, risk_signals
+      FROM listings
+      WHERE moderation_status = 'pending'
+      ORDER BY risk_score DESC NULLS LAST, created_at ASC
+      LIMIT 50
+    `);
+    res.json({
+      count: rows.length,
+      listings: rows.map(r => ({
+        ...r,
+        perPerson: r.per_person_rent_cents == null ? null : r.per_person_rent_cents / 100,
+      })),
+    });
+  } catch (err) {
+    console.error('[botAdmin] pending-listings failed:', err);
+    res.status(500).json({ error: 'Query failed' });
+  }
+});
+
+// -- POST /bot-admin/listing/:id/approve ---------------------------------
+// Guarded on moderation_status = 'pending', so a double-submitted approval is
+// a no-op rather than silently re-publishing something a second reviewer had
+// already rejected.
+router.post('/listing/:id/approve', requireBotToken, async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const r = await pool.query(
+      `UPDATE listings
+          SET moderation_status = 'approved', reviewed_at = NOW(), review_note = $2
+        WHERE id = $1 AND moderation_status = 'pending'
+        RETURNING id`,
+      [id, reason ?? null],
+    );
+    const acted = r.rows.length > 0;
+    await audit('listing-review', 'approve', id, { reason: reason ?? null }, acted ? 'updated' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] listing approve failed:', err);
+    res.status(500).json({ error: 'Approve failed' });
+  }
+});
+
+// -- POST /bot-admin/listing/:id/reject ----------------------------------
+// Rejection is NOT a delete. The row stays so a pattern of similar rejected
+// listings remains queryable -- the same reasoning as roommate_safety_reports:
+// the second attempt from a source is only visible if the first was kept.
+router.post('/listing/:id/reject', requireBotToken, async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const r = await pool.query(
+      `UPDATE listings
+          SET moderation_status = 'rejected', is_active = FALSE,
+              reviewed_at = NOW(), review_note = $2
+        WHERE id = $1 AND moderation_status <> 'rejected'
+        RETURNING id`,
+      [id, reason ?? null],
+    );
+    const acted = r.rows.length > 0;
+    await audit('listing-review', 'reject', id, { reason: reason ?? null }, acted ? 'updated' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] listing reject failed:', err);
+    res.status(500).json({ error: 'Reject failed' });
+  }
+});
+
 // ── POST /bot-admin/signup/:userId/reject ──────────────────────────────
 router.post('/signup/:userId/reject', requireBotToken, async (req, res) => {
   const { userId } = req.params;
