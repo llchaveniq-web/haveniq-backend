@@ -261,6 +261,19 @@ function scoreStress(A, B) {
 // v8: 'noise' (Q59) and 'space' (Q37) tags dropped — their questions were
 // removed from scoring. A user who still carries those tags simply finds no
 // ids to amplify (harmless no-op).
+// Priority tag -> the question ids whose weight gets amplified when a user
+// names that tag as one of their (max 3) "what matters most" picks.
+//
+// LOCKSTEP INVARIANT: these keys must exactly equal the vocabulary the API
+// accepts in routes/users.js. A tag the API accepts but this map lacks is
+// SILENTLY INERT — the loop below does `if (ids)` and skips it — so a student
+// spends one of only three priority slots on nothing and their matching is
+// quietly less tuned than they think. `noise` was in that state until 2026-08;
+// `space` was too, and was removed from the vocabulary rather than faked,
+// because the only question that would back it (Q70, alone time) is staged and
+// deliberately not in SCORED_IDS yet. When Q70 goes live, add `space: [70]`
+// here and to the users.js vocab in the same release.
+// quiz.dealbreakerVocab.test.js enforces this both ways.
 const DEALBREAKER_QUESTIONS = {
   sleep:         [49],
   cleanliness:   [50],
@@ -268,6 +281,10 @@ const DEALBREAKER_QUESTIONS = {
   alcohol:       [54],
   money:         [56],
   guests:        [48],
+  // Q53 — "when you're studying or working at home, you need…" (near silence →
+  // energy around me). The live, scored noise dimension; Q69 (sensory #2) is
+  // still staged, so this is the one real signal behind a "noise" priority.
+  noise:         [53],
   communication: [14, 60, 62, 63],
 };
 const DEALBREAKER_MULTIPLIER = 1.75;
