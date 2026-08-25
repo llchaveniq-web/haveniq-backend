@@ -89,3 +89,35 @@ test('buildQuery disambiguates with city and school, skipping blanks', () => {
   assert.equal(buildQuery({ address: '9 Plow Point Ln', schoolNear: 'UCLA' }), '9 Plow Point Ln, UCLA');
   assert.equal(buildQuery({ address: '1262 Santa Fe', city: '  ' }), '1262 Santa Fe');
 });
+
+test('haversineMiles matches a known distance', () => {
+  const { haversineMiles } = require('./geocode');
+  // Two points ~0.104 deg of longitude apart at latitude 33.6 — about 6 mi.
+  const d = haversineMiles({ lat: 33.6405, lon: -117.8443 }, { lat: 33.6500, lon: -117.7400 });
+  assert.ok(d > 5.8 && d < 6.3, `expected ~6.0 mi, got ${d}`);
+});
+
+test('haversineMiles is zero for the same point, and symmetric', () => {
+  const { haversineMiles } = require('./geocode');
+  const a = { lat: 33.6405, lon: -117.8443 };
+  const b = { lat: 34.0689, lon: -118.4452 };
+  assert.equal(haversineMiles(a, a), 0);
+  assert.ok(Math.abs(haversineMiles(a, b) - haversineMiles(b, a)) < 1e-9);
+});
+
+test('haversineMiles returns null when either end is unknown', () => {
+  // A listing with no coordinates has no distance — it must not silently
+  // become 0, which would sort it to the top as "closest".
+  const { haversineMiles } = require('./geocode');
+  assert.equal(haversineMiles(null, { lat: 1, lon: 2 }), null);
+  assert.equal(haversineMiles({ lat: 1, lon: 2 }, null), null);
+});
+
+test('geocodeSchool refuses an empty name instead of querying for ""', () => {
+  const { geocodeSchool } = require('./geocode');
+  return Promise.all([
+    geocodeSchool('').then(r => assert.equal(r, null)),
+    geocodeSchool('   ').then(r => assert.equal(r, null)),
+    geocodeSchool(null).then(r => assert.equal(r, null)),
+  ]);
+});

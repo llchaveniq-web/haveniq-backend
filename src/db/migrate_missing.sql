@@ -820,3 +820,18 @@ ALTER TABLE listings ADD COLUMN IF NOT EXISTS longitude   NUMERIC(9,6);
 -- (stamped, coords still NULL), so a backfill can skip addresses already known
 -- to be ungeocodable instead of retrying them forever.
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS geocoded_at TIMESTAMPTZ;
+
+-- —— School coordinates cache ——————————————————————————— 2026-08-25 ——
+-- Schools are not a table here — they're a TEXT field on users and listings — so
+-- this is a cache keyed by the school NAME as stored, not a foreign key.
+-- Without campus coordinates there is no "N miles from campus", which is the
+-- whole point of having geocoded the listings.
+-- One row per distinct school name, geocoded once and reused by every student
+-- at that school forever. attempted_at separates "never looked" from "looked
+-- and found nothing", so an unresolvable name is not retried on every request.
+CREATE TABLE IF NOT EXISTS school_coords (
+  school       TEXT PRIMARY KEY,
+  latitude     NUMERIC(9,6),
+  longitude    NUMERIC(9,6),
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

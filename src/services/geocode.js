@@ -59,8 +59,12 @@ function buildQuery({ address, city, schoolNear }) {
  */
 async function geocodeListing({ address, city, schoolNear }) {
   if (!address || typeof address !== 'string' || !address.trim()) return null;
+  return geocodeOne(buildQuery({ address, city, schoolNear }));
+}
 
-  const q = buildQuery({ address, city, schoolNear });
+/** The shared lookup. Every caller gets the same throttle and the same
+ *  rejection rules, so a new call site can't quietly skip either. */
+async function geocodeOne(q) {
   const url = `${NOMINATIM}?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`;
 
   try {
@@ -87,4 +91,36 @@ async function geocodeListing({ address, city, schoolNear }) {
   }
 }
 
-module.exports = { geocodeListing, buildQuery };
+/**
+ * Coordinates for a campus, by the school NAME as stored on the user row.
+ *
+ * Appending "university" is deliberately NOT done: names here are already
+ * full ("University of Southern California", "UC Irvine"), and bolting a word
+ * onto a name that already contains it is how a query stops matching.
+ */
+async function geocodeSchool(school) {
+  if (!school || typeof school !== 'string' || !school.trim()) return null;
+  return geocodeOne(school.trim());
+}
+
+/**
+ * Great-circle distance in miles.
+ *
+ * Straight-line, not walking distance — and the UI must say so. Presenting a
+ * crow-flies number as "N minutes' walk" would be a lie in any city with a
+ * river, a freeway or a hill between two points, which is most of them.
+ */
+function haversineMiles(a, b) {
+  if (!a || !b) return null;
+  const R = 3958.7613;                       // mean Earth radius, miles
+  const toRad = d => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const h = Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+module.exports = { geocodeListing, geocodeSchool, buildQuery, haversineMiles };

@@ -1,10 +1,49 @@
 const router = require('express').Router();
 const { notifyNewListing } = require('../services/listingAlerts');
-const { geocodeListing }   = require('../services/geocode');
+const { geocodeListing, geocodeSchool, haversineMiles } = require('../services/geocode');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
 const ht = require('../services/housingTiming');
+
+/**
+ * Campus coordinates for a school name, geocoded once and cached forever.
+ *
+ * Schools aren't a table here, so the cache is keyed by the name as stored.
+ * A row EXISTS as soon as we've tried, with NULL coordinates when the name
+ * couldn't be resolved — that's what stops an unresolvable school being
+ * re-geocoded on every single listings request.
+ *
+ * Returns null on any failure. Distance is an enhancement; the listings must
+ * still come back without it.
+ */
+async function getSchoolCoords(school) {
+  if (!school) return null;
+  try {
+    const { rows } = await pool.query(
+      'SELECT latitude, longitude FROM school_coords WHERE school = $1',
+      [school],
+    );
+    if (rows.length) {
+      const r = rows[0];
+      return r.latitude == null ? null : { lat: Number(r.latitude), lon: Number(r.longitude) };
+    }
+
+    const coords = await geocodeSchool(school);
+    // Write the row either way. A miss cached as a row is the difference
+    // between one failed lookup and one per request forever.
+    await pool.query(
+      `INSERT INTO school_coords (school, latitude, longitude)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (school) DO NOTHING`,
+      [school, coords?.lat ?? null, coords?.lon ?? null],
+    );
+    return coords ? { lat: coords.lat, lon: coords.lon } : null;
+  } catch (err) {
+    console.error('[schoolCoords] failed:', err.message);
+    return null;
+  }
+}
 
 // Bot-token gate for the manual ingest trigger (same pattern as matchOutcomes).
 // The shared internal-endpoint guard. This was previously a try/require with an
@@ -40,6 +79,12 @@ router.get('/listings', requireAuth, async (req, res) => {
       [callerSchool, maxPerPerson, minBeds],
     );
 
+    // Straight-line distance from campus, when we know where both ends are.
+    // Deliberately computed here rather than in SQL: it needs a network
+    // geocode on a cache miss, and a listing with no coordinates simply has no
+    // distance rather than being excluded from the results.
+    const campus = await getSchoolCoords(callerSchool);
+
     res.json({
       listings: rows.map(r => ({
         id:           r.id,
@@ -53,6 +98,12 @@ router.get('/listings', requireAuth, async (req, res) => {
         // calculation downstream silently becomes string concatenation.
         lat:          r.latitude  == null ? null : Number(r.latitude),
         lng:          r.longitude == null ? null : Number(r.longitude),
+        // Miles, straight-line. NOT walking distance, and the app labels it
+        // as such: a crow-flies number sold as "N minutes' walk" is a lie in
+        // any city with a river or a freeway in the way.
+        distanceMi:   (campus && r.latitude != null)
+          ? Math.round(haversineMiles(campus, { lat: Number(r.latitude), lon: Number(r.longitude) }) * 10) / 10
+          : null,
         totalRent:    r.total_rent_cents / 100,
         perPerson:    r.per_person_rent_cents / 100,
         photoUrl:     r.photo_url,
@@ -160,7 +211,7 @@ router.post('/listings', requireAuth, async (req, res) => {
       .catch(err => console.error('[listingAlerts] fan-out failed:', err.message));
 
     // Geocode, also detached. A third-party lookup must never sit between a
-    // founder pressing save and the listing existing " + EM + " and a listing with no
+    // founder pressing save and the listing existing — and a listing with no
     // coordinates degrades to the address text search, which is exactly the
     // behaviour that shipped before this column existed.
     geocodeListing({ address, city, schoolNear })
@@ -194,7 +245,7 @@ router.get('/alert', requireAuth, async (req, res) => {
     res.json({
       alert: {
         schoolNear:   a.school_near,
-        // Cents in the column, dollars on the wire " + EM + " the app talks in dollars
+        // Cents in the column, dollars on the wire — the app talks in dollars
         // everywhere else, and a unit mismatch here would silently alert on a
         // budget 100x too high.
         maxPerPerson: a.max_per_person_cents == null ? null : Math.round(a.max_per_person_cents / 100),
