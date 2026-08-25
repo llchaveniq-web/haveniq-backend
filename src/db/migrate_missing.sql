@@ -804,3 +804,19 @@ CREATE TABLE IF NOT EXISTS listing_alerts (
 -- The fan-out query filters on school first, so that's the index that matters.
 CREATE INDEX IF NOT EXISTS idx_listing_alerts_school
   ON listing_alerts(school_near) WHERE is_active = TRUE;
+
+-- —— Listing coordinates ———————————————————————————————— 2026-08-25 ——
+-- Listings carried an address and nothing else, so the app could only offer a
+-- Google Maps TEXT SEARCH, which can confidently resolve to the wrong street of
+-- the same name. Coordinates make the pin exact and are the prerequisite for
+-- radius search, walking distance and a real map view.
+-- NUMERIC, not float: these are compared and displayed, and binary float drift
+-- in a coordinate is the kind of bug nobody ever goes looking for.
+-- Nullable on purpose — geocoding fails (provider down, address not found) and
+-- a listing without coordinates must still work exactly as it did before.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS latitude    NUMERIC(9,6);
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS longitude   NUMERIC(9,6);
+-- Distinguishes "never attempted" (NULL) from "attempted and found nothing"
+-- (stamped, coords still NULL), so a backfill can skip addresses already known
+-- to be ungeocodable instead of retrying them forever.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS geocoded_at TIMESTAMPTZ;

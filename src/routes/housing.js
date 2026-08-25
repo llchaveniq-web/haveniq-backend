@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { notifyNewListing } = require('../services/listingAlerts');
+const { geocodeListing }   = require('../services/geocode');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
@@ -26,6 +27,7 @@ router.get('/listings', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
+              latitude, longitude,
               total_rent_cents, per_person_rent_cents, photo_url,
               contact_name, available_from, notes, created_at
        FROM listings
@@ -46,6 +48,11 @@ router.get('/listings', requireAuth, async (req, res) => {
         schoolNear:   r.school_near,
         beds:         r.beds,
         baths:        Number(r.baths),
+        // NUMERIC comes back from pg as a STRING. Number() here, or the app
+        // receives "33.64" where it expects 33.64 and every distance
+        // calculation downstream silently becomes string concatenation.
+        lat:          r.latitude  == null ? null : Number(r.latitude),
+        lng:          r.longitude == null ? null : Number(r.longitude),
         totalRent:    r.total_rent_cents / 100,
         perPerson:    r.per_person_rent_cents / 100,
         photoUrl:     r.photo_url,
@@ -66,6 +73,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
+              latitude, longitude,
               total_rent_cents, per_person_rent_cents, photo_url,
               contact_name, contact_email, available_from, notes, created_at
        FROM listings
@@ -81,6 +89,9 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       schoolNear:    r.school_near,
       beds:          r.beds,
       baths:         Number(r.baths),
+      // pg returns NUMERIC as a string; Number() or the app gets "33.64".
+      lat:           r.latitude  == null ? null : Number(r.latitude),
+      lng:           r.longitude == null ? null : Number(r.longitude),
       totalRent:     r.total_rent_cents / 100,
       perPerson:     r.per_person_rent_cents / 100,
       photoUrl:      r.photo_url,
@@ -147,6 +158,21 @@ router.post('/listings', requireAuth, async (req, res) => {
     // Resend key or a stale push token can never fail a listing insert.
     notifyNewListing(rows[0], req.app.get('sendPushToUser'))
       .catch(err => console.error('[listingAlerts] fan-out failed:', err.message));
+
+    // Geocode, also detached. A third-party lookup must never sit between a
+    // founder pressing save and the listing existing " + EM + " and a listing with no
+    // coordinates degrades to the address text search, which is exactly the
+    // behaviour that shipped before this column existed.
+    geocodeListing({ address, city, schoolNear })
+      .then(async (coords) => {
+        await pool.query(
+          `UPDATE listings
+              SET latitude = $2, longitude = $3, geocoded_at = now()
+            WHERE id = $1`,
+          [rows[0].id, coords?.lat ?? null, coords?.lon ?? null],
+        );
+      })
+      .catch(err => console.error('[geocode] failed:', err.message));
   } catch (err) {
     console.error('listing create failed:', err);
     res.status(500).json({ error: 'Failed to create listing' });
