@@ -422,6 +422,12 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     const myBreakers = (meUserRows[0]?.match_dealbreakers && typeof meUserRows[0].match_dealbreakers === 'object')
       ? meUserRows[0].match_dealbreakers : {};
     const smokeFree  = myBreakers.smokeFree === true;
+    // Pets (Q76). Same shape as smoke-free and same fail-open rule: dormant
+    // until the viewer turns it on, and a candidate who has not answered Q76
+    // is NOT excluded. Most existing users predate the question and cannot
+    // retake within the 180-day cooldown, so excluding unanswered would
+    // quietly empty the feed for anyone who sets this.
+    const petFree    = myBreakers.petFree === true;
 
     const { rows } = await pool.query(
       `SELECT
@@ -525,7 +531,16 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
            $4::boolean = FALSE
            OR COALESCE((dq.answers->'51'->>'index')::int, (dq.answers->>'51')::int, 0) < 2
          )
-         ${school ? 'AND u.school = $5' : ''}
+         -- Pets hard-filter: if the viewer requires pet-free, drop candidates
+         -- who actually have a pet (Q76 index >= 2). Index 1 is "no pet, but I
+         -- might want one" -- an intention, not an animal -- so it passes, the
+         -- same way occasional cannabis passes the smoke-free cut at Q51.
+         -- Unanswered (-> 0) is not excluded. $5 = FALSE short-circuits.
+         AND (
+           $5::boolean = FALSE
+           OR COALESCE((dq.answers->'76'->>'index')::int, (dq.answers->>'76')::int, 0) < 2
+         )
+         ${school ? 'AND u.school = $6' : ''}
        -- u.id as a tiebreaker: score ties (common at the pool's edges) would
        -- otherwise sort in whatever order Postgres happens to return matching
        -- rows, which is not guaranteed stable across calls — the exact set of
@@ -534,8 +549,8 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
        ORDER BY cs.score DESC, u.id
        LIMIT ${FEED_POOL_CAP}`,
       school
-        ? [userId, myLookingFor, myGender, smokeFree, school]
-        : [userId, myLookingFor, myGender, smokeFree]
+        ? [userId, myLookingFor, myGender, smokeFree, petFree, school]
+        : [userId, myLookingFor, myGender, smokeFree, petFree]
     );
 
     // ── Viability pre-filter (matching-v10 P1) ──────────────────────────────
