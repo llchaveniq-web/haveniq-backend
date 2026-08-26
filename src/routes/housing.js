@@ -69,7 +69,8 @@ router.get('/listings', requireAuth, async (req, res) => {
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
               total_rent_cents, per_person_rent_cents, photo_url,
-              contact_name, contact_email, contact_phone, available_from, notes, created_at
+              contact_name, contact_email, contact_phone, available_from, notes, created_at,
+              source, source_url
        FROM listings
        WHERE is_active = TRUE
          -- A listing a human has not cleared is not shown to a student.
@@ -117,6 +118,15 @@ router.get('/listings', requireAuth, async (req, res) => {
         // contact email" branch and the Call button never rendered.
         contactEmail: r.contact_email,
         contactPhone: r.contact_phone,
+        // Where this listing came from, and the posting it came from.
+        //
+        // A collected listing has no contact details at all — Craigslist
+        // relays mail and exposes no address, and a Uloop page is a building
+        // rather than a person. Without these two fields such a listing reaches
+        // a student as a dead end: a price, a photo, and no way to enquire.
+        // The app shows "View on <source>" and hands them back to the original.
+        source:       r.source,
+        sourceUrl:    r.source_url,
         availableFrom: r.available_from,
         notes:        r.notes,
         createdAt:    r.created_at,
@@ -135,7 +145,8 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
               total_rent_cents, per_person_rent_cents, photo_url,
-              contact_name, contact_email, contact_phone, available_from, notes, created_at
+              contact_name, contact_email, contact_phone, available_from, notes, created_at,
+              source, source_url
        FROM listings
        WHERE id = $1 AND is_active = TRUE AND moderation_status = 'approved'`,
       [req.params.id],
@@ -158,6 +169,9 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       contactName:   r.contact_name,
       contactEmail:  r.contact_email,
       contactPhone:  r.contact_phone,
+      // See the browse list: without these a collected listing is a dead end.
+      source:        r.source,
+      sourceUrl:     r.source_url,
       availableFrom: r.available_from,
       notes:         r.notes,
       createdAt:     r.created_at,
