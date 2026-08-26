@@ -869,3 +869,19 @@ CREATE INDEX IF NOT EXISTS idx_listings_pending
 -- on any listing, and nobody would have noticed from the app side: a missing
 -- optional field looks exactly like a landlord who didn't give a number.
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+
+-- ── Collected listings: provenance and de-duplication ────── 2026-08-26 ──
+-- source      which adapter produced this row ('craigslist'); NULL for the
+--             founder-entered listings that predate the collector.
+-- source_url  the posting it came from. UNIQUE, and that uniqueness IS the
+--             de-duplication: a collector re-run inserts ON CONFLICT DO
+--             NOTHING, so re-reading yesterday's sitemap is a no-op instead of
+--             filling the queue with duplicates a human then has to reject one
+--             by one.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS source           TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS source_url       TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS source_posted_at TIMESTAMPTZ;
+-- Partial, so the many founder rows with a NULL source_url do not collide with
+-- each other under a plain UNIQUE constraint.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_listings_source_url
+  ON listings(source_url) WHERE source_url IS NOT NULL;

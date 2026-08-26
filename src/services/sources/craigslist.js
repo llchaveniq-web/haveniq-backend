@@ -137,6 +137,35 @@ function coords(html) {
   return { lat, lon };
 }
 
+/**
+ * The subcategory this posting sits in, from its breadcrumb.
+ *
+ * The `hhh` sitemap is ALL housing, which includes parking spaces, storage
+ * units and property for sale. Sampling turned up a storage-unit advert on the
+ * first pass. Only three subcategories are places a student can live:
+ *
+ *   apa  apartments / housing for rent
+ *   roo  rooms & shares
+ *   sub  sublets & temporary
+ *
+ * Anything else is filtered out rather than filed as a rental.
+ */
+const RENTAL_CATS = new Set(['apa', 'roo', 'sub']);
+
+function subcategory(html) {
+  const cats = [...String(html).matchAll(/[?&]cat=([a-z]{3})/g)].map(m => m[1]);
+  return cats.length ? cats[cats.length - 1] : null;
+}
+
+/** Street address when the posting maps one. Roughly 6 in 10 do. */
+function mapAddress(html) {
+  const raw = first(html, /<div class="mapaddress">([\s\S]*?)<\/div>/);
+  const addr = strip(raw);
+  // "near 3rd street" on its own is a cross-street, not an address — useful
+  // as context but not something to file as the location of a home.
+  return addr && /\d/.test(addr) ? addr : null;
+}
+
 /** Every attr chip: rent period, pets, laundry, parking, aircon. */
 function attributes(html) {
   return [...String(html).matchAll(/<div class="attr ([a-z_ -]+)"[^>]*>([\s\S]*?)<\/div>/g)]
@@ -158,6 +187,10 @@ function parsePosting(html, url) {
     || first(html, /<title>([^<]*)<\/title>/));
   if (!title) return null;
 
+  // A parking space or a storage unit is not somewhere to live.
+  const cat = subcategory(html);
+  if (cat && !RENTAL_CATS.has(cat)) return null;
+
   const cents = priceCents(html);
   const { lat, lon } = coords(html);
   // No price or no location: not actionable, so not stored.
@@ -171,7 +204,11 @@ function parsePosting(html, url) {
 
   return {
     sourceUrl: url,
+    subcategory: cat,
     title: cleanTitle(title),
+    // Null when the posting maps no street address; the caller derives one
+    // from the coordinates rather than inventing it here.
+    address: mapAddress(html),
     totalRentCents: cents,
     beds: beds ?? 1,
     baths: baths ?? 1,
@@ -187,6 +224,6 @@ function parsePosting(html, url) {
 
 module.exports = {
   SITEMAP_INDEX, CATEGORY,
-  locs, housingSitemapsFor, parsePosting, cleanTitle,
+  locs, housingSitemapsFor, parsePosting, cleanTitle, subcategory, mapAddress, RENTAL_CATS,
   priceCents, bedsBaths, coords, attributes, strip,
 };

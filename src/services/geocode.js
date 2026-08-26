@@ -123,4 +123,48 @@ function haversineMiles(a, b) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-module.exports = { geocodeListing, geocodeSchool, buildQuery, haversineMiles };
+/**
+ * Coordinates -> a street address. The inverse of the rest of this file.
+ *
+ * Needed because Craigslist gives every posting coordinates but only about six
+ * in ten a mapped street address, while listings.address is NOT NULL. Deriving
+ * the address FROM the posting's own coordinates is honest; inventing one, or
+ * filing "near 3rd street" as the location of a home, is not.
+ *
+ * Same throttle and the same never-throws contract as the forward lookup.
+ * Returns null when it cannot answer, and the caller decides whether a listing
+ * without an address is worth keeping.
+ */
+async function reverseGeocode(lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=18`;
+  try {
+    await throttle();
+    const res = await fetch(url, {
+      headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    const a = body && body.address;
+    if (!a) return null;
+
+    const house = a.house_number || '';
+    const road = a.road || a.pedestrian || a.footway || '';
+    // A road with no number is a street, not an address. Returned anyway when
+    // that is all there is — it still locates the listing on a map — but the
+    // scam scorer's thin_address rule will flag it for a human, which is the
+    // right outcome for a place we cannot pin to a building.
+    const street = [house, road].filter(Boolean).join(' ').trim();
+    if (!street) return null;
+
+    return {
+      address: street,
+      city: a.city || a.town || a.village || a.suburb || a.neighbourhood || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { geocodeListing, geocodeSchool, reverseGeocode, buildQuery, haversineMiles };
