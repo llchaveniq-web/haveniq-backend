@@ -79,6 +79,39 @@ test('rejects the stock splash image rather than passing it off as the building'
   assert.equal(p.photoUrl, null);
 });
 
+test('falls back to og:image, which is where the real photo actually lives', () => {
+  // The JSON-LD image is the splash on EVERY Uloop housing page. Reading only
+  // it produced 376 collected listings with no photo while the pages carried
+  // real ones all along.
+  const withOg = REAL + '<meta property="og:image" content="https://be.rentalbeast.com/listings/5366789.jpg?w=880"/>';
+  assert.match(ul.parsePosting(withOg, 'u').photoUrl, /rentalbeast\.com/);
+});
+
+test('falls back to the lazy-loaded gallery, adding the missing scheme', () => {
+  // The gallery uses data-src, so the images never appear in a src attribute,
+  // and the URLs are protocol-relative — unusable until a scheme is added.
+  const lazy = REAL + '<img data-src="//d31gnh3j8cblbd.uloop.com/abc/Housing-Near-UCLA">';
+  assert.equal(ul.parsePosting(lazy, 'u').photoUrl,
+    'https://d31gnh3j8cblbd.uloop.com/abc/Housing-Near-UCLA');
+});
+
+test('og:image is preferred over the gallery, and a real JSON-LD image over both', () => {
+  const both = REAL
+    + '<meta property="og:image" content="https://be.rentalbeast.com/listings/1.jpg"/>'
+    + '<img data-src="//cdn.uloop.com/x/y">';
+  assert.match(ul.parsePosting(both, 'u').photoUrl, /rentalbeast/);
+
+  const real = REAL.replace('uloop-splash-screen-960x419.png', 'property/9482/front.jpg');
+  assert.match(ul.parsePosting(real + '<meta property="og:image" content="https://other/z.jpg"/>', 'u').photoUrl,
+    /front\.jpg$/);
+});
+
+test('a placeholder in any of the three slots is still refused', () => {
+  const ph = REAL + '<meta property="og:image" content="https://uloop.com/img/uloop-splash-screen.png"/>'
+                  + '<img data-src="//cdn.uloop.com/img/favicon/32_32.png">';
+  assert.equal(ul.parsePosting(ph, 'u').photoUrl, null);
+});
+
 test('keeps a genuine photo', () => {
   const withPhoto = REAL.replace('uloop-splash-screen-960x419.png', 'property/9482/front.jpg');
   assert.match(ul.parsePosting(withPhoto, 'u').photoUrl, /front\.jpg$/);

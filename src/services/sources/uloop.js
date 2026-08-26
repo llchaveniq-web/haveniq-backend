@@ -68,20 +68,39 @@ function priceRange(raw) {
   return { lowCents: Math.round(Math.min(...nums) * 100), highCents: Math.round(Math.max(...nums) * 100) };
 }
 
+/** A splash screen, logo or placeholder is not a photo of the building. */
+const PLACEHOLDER_RE = /splash|placeholder|logo|default|favicon|no.?image/i;
+
 /**
  * The property's photo, or null when the page is only offering a placeholder.
  *
- * Uloop's JSON-LD falls back to its own splash screen when a listing has no
- * image. Storing that would put the identical stock graphic on every listing
- * as though it were the building — a small dishonesty, and exactly the kind
- * that erodes the "no fake listings" claim. A listing with no photo is honest;
- * a listing wearing someone's logo is not.
+ * Three places to look, because the obvious one is always wrong. Uloop's
+ * JSON-LD `image` is its own splash screen on EVERY housing page — reading only
+ * that produced 376 collected listings with no photo while the pages carried
+ * real ones the whole time.
+ *
+ *   1. JSON-LD image      genuine on the rare page that sets one
+ *   2. og:image           usually the real photo, on Uloop's rentalbeast CDN
+ *   3. data-src gallery   lazy-loaded, so it never appears in a src attribute
+ *
+ * Storing the splash would be worse than storing nothing: it puts one identical
+ * graphic on hundreds of cards as though each were a picture of the place, and
+ * a reviewer scanning the queue reads that as "this one has a photo".
  */
-function photoUrl(biz) {
-  const url = biz && biz.image && biz.image.url;
-  if (!url || typeof url !== 'string') return null;
-  if (/splash|placeholder|logo|default|no.?image/i.test(url)) return null;
-  return url;
+function photoUrl(biz, html = '') {
+  const fromLd = biz && biz.image && biz.image.url;
+  if (typeof fromLd === 'string' && fromLd && !PLACEHOLDER_RE.test(fromLd)) return fromLd;
+
+  const og = String(html).match(/<meta property="og:image" content="([^"]+)"/);
+  if (og && !PLACEHOLDER_RE.test(og[1])) return og[1];
+
+  // Protocol-relative ("//d31gnh3j8cblbd.uloop.com/..."), so it needs a scheme
+  // before anything can load it.
+  const lazy = String(html).match(/data-src="((?:https?:)?\/\/[^"]+)"/);
+  if (lazy && !PLACEHOLDER_RE.test(lazy[1])) {
+    return lazy[1].startsWith('//') ? 'https:' + lazy[1] : lazy[1];
+  }
+  return null;
 }
 
 /** Bed counts advertised anywhere on the page, ascending and de-duplicated. */
@@ -139,7 +158,7 @@ function parsePosting(html, url) {
     latitude: lat,
     longitude: lon,
     postedAt: null,                  // Uloop does not date its housing pages
-    photoUrl: photoUrl(biz),
+    photoUrl: photoUrl(biz, html),
     notes: [summary, String(biz.description || '').trim()].filter(Boolean).join('\n\n').slice(0, 4000),
   };
 }
