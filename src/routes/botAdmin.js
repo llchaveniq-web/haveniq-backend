@@ -25,6 +25,8 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
 
 // Demo / test accounts must NEVER receive a bot-drafted email or count as a
 // real signup to triage. Two flavors exist in production:
@@ -167,21 +169,41 @@ router.post('/signup/:userId/approve', requireBotToken, async (req, res) => {
 // the number: a reviewer needs to know which rule fired to tell a real concern
 // from a phrasing coincidence.
 router.get('/pending-listings', requireBotToken, async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
   try {
     const { rows } = await pool.query(`
       SELECT id, address, city, school_near, beds, baths,
-             per_person_rent_cents, photo_url, contact_name, contact_email,
-             notes, created_at, created_by, risk_score, risk_signals
+             per_person_rent_cents, total_rent_cents, photo_url,
+             contact_name, contact_email,
+             notes, created_at, created_by, risk_score, risk_signals,
+             source, source_url
       FROM listings
       WHERE moderation_status = 'pending'
+        AND ($1::text IS NULL OR source IS NOT DISTINCT FROM $1)
       ORDER BY risk_score DESC NULLS LAST, created_at ASC
-      LIMIT 50
-    `);
+      LIMIT $2 OFFSET $3
+    `, [req.query.source || null, limit, offset]);
+
+    // The whole queue, not just this page. A reviewer working through 500
+    // listings needs to know how many are left and how many are flagged,
+    // and a per-page count answers neither.
+    const { rows: [tally] } = await pool.query(`
+      SELECT count(*)::int total,
+             count(*) FILTER (WHERE risk_score >= 50)::int flagged,
+             count(*) FILTER (WHERE risk_score <  50 OR risk_score IS NULL)::int clean
+        FROM listings
+       WHERE moderation_status = 'pending'
+         AND ($1::text IS NULL OR source IS NOT DISTINCT FROM $1)
+    `, [req.query.source || null]);
+
     res.json({
       count: rows.length,
+      pending: tally,
       listings: rows.map(r => ({
         ...r,
         perPerson: r.per_person_rent_cents == null ? null : r.per_person_rent_cents / 100,
+        total: r.total_rent_cents == null ? null : r.total_rent_cents / 100,
       })),
     });
   } catch (err) {
@@ -236,6 +258,96 @@ router.post('/listing/:id/reject', requireBotToken, async (req, res) => {
   } catch (err) {
     console.error('[botAdmin] listing reject failed:', err);
     res.status(500).json({ error: 'Reject failed' });
+  }
+});
+
+// -- GET /bot-admin/review ------------------------------------------------
+// The moderation queue as a page a person can work through.
+//
+// Served WITHOUT the token, because a browser cannot set an Authorization
+// header on a plain navigation. That is safe only because the shell contains no
+// data: it is markup and script, and every byte of listing data behind it comes
+// from the token-gated JSON endpoints the page calls after the reviewer pastes
+// the token in. The alternative — a token in the query string — would put a
+// long-lived admin credential into browser history, server logs and any
+// referrer header the page emits, which is a worse trade than serving an empty
+// page to whoever asks.
+const REVIEW_PAGE = (() => {
+  try { return fs.readFileSync(path.join(__dirname, '../views/review.html'), 'utf8'); }
+  catch (err) { console.error('[botAdmin] review page missing:', err.message); return null; }
+})();
+
+router.get('/review', (_req, res) => {
+  if (!REVIEW_PAGE) return res.status(500).send('review page unavailable');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store');
+  res.send(REVIEW_PAGE);
+});
+
+// -- POST /bot-admin/listings/bulk ---------------------------------------
+// Approve or reject many listings in one call.
+//
+// This exists because the collector changed the shape of the problem. Reviewing
+// one listing per HTTP request was fine when listings arrived a few a week from
+// students; at 500 a day from two sources it is not review, it is a bottleneck
+// that keeps the housing tab empty.
+//
+// What it deliberately does NOT do is approve by rule. There is no "approve
+// everything under risk 50" endpoint, because that is a collector that
+// publishes on its own wearing a thin disguise, and the promise on the landing
+// page is that a human looked. Ids must be named explicitly by a caller that
+// has them on screen; the review page selects them from what it just rendered.
+//
+// Capped per call so a malformed client cannot approve the entire queue in one
+// request, and audited as a single row carrying every id — enough to reverse.
+const BULK_MAX = 200;
+
+router.post('/listings/bulk', requireBotToken, async (req, res) => {
+  const { action, reason } = req.body || {};
+  const raw = Array.isArray(req.body?.ids) ? req.body.ids : null;
+
+  if (action !== 'approve' && action !== 'reject') {
+    return res.status(400).json({ error: "action must be 'approve' or 'reject'" });
+  }
+  if (!raw || !raw.length) return res.status(400).json({ error: 'ids must be a non-empty array' });
+  if (raw.length > BULK_MAX) return res.status(400).json({ error: `at most ${BULK_MAX} ids per call` });
+
+  // Validate every id and refuse the whole batch if any is bad, rather than
+  // filtering the junk out. Two reasons. Number(null) is 0 and 0 is an integer,
+  // so a permissive filter turns [1, null, 3] into [1, 0, 3] — a null quietly
+  // becomes an id. And silently dropping ids means a caller that sent three and
+  // sees two acted on cannot tell which one it lost or why.
+  const ids = raw.map(v => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) ? Number(v) : NaN);
+  if (ids.some(n => !Number.isInteger(n) || n <= 0)) {
+    return res.status(400).json({ error: 'every id must be a positive integer' });
+  }
+
+  try {
+    // Same guards as the single-listing routes: approving is only ever a
+    // transition OUT of pending, so a double-submit is a no-op rather than
+    // re-publishing something a second reviewer already rejected.
+    const sql = action === 'approve'
+      ? `UPDATE listings
+            SET moderation_status = 'approved', reviewed_at = NOW(), review_note = $2
+          WHERE id = ANY($1::int[]) AND moderation_status = 'pending'
+          RETURNING id`
+      : `UPDATE listings
+            SET moderation_status = 'rejected', is_active = FALSE,
+                reviewed_at = NOW(), review_note = $2
+          WHERE id = ANY($1::int[]) AND moderation_status <> 'rejected'
+          RETURNING id`;
+
+    const { rows } = await pool.query(sql, [ids, reason ?? null]);
+    const acted = rows.map(r => r.id);
+
+    await audit('listing-review', `bulk-${action}`, null,
+      { requested: ids, acted, reason: reason ?? null }, `${acted.length}/${ids.length}`);
+
+    res.json({ ok: true, action, requested: ids.length, acted: acted.length, ids: acted });
+  } catch (err) {
+    console.error('[botAdmin] bulk listing review failed:', err);
+    res.status(500).json({ error: 'Bulk review failed' });
   }
 });
 
