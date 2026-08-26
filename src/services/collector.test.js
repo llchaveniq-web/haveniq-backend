@@ -106,6 +106,16 @@ test('per-person rent is derived from the bed count, not copied from total', asy
   assert.equal(paramOf('per_person_rent_cents'), 120000);
 });
 
+test('a room-priced listing is stored as-is, not divided by the bed count', async () => {
+  // pricedPerPerson means the source already states what ONE person pays. A
+  // $650 room in a 3BR must stay $650; dividing it stored $216, which is not a
+  // price any room in Los Angeles is let at and reads as a bargain, not a bug.
+  reset();
+  await storeListing({ ...PARSED, totalRentCents: 65000, beds: 3, pricedPerPerson: true }, OPTS);
+  assert.equal(paramOf('total_rent_cents'), 65000);
+  assert.equal(paramOf('per_person_rent_cents'), 65000);
+});
+
 test('the insert de-duplicates on source_url so a re-run is a no-op', async () => {
   reset();
   await storeListing(PARSED, OPTS);

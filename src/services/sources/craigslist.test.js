@@ -125,3 +125,92 @@ test('malformed input degrades to null instead of throwing', () => {
     assert.equal(cl.parsePosting(junk, 'u'), null);
   }
 });
+
+// ─── Per-person pricing, non-housing, and short stays ─────────────────────
+//
+// The first live run mispriced rooms, and the first attempt at fixing it
+// over-matched on the posting BODY and would have deleted 22 real apartments
+// and tripled the rent on a whole condo. Both directions are tested here: the
+// thing the rule must catch, and the thing it must leave alone.
+
+const ROOM = `
+<meta property="og:title" content="Pvt room furnished Miracle Mile area - rooms &amp; shares - apartment room">
+<span class="price">$650</span>
+<div class="attrgroup"><span class="attr important">3BR / 2Ba</span></div>
+<div class="mapbox" data-latitude="34.0620" data-longitude="-118.3560"></div>
+<section id="postingbody">Private room for rent in a 3 bedroom apartment. Shared kitchen.</section>`;
+
+test('a room is priced per person and is NOT divided by the bed count', () => {
+  // The bug that shipped: $650 / 3BR = $216, which no room in Los Angeles
+  // rents for. The apartment has three bedrooms; the tenant rents one.
+  const p = cl.parsePosting(ROOM, 'u');
+  assert.equal(p.totalRentCents, 65000);
+  assert.equal(p.beds, 3);
+  assert.equal(p.pricedPerPerson, true);
+});
+
+test('a whole apartment is still divided, because the total is the total', () => {
+  // The fix must not overshoot: a 3BR let as one unit at $3,000 really is
+  // $1,000 a head, and flattening that would break every ordinary listing.
+  assert.equal(cl.parsePosting(REAL, 'u').pricedPerPerson, false);
+});
+
+test('a whole condo is not repriced because its body mentions a master bedroom', () => {
+  // The real regression. A $6,450 3-bed Redondo Beach condo describes its own
+  // master bedroom; reading the BODY tripled its per-person rent to $6,450.
+  const condo = ROOM
+    .replace('Pvt room furnished Miracle Mile area - rooms &amp; shares - apartment room',
+             'South Redondo Beach 3 bed / 3.5 bath condo - apts/housing for rent - apartment')
+    .replace('Private room for rent in a 3 bedroom apartment. Shared kitchen.',
+             'Huge master bedroom with ensuite. Private room off the kitchen too.');
+  assert.equal(cl.parsePosting(condo, 'u').pricedPerPerson, false);
+});
+
+test('room language is read from the title, where the subcategory is missing', () => {
+  // Craigslist serves canonical /view/d/ URLs with no cat= breadcrumb, so a
+  // null subcategory is the common case rather than the corner.
+  assert.equal(cl.subcategory(ROOM), null);
+  assert.equal(cl.pricedPerPerson(null, 'Master bedroom private entrance'), true);
+  assert.equal(cl.pricedPerPerson(null, 'Roommates wanted for fall'), true);
+  assert.equal(cl.pricedPerPerson('roo', 'anything at all'), true);
+});
+
+test('an ordinary apartment title is not mistaken for a room', () => {
+  for (const t of ['2BR in Westwood available Sept 1', 'Spacious 1x1 with parking', 'Bright studio near campus']) {
+    assert.equal(cl.pricedPerPerson(null, t), false, t);
+  }
+});
+
+test('an office is not somewhere to live', () => {
+  // Reached the queue on the first live run: "DTLA private office for rent".
+  const office = ROOM.replace('Pvt room furnished Miracle Mile area', 'DTLA private office for lease');
+  assert.equal(cl.parsePosting(office, 'u'), null);
+});
+
+test('an apartment offering a parking space is still an apartment', () => {
+  // The other regression: matching the body threw out "BEAUTIFUL 1 BED/1 BATH",
+  // "STUDIO IN GREAT AREA" and 20 more, because each mentioned parking.
+  const withParking = REAL.replace('Ideally located just steps from the sand.',
+    'Includes one assigned parking space and extra storage space in the garage.');
+  assert.ok(cl.parsePosting(withParking, 'u'), 'a parking amenity is not a parking rental');
+});
+
+test('the posting\'s own rent-period field decides, not the prose', () => {
+  const weekly = REAL.replace('rent period: <b>monthly</b>', 'rent period: <b>weekly</b>');
+  assert.equal(cl.parsePosting(weekly, 'u'), null);
+  assert.equal(cl.rentPeriod(['rent period: nightly', 'cats are OK']), 'nightly');
+  assert.equal(cl.rentPeriod(['cats are OK']), null);
+});
+
+test('a monthly rate survives the word "weekly" appearing in the title', () => {
+  // "Clean & Sober Hostel - Weekly & Monthly Rates" is a real monthly rental.
+  // The declared period outranks the title whenever the posting states one.
+  const hostel = REAL.replace(/content="[^"]*"/, 'content="Sober living - Weekly &amp; Monthly Rates available"');
+  assert.ok(cl.parsePosting(hostel, 'u'));
+});
+
+test('with no declared period, an AirBnB-style title is rejected', () => {
+  // "AirBnBish" at $25 was stored as $25 a month rather than $25 a night.
+  const nightly = ROOM.replace('Pvt room furnished Miracle Mile area', 'AirBnBish short stay downtown');
+  assert.equal(cl.parsePosting(nightly, 'u'), null);
+});

@@ -92,7 +92,14 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
     derivedCity = derivedCity || rev.city;
   }
 
-  const perPersonCents = Math.round(parsed.totalRentCents / Math.max(1, parsed.beds));
+  // Per-person rent is the number HavenIQ is built on, and there are two ways
+  // a source states it. A whole-unit rental advertises the total, so it is
+  // divided by the bed count. A room or share advertises what ONE person pays,
+  // and dividing that again understates it by exactly the bed count — the bug
+  // that put a real $650 room in a 3BR into the queue as $216.
+  const perPersonCents = parsed.pricedPerPerson
+    ? parsed.totalRentCents
+    : Math.round(parsed.totalRentCents / Math.max(1, parsed.beds));
 
   const risk = assessListing({
     address,

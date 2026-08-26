@@ -157,6 +157,62 @@ function subcategory(html) {
   return cats.length ? cats[cats.length - 1] : null;
 }
 
+/**
+ * Is the advertised price for ONE room, not the whole place?
+ *
+ * In `roo` (rooms & shares) the number on the posting is what one person pays
+ * for one room. The collector divides a whole-unit rent by the bed count to
+ * get per-person, which is right for an apartment and badly wrong here: it
+ * understates a room by exactly the number of bedrooms. A real $650 room in a
+ * 3BR was stored as $216 — a figure no room in Los Angeles is let at, and one
+ * that reads as a bargain rather than as an error.
+ *
+ * Matched on the TITLE, never the body. The body of an ordinary whole-unit
+ * listing describes the rooms inside it: a 3-bed Redondo Beach condo at $6,450
+ * mentions its master bedroom, and reading that as "a room is for rent" tripled
+ * its per-person rent. What is FOR RENT is what the title says is for rent.
+ *
+ * Deliberately the RAW og:title, before cleanTitle() strips the trailing
+ * "- rooms & shares - apartment room" boilerplate. That suffix is Craigslist's
+ * own category label, and it survives on the canonical /view/d/ pages that
+ * carry no cat= breadcrumb — so it is the more reliable of the two signals,
+ * not noise to be cleaned off before looking.
+ */
+const ROOM_SHARE_RE = /\b(?:p(?:riva|v)te?\s+room|room\s+for\s+rent|rooms?\s+(?:&|and)\s+shares?|master\s+bedroom|own\s+room|roommates?\s+wanted|room\s+in\s+(?:a|an|my|the)|shared?\s+room)\b/i;
+
+function pricedPerPerson(cat, title) {
+  if (cat === 'roo') return true;
+  return ROOM_SHARE_RE.test(String(title));
+}
+
+/**
+ * Things in the housing sitemap that are not somewhere to live.
+ *
+ * RENTAL_CATS drops parking and storage when the breadcrumb declares a
+ * subcategory, but Craigslist serves canonical /view/d/ URLs carrying none, so
+ * that is the common case rather than the corner. Title-only for the same
+ * reason as above — an apartment advertising an assigned parking space or extra
+ * storage space is still an apartment.
+ */
+const NOT_HOUSING_RE = /\b(?:office\s+space|private\s+office|desk\s+space|coworking|parking\s+(?:space|spot|stall)|storage\s+(?:unit|space)|garage\s+for\s+rent|commercial\s+(?:space|unit|property)|retail\s+space|warehouse)\b/i;
+
+/**
+ * The rent period the posting itself declares, lower-cased, or null.
+ *
+ * Craigslist publishes this as an attribute chip — "rent period: monthly" —
+ * which beats inferring it from prose. An "AirBnBish" posting at $25 was stored
+ * as $25 a MONTH; the field says nightly and settles it, where guessing from
+ * the word "weekly" threw out a sober-living house that advertised weekly AND
+ * monthly rates and was a perfectly real monthly rental.
+ */
+function rentPeriod(attrs) {
+  const hit = (attrs || []).find(a => /^rent\s+period\s*:/i.test(a));
+  return hit ? hit.replace(/^rent\s+period\s*:\s*/i, '').trim().toLowerCase() : null;
+}
+
+/** Short-stay wording in a TITLE, used only when no rent-period chip exists. */
+const SHORT_STAY_RE = /\b(?:air\s?bnb\w*|short[- ]?stay|per\s+night|nightly|hostel)\b/i;
+
 /** Street address when the posting maps one. Roughly 6 in 10 do. */
 function mapAddress(html) {
   const raw = first(html, /<div class="mapaddress">([\s\S]*?)<\/div>/);
@@ -202,6 +258,13 @@ function parsePosting(html, url) {
   const attrs = attributes(html);
   const postedAt = first(html, /<time[^>]*datetime="([^"]+)"/);
 
+  // Second gate, for the pages whose breadcrumb declares no subcategory.
+  if (NOT_HOUSING_RE.test(title)) return null;
+  // A nightly rate stored as a monthly rent is off by roughly thirty times.
+  // The posting's own rent-period field decides when it has one.
+  const period = rentPeriod(attrs);
+  if (period ? period !== 'monthly' : SHORT_STAY_RE.test(title)) return null;
+
   return {
     sourceUrl: url,
     subcategory: cat,
@@ -210,6 +273,9 @@ function parsePosting(html, url) {
     // from the coordinates rather than inventing it here.
     address: mapAddress(html),
     totalRentCents: cents,
+    // The collector divides by beds to get per-person. For a room the price
+    // ALREADY is per-person, so it must not be divided again.
+    pricedPerPerson: pricedPerPerson(cat, title),
     beds: beds ?? 1,
     baths: baths ?? 1,
     isStudio,
@@ -250,5 +316,6 @@ module.exports = {
   collectUrls,
   SITEMAP_INDEX, CATEGORY,
   locs, housingSitemapsFor, parsePosting, cleanTitle, subcategory, mapAddress, RENTAL_CATS,
+  pricedPerPerson, rentPeriod, ROOM_SHARE_RE, NOT_HOUSING_RE, SHORT_STAY_RE,
   priceCents, bedsBaths, coords, attributes, strip,
 };
