@@ -348,14 +348,19 @@ router.post('/listings/bulk', requireBotToken, async (req, res) => {
   if (!raw || !raw.length) return res.status(400).json({ error: 'ids must be a non-empty array' });
   if (raw.length > BULK_MAX) return res.status(400).json({ error: `at most ${BULK_MAX} ids per call` });
 
-  // Validate every id and refuse the whole batch if any is bad, rather than
-  // filtering the junk out. Two reasons. Number(null) is 0 and 0 is an integer,
-  // so a permissive filter turns [1, null, 3] into [1, 0, 3] — a null quietly
-  // becomes an id. And silently dropping ids means a caller that sent three and
-  // sees two acted on cannot tell which one it lost or why.
-  const ids = raw.map(v => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) ? Number(v) : NaN);
-  if (ids.some(n => !Number.isInteger(n) || n <= 0)) {
-    return res.status(400).json({ error: 'every id must be a positive integer' });
+  // listings.id is a UUID. This validated "positive integer" and cast to
+  // an integer array on the strength of an assumption about the schema, and
+  // the tests confirmed that assumption because they stubbed the database with
+  // integer ids — so the route could never have worked against the real table,
+  // and the tests could never have noticed. Checked against information_schema.
+  //
+  // The whole batch is refused if any id is malformed, rather than the junk
+  // being filtered out: a caller that sent three ids and sees two acted on
+  // cannot tell which one it lost, or why.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ids = raw.map(v => (typeof v === 'string' ? v.trim() : ''));
+  if (ids.some(v => !UUID_RE.test(v))) {
+    return res.status(400).json({ error: 'every id must be a listing UUID' });
   }
 
   try {
@@ -365,12 +370,12 @@ router.post('/listings/bulk', requireBotToken, async (req, res) => {
     const sql = action === 'approve'
       ? `UPDATE listings
             SET moderation_status = 'approved', reviewed_at = NOW(), review_note = $2
-          WHERE id = ANY($1::int[]) AND moderation_status = 'pending'
+          WHERE id = ANY($1::uuid[]) AND moderation_status = 'pending'
           RETURNING id`
       : `UPDATE listings
             SET moderation_status = 'rejected', is_active = FALSE,
                 reviewed_at = NOW(), review_note = $2
-          WHERE id = ANY($1::int[]) AND moderation_status <> 'rejected'
+          WHERE id = ANY($1::uuid[]) AND moderation_status <> 'rejected'
           RETURNING id`;
 
     const { rows } = await pool.query(sql, [ids, reason ?? null]);

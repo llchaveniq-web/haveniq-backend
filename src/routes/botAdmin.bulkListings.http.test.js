@@ -5,6 +5,12 @@
 // turned that gate into a bottleneck that kept the housing tab empty, so these
 // two endpoints exist to make the pass fast WITHOUT removing the human.
 //
+// The fixture uses real UUIDs because listings.id IS a uuid. An earlier
+// version of this file stubbed integer ids, which let the route ship
+// validating "positive integer" and casting to ::int[] — it could never have
+// worked against the real table, and these tests could never have noticed. A
+// stub that invents the schema tests the assumption, not the code.
+//
 // What is tested hardest is the part that could quietly break the promise on
 // the landing page: that bulk approval only ever moves a row OUT of pending,
 // that it cannot be aimed at the whole queue in one call, and that the review
@@ -24,8 +30,18 @@ process.env.ADMIN_BOT_TOKEN = 'test-bot-token';
 let listings = new Map();
 let auditRows = [];
 
+// Real v4 shapes — the route validates the format, so '1' would be rejected.
+const ID1 = 'be85abce-9a6f-4af0-8e08-d6c51c987a90';
+const ID2 = 'c75f9d5a-13f5-4f8d-ac76-cf6b43da674c';
+const ID3 = '11111111-2222-4333-8444-555555555555';
+const ID4 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const uuidN = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+let sqls = [];
+
 inject('../db/pool', {
   query: async (sql, params = []) => {
+    sqls.push(sql);
     if (/CREATE (TABLE|INDEX)/i.test(sql)) return { rows: [] };
     if (/INSERT INTO bot_admin_audit/i.test(sql)) { auditRows.push(params); return { rows: [] }; }
 
@@ -55,51 +71,52 @@ const AUTH = { Authorization: 'Bearer test-bot-token' };
 
 test.beforeEach(() => {
   auditRows = [];
-  listings = new Map([
-    [1, { id: 1, moderation_status: 'pending' }],
-    [2, { id: 2, moderation_status: 'pending' }],
-    [3, { id: 3, moderation_status: 'approved' }],   // already cleared by a human
-    [4, { id: 4, moderation_status: 'rejected' }],
-  ]);
+  sqls = [];
+  listings = new Map(Object.entries({
+    [ID1]: { id: ID1, moderation_status: 'pending' },
+    [ID2]: { id: ID2, moderation_status: 'pending' },
+    [ID3]: { id: ID3, moderation_status: 'approved' },   // already cleared by a human
+    [ID4]: { id: ID4, moderation_status: 'rejected' },
+  }));
 });
 
 test('bulk approve flips the pending rows and reports how many it acted on', async () => {
   const res = await request(app).post('/bot-admin/listings/bulk')
-    .set(AUTH).send({ action: 'approve', ids: [1, 2] });
+    .set(AUTH).send({ action: 'approve', ids: [ID1, ID2] });
   assert.equal(res.status, 200);
   assert.equal(res.body.acted, 2);
-  assert.equal(listings.get(1).moderation_status, 'approved');
-  assert.equal(listings.get(2).moderation_status, 'approved');
+  assert.equal(listings.get(ID1).moderation_status, 'approved');
+  assert.equal(listings.get(ID2).moderation_status, 'approved');
 });
 
 test('an already-rejected listing is not resurrected by a bulk approve', async () => {
   // The reason the single-listing route guards on status too: a second
   // reviewer's rejection must not be undone by a stale page approving in bulk.
   const res = await request(app).post('/bot-admin/listings/bulk')
-    .set(AUTH).send({ action: 'approve', ids: [1, 4] });
+    .set(AUTH).send({ action: 'approve', ids: [ID1, ID4] });
   assert.equal(res.body.acted, 1);
-  assert.deepEqual(res.body.ids, [1]);
-  assert.equal(listings.get(4).moderation_status, 'rejected');
+  assert.deepEqual(res.body.ids, [ID1]);
+  assert.equal(listings.get(ID4).moderation_status, 'rejected');
 });
 
 test('bulk approve is idempotent, so a double-submit is a no-op', async () => {
-  await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids: [1] });
-  const again = await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids: [1] });
+  await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids: [ID1] });
+  const again = await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids: [ID1] });
   assert.equal(again.body.acted, 0);
 });
 
 test('bulk reject deactivates and is reversible from the audit row', async () => {
   const res = await request(app).post('/bot-admin/listings/bulk')
-    .set(AUTH).send({ action: 'reject', ids: [1, 2], reason: 'duplicate building' });
+    .set(AUTH).send({ action: 'reject', ids: [ID1, ID2], reason: 'duplicate building' });
   assert.equal(res.body.acted, 2);
   const payload = JSON.parse(auditRows.at(-1)[3]);
-  assert.deepEqual(payload.requested, [1, 2]);
-  assert.deepEqual(payload.acted, [1, 2]);
+  assert.deepEqual(payload.requested, [ID1, ID2]);
+  assert.deepEqual(payload.acted, [ID1, ID2]);
   assert.equal(payload.reason, 'duplicate building');
 });
 
 test('the audit row records requested vs acted, not just a count', async () => {
-  await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids: [1, 3] });
+  await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids: [ID1, ID3] });
   const [botName, action, , , result] = auditRows.at(-1);
   assert.equal(botName, 'listing-review');
   assert.equal(action, 'bulk-approve');
@@ -108,14 +125,14 @@ test('the audit row records requested vs acted, not just a count', async () => {
 
 test('an unknown action is refused rather than defaulting to approve', async () => {
   for (const action of ['publish', 'APPROVE', '', undefined]) {
-    const res = await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action, ids: [1] });
+    const res = await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action, ids: [ID1] });
     assert.equal(res.status, 400, String(action));
   }
-  assert.equal(listings.get(1).moderation_status, 'pending');
+  assert.equal(listings.get(ID1).moderation_status, 'pending');
 });
 
 test('an empty or non-numeric id list is refused', async () => {
-  for (const ids of [[], undefined, 'all', ['x', null]]) {
+  for (const ids of [[], undefined, 'all', ['x', null], [1, 2], ['00000000-0000-4000-8000-00000000000'], [ID1, 7]]) {
     const res = await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids });
     assert.equal(res.status, 400, JSON.stringify(ids));
   }
@@ -125,15 +142,15 @@ test('a single call cannot sweep the entire queue', async () => {
   // The cap is what stops a malformed client — or a stray script — from
   // publishing every pending listing in one request.
   const res = await request(app).post('/bot-admin/listings/bulk')
-    .set(AUTH).send({ action: 'approve', ids: Array.from({ length: 201 }, (_, i) => i + 1) });
+    .set(AUTH).send({ action: 'approve', ids: Array.from({ length: 201 }, (_, i) => uuidN(i + 1)) });
   assert.equal(res.status, 400);
   assert.match(res.body.error, /200/);
 });
 
 test('bulk review requires the admin token', async () => {
-  const res = await request(app).post('/bot-admin/listings/bulk').send({ action: 'approve', ids: [1] });
+  const res = await request(app).post('/bot-admin/listings/bulk').send({ action: 'approve', ids: [ID1] });
   assert.ok(res.status === 401 || res.status === 403, `got ${res.status}`);
-  assert.equal(listings.get(1).moderation_status, 'pending');
+  assert.equal(listings.get(ID1).moderation_status, 'pending');
 });
 
 test('the review page is served without a token but carries no listing data', async () => {
@@ -181,4 +198,16 @@ test('the page widens img-src to https so listing photos actually load', async (
   assert.match(csp, /img-src[^;]*https:/);
   assert.match(csp, /script-src 'self'/);
   assert.match(csp, /frame-ancestors 'none'/);
+});
+
+test('bulk approve binds a uuid array', async () => {
+  await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'approve', ids: [ID1] });
+  const q = sqls.find(x => /UPDATE listings/i.test(x));
+  assert.match(q, /ANY\(\$1::uuid\[\]\)/, 'must cast to uuid[], not int[]');
+});
+
+test('bulk reject binds a uuid array too', async () => {
+  await request(app).post('/bot-admin/listings/bulk').set(AUTH).send({ action: 'reject', ids: [ID1] });
+  const q = sqls.find(x => /UPDATE listings/i.test(x));
+  assert.match(q, /ANY\(\$1::uuid\[\]\)/);
 });
