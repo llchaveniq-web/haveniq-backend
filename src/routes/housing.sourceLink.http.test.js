@@ -44,8 +44,14 @@ inject('../db/pool', {
     if (/FROM school_coords/i.test(sql)) return { rows: [] };
     if (/FROM listings/i.test(sql)) {
       let rows = all.filter(r => r.is_active === true && r.moderation_status === 'approved');
-      if (/WHERE id = \$1/i.test(sql)) rows = rows.filter(r => String(r.id) === String(params[0]));
-      else if (params[0]) rows = rows.filter(r => r.school_near === params[0]);
+      if (/WHERE id = \$1/i.test(sql)) return { rows: rows.filter(r => String(r.id) === String(params[0])) };
+      if (params[0]) rows = rows.filter(r => r.school_near === params[0]);
+      // Honour LIMIT/OFFSET the way Postgres would, or a test asserting the
+      // cap passes no matter what the route bound.
+      if (/LIMIT \$4 OFFSET \$5/i.test(sql)) {
+        const [, , , limit, offset] = params;
+        rows = rows.slice(offset ?? 0, (offset ?? 0) + (limit ?? rows.length));
+      }
       return { rows };
     }
     return { rows: [] };
@@ -136,4 +142,31 @@ test('a rejected or deactivated listing stays out of both routes', async () => {
 test('browsing requires a signed-in student', async () => {
   assert.equal((await request(app).get('/housing/listings')).status, 401);
   assert.equal((await request(app).get('/housing/listings/1')).status, 401);
+});
+
+test('the browse list is not capped at 50 any more', async () => {
+  // A hardcoded LIMIT 50 quietly became the product: with a collector filing
+  // hundreds per campus, a student filtering by price was filtering 50 rows
+  // rather than the market. Filtering happens client-side, so the screen needs
+  // the whole campus in hand.
+  all = Array.from({ length: 300 }, (_, i) => row({ id: i + 1 }));
+  const res = await request(app).get('/housing/listings?limit=500').set(AS_USER);
+  assert.equal(res.body.listings.length, 300, 'all 300 should come back, not 50');
+});
+
+test('one request cannot ask for the whole table', async () => {
+  // 600 rows available, 500 is the ceiling — so a passing result here means the
+  // cap was really applied, not that the fixture happened to be small.
+  all = Array.from({ length: 600 }, (_, i) => row({ id: i + 1 }));
+  const res = await request(app).get('/housing/listings?limit=99999').set(AS_USER);
+  assert.equal(res.body.listings.length, 500);
+});
+
+test('a junk limit falls back to the default instead of erroring', async () => {
+  all = [row()];
+  for (const l of ['abc', '-5', '0', '']) {
+    const res = await request(app).get(`/housing/listings?limit=${l}`).set(AS_USER);
+    assert.equal(res.status, 200, l);
+    assert.equal(res.body.listings.length, 1);
+  }
 });

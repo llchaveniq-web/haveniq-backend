@@ -64,6 +64,13 @@ router.get('/listings', requireAuth, async (req, res) => {
     const callerSchool = req.query.school || userRows[0]?.school || null;
     const maxPerPerson = req.query.maxPrice ? Math.round(Number(req.query.maxPrice) * 100) : null;
     const minBeds      = req.query.minBeds  ? Number(req.query.minBeds) : null;
+    // The cap used to be a hardcoded 50. With a collector filing hundreds of
+    // listings per campus that silently became the product: a student filtering
+    // by price was filtering 50 rows, not the market, and the 51st cheapest
+    // place near campus simply did not exist as far as the app was concerned.
+    // Capped at 500 so one request cannot ask for a whole table.
+    const limit  = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
 
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
@@ -80,8 +87,8 @@ router.get('/listings', requireAuth, async (req, res) => {
          AND ($2::integer IS NULL OR per_person_rent_cents <= $2)
          AND ($3::integer IS NULL OR beds >= $3)
        ORDER BY created_at DESC
-       LIMIT 50`,
-      [callerSchool, maxPerPerson, minBeds],
+       LIMIT $4 OFFSET $5`,
+      [callerSchool, maxPerPerson, minBeds, limit, offset],
     );
 
     // Straight-line distance from campus, when we know where both ends are.
