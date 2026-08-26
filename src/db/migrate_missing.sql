@@ -905,3 +905,26 @@ CREATE TABLE IF NOT EXISTS collector_seen (
 );
 CREATE INDEX IF NOT EXISTS idx_collector_seen_settled
   ON collector_seen(source) WHERE outcome <> 'failed';
+
+-- ── Keeping collected listings honest after they are stored ──────────────
+--
+-- The collector only ever ADDED. filterNew deliberately skips anything already
+-- held so a cycle does not re-download a whole sitemap, which means nothing
+-- ever re-checked a listing once it was in. Craigslist housing expires in
+-- about 30 days and a rental comes down the moment it is let — often within
+-- days — so the queue would have drifted into advertising places that no
+-- longer exist, silently, with a "no fake listings" promise on the landing
+-- page. A listing for a flat already rented is not distinguishable from a fake
+-- one on the student's side.
+--
+-- last_checked_at drives the sweep order: least-recently-checked first, so the
+-- oldest information is always the next thing re-read.
+-- unavailable_at records WHEN the source stopped serving it, which is the
+-- difference between a listing a human rejected and one the world removed.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS unavailable_at  TIMESTAMPTZ;
+
+-- The sweep asks for "collected, still live, longest since checked".
+CREATE INDEX IF NOT EXISTS idx_listings_recheck
+  ON listings (last_checked_at NULLS FIRST)
+  WHERE source_url IS NOT NULL AND is_active = TRUE;

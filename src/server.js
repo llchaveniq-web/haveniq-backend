@@ -803,6 +803,10 @@ server.listen(PORT, () => {
   }
 
   const COLLECT_PER_RUN = Number(process.env.COLLECT_PER_RUN || 150);
+  // 100 re-checks a cycle is under two minutes at one request per second, and
+  // sweeps a few hundred listings roughly every couple of hours — so the
+  // oldest thing a student can see is never stale by more than that.
+  const RECHECK_PER_RUN = Number(process.env.RECHECK_PER_RUN || 100);
   const COLLECT_EVERY_MS = Number(process.env.COLLECT_EVERY_MIN || 30) * 60 * 1000;
 
   let collectInFlight = false;
@@ -831,6 +835,27 @@ server.listen(PORT, () => {
         } catch (e) {
           console.error('[collector] target failed', JSON.stringify(t), e.message);
         }
+      }
+
+      // Re-read what we already hold, and retire what the source has dropped.
+      //
+      // Runs after collecting, on the same cycle, because it is the other half
+      // of the same job: adding new listings keeps the tab full, and this keeps
+      // it honest. Without it the app drifts into advertising flats that were
+      // let weeks ago — which, from a student's side, is exactly what a fake
+      // listing looks like.
+      try {
+        const { recheckListings } = require('./services/recheck');
+        const { politeFetch } = require('./services/collector');
+        const seen = await recheckListings({
+          politeFetch,
+          limit: RECHECK_PER_RUN,
+          log: () => {},              // per-listing chatter stays out of the logs
+        });
+        if (seen.checked) console.log('[recheck]', JSON.stringify(seen));
+        if (seen.blocked > 0) console.error('[recheck] BLOCKED on', seen.blocked, 'check(s) — listings left live, not retired');
+      } catch (err) {
+        console.error('[recheck] failed:', err.message);
       }
     } catch (err) {
       console.error('[collector] could not start:', err.message);
