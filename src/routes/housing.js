@@ -69,8 +69,31 @@ router.get('/listings', requireAuth, async (req, res) => {
     // by price was filtering 50 rows, not the market, and the 51st cheapest
     // place near campus simply did not exist as far as the app was concerned.
     // Capped at 500 so one request cannot ask for a whole table.
+    // How far from campus still counts as "near". Wide by default: USC to
+    // downtown is 3 miles, UCLA to USC is 12, and Orange Coast College sits 35
+    // from central LA — a tight radius would quietly re-create the empty tab.
+    const radiusMi = Math.min(Math.max(Number(req.query.radiusMi) || 30, 1), 200);
     const limit  = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    // WHERE a listing is, not what it was labelled.
+    //
+    // school_near is a label the collector writes, and a metro-wide source
+    // cannot honestly pick one campus: every Craigslist LA posting went in
+    // tagged 'UCLA' because that was the configured target, which made 480
+    // real listings invisible to the 14 USC students on the app and the 3 at
+    // Orange Coast College. Nobody was at UCLA. A downtown apartment is near
+    // USC whatever a label says.
+    //
+    // So the filter is distance from the caller's campus when we know where
+    // both ends are. A bounding box does the cheap cut in SQL — it is a plain
+    // range scan rather than trigonometry over every row — and the exact
+    // haversine below trims the corners of that box, which are up to 41% too
+    // far out at the diagonal.
+    const campus = await getSchoolCoords(callerSchool);
+    // ~69 miles per degree of latitude; longitude degrees shrink with cos(lat).
+    const latPad = campus ? radiusMi / 69 : null;
+    const lonPad = campus ? radiusMi / (69 * Math.max(0.1, Math.cos(campus.lat * Math.PI / 180))) : null;
 
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
@@ -83,22 +106,33 @@ router.get('/listings', requireAuth, async (req, res) => {
          -- A listing a human has not cleared is not shown to a student.
          -- This is the line the "no fake listings" promise rests on.
          AND moderation_status = 'approved'
-         AND ($1::text IS NULL OR school_near = $1)
+         AND (
+           $1::text IS NULL
+           OR (
+             -- In the box around campus...
+             $6::numeric IS NOT NULL
+             AND latitude  BETWEEN $6::numeric - $8::numeric AND $6::numeric + $8::numeric
+             AND longitude BETWEEN $7::numeric - $9::numeric AND $7::numeric + $9::numeric
+           )
+           -- ...or carrying no coordinates at all, in which case its label is
+           -- the only thing that can place it and we fall back to that.
+           OR (latitude IS NULL AND school_near = $1)
+           -- ...or we could not locate the campus, so distance is not on offer.
+           OR ($6::numeric IS NULL AND school_near = $1)
+         )
          AND ($2::integer IS NULL OR per_person_rent_cents <= $2)
          AND ($3::integer IS NULL OR beds >= $3)
        ORDER BY created_at DESC
        LIMIT $4 OFFSET $5`,
-      [callerSchool, maxPerPerson, minBeds, limit, offset],
+      [callerSchool, maxPerPerson, minBeds, limit, offset,
+       campus?.lat ?? null, campus?.lon ?? null, latPad, lonPad],
     );
 
     // Straight-line distance from campus, when we know where both ends are.
     // Deliberately computed here rather than in SQL: it needs a network
     // geocode on a cache miss, and a listing with no coordinates simply has no
     // distance rather than being excluded from the results.
-    const campus = await getSchoolCoords(callerSchool);
-
-    res.json({
-      listings: rows.map(r => ({
+    const mapped = rows.map(r => ({
         id:           r.id,
         address:      r.address,
         city:         r.city,
@@ -137,8 +171,19 @@ router.get('/listings', requireAuth, async (req, res) => {
         availableFrom: r.available_from,
         notes:        r.notes,
         createdAt:    r.created_at,
-      })),
-    });
+      }));
+
+    // Trim the corners the bounding box let through. A square around a circle
+    // reaches sqrt(2) — about 41% — further at the diagonal than the radius,
+    // so without this a 30-mile search returns places up to 42 miles away in
+    // the north-east and nowhere in particular in the north.
+    //
+    // A listing with no distance is kept: it either has no coordinates or the
+    // campus could not be located, and in both cases it got here on its label,
+    // which the SQL above already checked.
+    const listings = mapped.filter(l => l.distanceMi == null || l.distanceMi <= radiusMi);
+
+    res.json({ listings });
   } catch (err) {
     console.error('listings fetch failed:', err);
     res.status(500).json({ error: 'Failed to load listings' });

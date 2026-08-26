@@ -29,10 +29,21 @@ inject('../middleware/auth', {
   },
 });
 
+let campusCoords = { lat: 34.0224, lon: -118.2851 };   // USC
+
 inject('../services/geocode', {
   geocodeListing: async () => null,
   geocodeSchool: async () => null,
-  haversineMiles: () => 1.2,
+  // The real one. A stub returning a constant would make every distance test
+  // pass regardless of where the listing actually is.
+  haversineMiles: (a, b) => {
+    if (!a || !b) return null;
+    const R = 3958.7613, rad = d => (d * Math.PI) / 180;
+    const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  },
 });
 
 // Stands in for Postgres by applying the same predicates the route asks for,
@@ -41,11 +52,23 @@ inject('../db/pool', {
   query: async (sql, params = []) => {
     sqls.push(sql);
     if (/FROM users WHERE id/i.test(sql)) return { rows: [{ school: 'UCLA' }] };
-    if (/FROM school_coords/i.test(sql)) return { rows: [] };
+    if (/FROM school_coords/i.test(sql)) {
+      return { rows: campusCoords ? [{ latitude: campusCoords.lat, longitude: campusCoords.lon }] : [] };
+    }
+    if (/INSERT INTO school_coords/i.test(sql)) return { rows: [] };
     if (/FROM listings/i.test(sql)) {
       let rows = all.filter(r => r.is_active === true && r.moderation_status === 'approved');
       if (/WHERE id = \$1/i.test(sql)) return { rows: rows.filter(r => String(r.id) === String(params[0])) };
-      if (params[0]) rows = rows.filter(r => r.school_near === params[0]);
+      if (params[0]) {
+        const [school, , , , , cLat, cLon, latPad, lonPad] = params;
+        rows = rows.filter(r => {
+          if (cLat == null) return r.school_near === school;
+          if (r.latitude == null) return r.school_near === school;
+          const la = Number(r.latitude), lo = Number(r.longitude);
+          return la >= cLat - latPad && la <= cLat + latPad
+              && lo >= cLon - lonPad && lo <= cLon + lonPad;
+        });
+      }
       // Honour LIMIT/OFFSET the way Postgres would, or a test asserting the
       // cap passes no matter what the route bound.
       if (/LIMIT \$4 OFFSET \$5/i.test(sql)) {
@@ -78,7 +101,7 @@ const row = (over = {}) => ({
   ...over,
 });
 
-test.beforeEach(() => { all = [row()]; sqls = []; });
+test.beforeEach(() => { all = [row()]; sqls = []; campusCoords = { lat: 34.0224, lon: -118.2851 }; });
 
 test('the browse list hands back where a listing came from', async () => {
   const res = await request(app).get('/housing/listings').set(AS_USER);
@@ -169,4 +192,74 @@ test('a junk limit falls back to the default instead of erroring', async () => {
     assert.equal(res.status, 200, l);
     assert.equal(res.body.listings.length, 1);
   }
+});
+
+// ─── Distance, not labels ─────────────────────────────────────────────────
+//
+// The bug these exist for: 480 real listings were tagged school_near 'UCLA'
+// because that was the collector's configured target, and every student on the
+// app was at USC or Orange Coast College. Nobody was at UCLA, so nobody saw
+// anything. A downtown apartment is near USC whatever a label says.
+
+const USC = { lat: 34.0224, lon: -118.2851 };
+const at = (lat, lon, over = {}) => row({ latitude: String(lat), longitude: String(lon), ...over });
+
+test('a listing labelled for another campus still shows if it is nearby', async () => {
+  // Downtown LA, 2 miles from USC, tagged UCLA. This is the actual 480 rows.
+  all = [at(34.0407, -118.2468, { school_near: 'UCLA' })];
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.listings.length, 1, 'a nearby listing must not be hidden by its label');
+  assert.ok(res.body.listings[0].distanceMi < 5);
+});
+
+test('a listing on the right label but the wrong side of the state does not', async () => {
+  // Sacramento, ic tagged USC. The label alone must not be enough.
+  all = [at(38.5816, -121.4944, { school_near: 'USC' })];
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.deepEqual(res.body.listings, []);
+});
+
+test('the corners of the bounding box are trimmed by real distance', async () => {
+  // A square around a circle reaches ~41% further at the diagonal. This point
+  // is inside the box on both axes and 40+ miles away, so only the haversine
+  // pass can reject it.
+  const d = 30 / 69;
+  all = [at(USC.lat + d * 0.99, USC.lon + d * 0.99, { school_near: 'USC' })];
+  const inBox = await request(app).get('/housing/listings?school=USC&radiusMi=30').set(AS_USER);
+  assert.deepEqual(inBox.body.listings, [], 'diagonal corner should be trimmed');
+});
+
+test('radiusMi widens and narrows the search', async () => {
+  all = [at(34.0689, -118.4452, { school_near: 'UCLA' })];   // UCLA, ~12mi from USC
+  const wide = await request(app).get('/housing/listings?school=USC&radiusMi=30').set(AS_USER);
+  const tight = await request(app).get('/housing/listings?school=USC&radiusMi=5').set(AS_USER);
+  assert.equal(wide.body.listings.length, 1);
+  assert.deepEqual(tight.body.listings, []);
+});
+
+test('a listing with no coordinates falls back to its label', async () => {
+  // It cannot be placed any other way, so the label is all there is.
+  all = [row({ latitude: null, longitude: null, school_near: 'USC' })];
+  const mine = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(mine.body.listings.length, 1);
+  all = [row({ latitude: null, longitude: null, school_near: 'UCLA' })];
+  const theirs = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.deepEqual(theirs.body.listings, []);
+});
+
+test('an unlocatable campus falls back to labels rather than showing nothing', async () => {
+  // If we cannot place the school, distance is not on offer — and returning an
+  // empty tab would be worse than the label we already have.
+  campusCoords = null;
+  all = [at(34.0407, -118.2468, { school_near: 'USC' }), at(34.0689, -118.4452, { school_near: 'UCLA' })];
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.listings.length, 1);
+  assert.equal(res.body.listings[0].schoolNear, 'USC');
+});
+
+test('the moderation gate still holds under distance filtering', async () => {
+  // The new WHERE clause must not have loosened the line the promise rests on.
+  all = [at(34.0407, -118.2468, { school_near: 'UCLA', moderation_status: 'pending' })];
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.deepEqual(res.body.listings, []);
 });
