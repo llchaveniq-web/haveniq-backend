@@ -770,6 +770,72 @@ server.listen(PORT, () => {
   setTimeout(runHousingIngest, 10 * 60 * 1000);
   setInterval(runHousingIngest, 7 * 24 * 60 * 60 * 1000).unref?.();
 
+  // ── Listing collector ────────────────────────────────────────────
+  // Continuous, not on demand: a new posting should reach the moderation queue
+  // on its own, not when someone remembers to run a script.
+  //
+  // Targets are configured, not compiled, so adding a campus is an env change
+  // rather than a deploy:
+  //
+  //     COLLECT_TARGETS=craigslist:lax:UCLA,craigslist:sfo:UC Berkeley
+  //
+  // Unset means the collector stays dark, which is the right default for a job
+  // that fetches from someone else's site.
+  //
+  // Each cycle reads today's sitemap, drops every posting already held WITHOUT
+  // fetching it (collector.filterNew), and walks only what is new at one
+  // request per second. PER_RUN caps a cycle so it stays bounded and polite;
+  // at 150 per half hour that is 7,200 a day, comfortably above what a single
+  // region actually publishes.
+  //
+  // Everything it collects lands as 'pending'. This job cannot publish.
+  const COLLECT_TARGETS = (process.env.COLLECT_TARGETS || '').split(',')
+    .map(t => t.trim()).filter(Boolean)
+    .map(t => {
+      const [source, region, ...school] = t.split(':');
+      return { source, region, school: school.join(':').trim() };
+    })
+    .filter(t => t.source && t.region && t.school);
+
+  const COLLECT_PER_RUN = Number(process.env.COLLECT_PER_RUN || 150);
+  const COLLECT_EVERY_MS = Number(process.env.COLLECT_EVERY_MIN || 30) * 60 * 1000;
+
+  let collectInFlight = false;
+  const runCollector = async () => {
+    if (collectInFlight || !COLLECT_TARGETS.length) return;
+    collectInFlight = true;
+    try {
+      const { collect } = require('./services/collector');
+      const SOURCES = { craigslist: require('./services/sources/craigslist') };
+      for (const t of COLLECT_TARGETS) {
+        const adapter = SOURCES[t.source];
+        if (!adapter) { console.error('[collector] unknown source', t.source); continue; }
+        try {
+          const stats = await collect(adapter, {
+            region: t.region, schoolNear: t.school,
+            limit: COLLECT_PER_RUN,
+            log: () => {},               // per-posting chatter stays out of the logs
+          });
+          console.log('[collector]', JSON.stringify({ ...t, ...stats }));
+          // A source that starts refusing us is worth a human knowing about.
+          // The collector does not try again wearing a different hat.
+          if (stats.blocked > 0) console.error('[collector] BLOCKED by', t.source, '-', stats.blocked, 'request(s) refused');
+        } catch (e) {
+          console.error('[collector] target failed', JSON.stringify(t), e.message);
+        }
+      }
+    } catch (err) {
+      console.error('[collector] could not start:', err.message);
+    } finally {
+      collectInFlight = false;
+    }
+  };
+  if (COLLECT_TARGETS.length) {
+    console.log('[collector] watching', COLLECT_TARGETS.map(t => `${t.source}:${t.region}->${t.school}`).join(', '));
+    setTimeout(runCollector, 4 * 60 * 1000);          // after boot settles
+    setInterval(runCollector, COLLECT_EVERY_MS).unref?.();
+  }
+
   // ── Outcome-learning 24/7 wiring (Phases 1–4) ──────────────────────────────
   // Two always-on jobs ride this existing scheduler; the ONE hard stop —
   // committing weight changes to the live matching model — stays human-gated.

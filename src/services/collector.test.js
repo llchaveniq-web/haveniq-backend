@@ -151,3 +151,31 @@ test('coordinates from the posting are stored, so no forward geocode is needed',
   assert.equal(paramOf('latitude'), 34.0969);
   assert.equal(paramOf('longitude'), -118.328);
 });
+
+// ── incremental collection ─────────────────────────────────────────────────
+
+test('filterNew drops what we already hold, without fetching it', async () => {
+  reset();
+  insertReturns = [{ source_url: 'https://x/b' }];      // the DB says it has b
+  const { filterNew } = require('./collector');
+  const out = await filterNew(['https://x/a', 'https://x/b', 'https://x/c'], 'craigslist');
+
+  assert.deepEqual(out, ['https://x/a', 'https://x/c']);
+  assert.match(inserts[0].sql, /source_url = ANY\(\$2::text\[\]\)/, 'one bulk query, not one per url');
+  assert.equal(inserts[0].params[0], 'craigslist', 'scoped to the source');
+});
+
+test('filterNew on an empty list does not query at all', async () => {
+  reset();
+  const { filterNew } = require('./collector');
+  assert.deepEqual(await filterNew([], 'craigslist'), []);
+  assert.equal(inserts.length, 0);
+});
+
+test('filterNew keeps everything when the source is new to us', async () => {
+  reset();
+  insertReturns = [];
+  const { filterNew } = require('./collector');
+  const urls = ['https://x/a', 'https://x/b'];
+  assert.deepEqual(await filterNew(urls, 'craigslist'), urls);
+});

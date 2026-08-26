@@ -124,6 +124,29 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
 }
 
 /**
+ * Drop the postings we already hold, WITHOUT fetching them.
+ *
+ * This is the difference between a script someone runs and a job that runs
+ * itself. The insert already de-duplicates on source_url — but only after the
+ * page has been downloaded, so a scheduled collector would re-fetch all 4,600
+ * of a region's postings every cycle to discover it had seen 4,595 of them.
+ * One bulk query instead, and a repeat pass costs almost nothing: it fetches
+ * only what actually appeared since last time.
+ *
+ * It is also the polite behaviour. Re-reading someone else's entire sitemap
+ * every half hour is how a crawler stops being welcome.
+ */
+async function filterNew(urls, source) {
+  if (!urls.length) return urls;
+  const { rows } = await pool.query(
+    'SELECT source_url FROM listings WHERE source = $1 AND source_url = ANY($2::text[])',
+    [source, urls],
+  );
+  const seen = new Set(rows.map(r => r.source_url));
+  return urls.filter(u => !seen.has(u));
+}
+
+/**
  * Run one source over one region.
  *
  * `limit` caps postings per run. There is no "collect everything" mode on
@@ -148,8 +171,13 @@ async function collect(adapter, { region, schoolNear, city = null, limit = 25, d
   const sm = await politeFetch(sitemaps[0]);
   if (!sm.ok) { log(`sitemap unavailable: ${sm.reason || sm.status || sm.error}`); stats.failed++; return stats; }
 
-  const urls = adapter.locs(sm.body).slice(0, limit);
-  log(`${adapter.locs(sm.body).length} postings available, taking ${urls.length}${dryRun ? ' (dry run)' : ''}\n`);
+  const all = adapter.locs(sm.body);
+  // Drop what we already hold BEFORE spending a request on it. This is what
+  // makes a scheduled run cheap instead of a full re-download every cycle.
+  const fresh = dryRun ? all : await filterNew(all, adapter.NAME || 'craigslist');
+  const urls = fresh.slice(0, limit);
+  log(`${all.length} available · ${all.length - fresh.length} already collected · taking ${urls.length}${dryRun ? ' (dry run)' : ''}\n`);
+  if (!urls.length) { log('nothing new'); return stats; }
 
   for (const url of urls) {
     stats.seen++;
@@ -187,4 +215,4 @@ async function collect(adapter, { region, schoolNear, city = null, limit = 25, d
   return stats;
 }
 
-module.exports = { collect, storeListing, politeFetch, UA };
+module.exports = { collect, storeListing, politeFetch, filterNew, UA };
