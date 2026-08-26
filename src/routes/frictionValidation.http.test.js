@@ -26,9 +26,14 @@ inject('../middleware/auth', {
 // Mutable rows the stubbed pool returns for the GROUP BY query.
 let categoryRows = [];
 let detectorRows = [];
+let lastCategorySql = '';
+let lastCategoryParams = [];
 inject('../db/pool', {
-  query: async (sql) => {
-    if (/predictedFrictionCategory/.test(sql)) return { rows: categoryRows };
+  query: async (sql, params) => {
+    if (/predictedFrictionCategory/.test(sql)) {
+      lastCategorySql = sql; lastCategoryParams = params || [];
+      return { rows: categoryRows };
+    }
     if (/predictedFrictionId/.test(sql)) return { rows: detectorRows };
     return { rows: [] };
   },
@@ -42,9 +47,12 @@ app.use(express.json());
 // resolved to undefined, THIS line would throw. Reaching the assertions is proof.
 app.use(require('./frictionValidation'));
 
-const get = () => request(app).get('/admin/friction-validation');
+const get = (query) => request(app).get('/admin/friction-validation' + (query ? `?${query}` : ''));
 
-test.beforeEach(() => { isFounder = true; categoryRows = []; detectorRows = []; });
+test.beforeEach(() => {
+  isFounder = true; categoryRows = []; detectorRows = [];
+  lastCategorySql = ''; lastCategoryParams = [];
+});
 
 test('the route mounts without throwing (no requireAdmin crash)', () => {
   // Reaching here means app.use(...) above did not throw on an undefined handler.
@@ -104,4 +112,33 @@ test('confirmedRate is gated on its OWN reported count, not n', async () => {
   assert.equal(row.publishable, true, 'cohort itself clears the floor');
   assert.equal(row.confirmedRate, null, 'but only 6 answered the question → no primary rate yet');
   assert.equal(row.dissolvedRate, 0.04, 'secondary proxy still computes');
+});
+
+// ── campus split (docs/specs/outcome-learning.md §1, Loop C) ────────────────
+// Founder-only tooling: the founder picks the campus explicitly via ?school=
+// rather than the backend guessing. Omitted -> byte-identical to every test
+// above this point (no JOIN, response.school is null).
+
+test('no ?school= ⇒ unchanged global query (no JOIN), school:null in the response', async () => {
+  const res = await get();
+  assert.doesNotMatch(lastCategorySql, /JOIN users/);
+  assert.equal(res.body.school, null);
+});
+
+test('?school=<name> adds the campus JOIN and echoes the school back', async () => {
+  categoryRows = [{
+    key: 'sleep', n: '40', confirmed_n: '30', confirmed_reported_n: '40',
+    clashed_n: '10', stress_reported_n: '40', dissolved_n: '8', avg_rating: '3.5',
+  }];
+  const res = await get('school=Ohio+State');
+  assert.match(lastCategorySql, /JOIN users/);
+  assert.deepEqual(lastCategoryParams, ['Ohio State']);
+  assert.equal(res.body.school, 'Ohio State');
+  assert.equal(res.body.byCategory[0].confirmedRate, 0.75, 'aggregation logic itself is unaffected by scoping');
+});
+
+test('blank ?school= is treated as no scope (not sent as an empty-string param)', async () => {
+  const res = await get('school=%20%20');
+  assert.doesNotMatch(lastCategorySql, /JOIN users/);
+  assert.equal(res.body.school, null);
 });
