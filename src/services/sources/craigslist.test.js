@@ -214,3 +214,19 @@ test('with no declared period, an AirBnB-style title is rejected', () => {
   const nightly = ROOM.replace('Pvt room furnished Miracle Mile area', 'AirBnBish short stay downtown');
   assert.equal(cl.parsePosting(nightly, 'u'), null);
 });
+
+test('takes the posting photo, because a queue of text rows cannot be reviewed', () => {
+  const withPhoto = REAL.replace('<span class="price">',
+    '<meta property="og:image" content="https://images.craigslist.org/00x0x_abc_600x450.jpg">\n<span class="price">');
+  assert.match(cl.parsePosting(withPhoto, 'u').photoUrl, /00x0x_abc/);
+});
+
+test('the craigslist logo is not passed off as a photo of the place', () => {
+  // Postings with no picture fall back to the site logo. Stored, it would put
+  // the same graphic on hundreds of cards and read as "this one has a photo".
+  const logo = REAL.replace('<span class="price">',
+    '<meta property="og:image" content="https://www.craigslist.org/images/peace.jpg">\n<span class="price">');
+  assert.equal(cl.parsePosting(logo, 'u').photoUrl, null);
+  assert.equal(cl.photoUrl('<meta property="og:image" content="/relative/path.jpg">'), null);
+  assert.equal(cl.photoUrl('<html></html>'), null);
+});

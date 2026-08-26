@@ -226,3 +226,17 @@ test('a bookkeeping failure never breaks a collection run', async () => {
   await assert.doesNotReject(() => remember('craigslist', 'https://x/a', 'stored'));
   pool.query = original;
 });
+
+test('the photo the adapter found is actually stored', async () => {
+  // Every adapter extracted photoUrl and storeListing dropped it: 663 collected
+  // listings, 0 with a photo. The moderation queue is unworkable without it.
+  reset();
+  await storeListing({ ...PARSED, photoUrl: 'https://images.example.com/a.jpg' }, OPTS);
+  assert.equal(paramOf('photo_url'), 'https://images.example.com/a.jpg');
+});
+
+test('a listing with no photo stores null rather than a placeholder', async () => {
+  reset();
+  await storeListing({ ...PARSED, photoUrl: null }, OPTS);
+  assert.equal(paramOf('photo_url'), null);
+});

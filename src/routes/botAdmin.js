@@ -272,17 +272,52 @@ router.post('/listing/:id/reject', requireBotToken, async (req, res) => {
 // long-lived admin credential into browser history, server logs and any
 // referrer header the page emits, which is a worse trade than serving an empty
 // page to whoever asks.
-const REVIEW_PAGE = (() => {
-  try { return fs.readFileSync(path.join(__dirname, '../views/review.html'), 'utf8'); }
-  catch (err) { console.error('[botAdmin] review page missing:', err.message); return null; }
-})();
+const readView = (name) => {
+  try { return fs.readFileSync(path.join(__dirname, '../views/', name), 'utf8'); }
+  catch (err) { console.error('[botAdmin] view missing:', name, err.message); return null; }
+};
+const REVIEW_PAGE = readView('review.html');
+const REVIEW_JS   = readView('review.js');
+
+// The app-wide policy is `script-src 'self'; script-src-attr 'none';
+// img-src 'self' data:`. Two consequences this page has to live with:
+//
+//   1. Inline <script> and inline onclick are both refused, silently. The first
+//      version of this page rendered perfectly and did nothing whatsoever —
+//      every handler was blocked and nothing said so. Behaviour therefore lives
+//      in review.js, served from this same origin.
+//   2. img-src would block the listing photos, which come from Craigslist and
+//      Uloop. A queue of text rows is not reviewable — the photo is the fastest
+//      tell for a scam or a mismatched unit — so this ONE route widens img-src
+//      to https:, and nothing else. Scripts stay 'self', object-src stays none,
+//      and framing is denied outright since an admin page has no business in
+//      anyone's iframe.
+const REVIEW_CSP = [
+  "default-src 'self'",
+  "img-src 'self' data: https:",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "base-uri 'self'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
 
 router.get('/review', (_req, res) => {
   if (!REVIEW_PAGE) return res.status(500).send('review page unavailable');
+  res.set('Content-Security-Policy', REVIEW_CSP);
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.set('X-Robots-Tag', 'noindex, nofollow');
   res.set('Cache-Control', 'no-store');
   res.send(REVIEW_PAGE);
+});
+
+router.get('/review.js', (_req, res) => {
+  if (!REVIEW_JS) return res.status(500).send('// review script unavailable');
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store');
+  res.send(REVIEW_JS);
 });
 
 // -- POST /bot-admin/listings/bulk ---------------------------------------

@@ -222,6 +222,23 @@ function mapAddress(html) {
   return addr && /\d/.test(addr) ? addr : null;
 }
 
+/**
+ * The posting's first photo, or null.
+ *
+ * og:image is the largest one Craigslist advertises. Postings with no picture
+ * fall back to the site's own logo, which must NOT be stored: it would put an
+ * identical graphic on hundreds of cards as though each were a photo of the
+ * place, and a reviewer scanning the queue would read that as "has a photo".
+ * Same reasoning as Uloop's splash-screen guard — a listing with no photo is
+ * honest, one wearing someone's logo is not.
+ */
+function photoUrl(html) {
+  const url = first(html, /<meta property="og:image" content="([^"]+)"/);
+  if (!url) return null;
+  if (/craigslist_logo|\/logo|peace\.(?:jpg|png)|default/i.test(url)) return null;
+  return /^https?:\/\//i.test(url) ? url : null;
+}
+
 /** Every attr chip: rent period, pets, laundry, parking, aircon. */
 function attributes(html) {
   return [...String(html).matchAll(/<div class="attr ([a-z_ -]+)"[^>]*>([\s\S]*?)<\/div>/g)]
@@ -282,6 +299,7 @@ function parsePosting(html, url) {
     latitude: lat,
     longitude: lon,
     postedAt: postedAt || null,
+    photoUrl: photoUrl(html),
     // The body plus the attribute chips, which is what the scam scorer reads.
     notes: [body, attrs.length ? attrs.join(' · ') : null].filter(Boolean).join('\n\n').slice(0, 4000),
     attrs,
@@ -316,6 +334,6 @@ module.exports = {
   collectUrls,
   SITEMAP_INDEX, CATEGORY,
   locs, housingSitemapsFor, parsePosting, cleanTitle, subcategory, mapAddress, RENTAL_CATS,
-  pricedPerPerson, rentPeriod, ROOM_SHARE_RE, NOT_HOUSING_RE, SHORT_STAY_RE,
+  pricedPerPerson, rentPeriod, photoUrl, ROOM_SHARE_RE, NOT_HOUSING_RE, SHORT_STAY_RE,
   priceCents, bedsBaths, coords, attributes, strip,
 };

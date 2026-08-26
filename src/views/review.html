@@ -14,12 +14,15 @@
 
   Hence: photos, because a stock image or a mansion priced like a studio is
   obvious at a glance and invisible in JSON. Flagged listings sort first and
-  cannot be swept up by "select all clean". And selection is always explicit —
+  cannot be swept up by "select all clean". Selection is always explicit —
   there is no approve-by-rule button, because that is just the collector
   publishing on its own with extra steps.
 
-  The token is pasted by the reviewer and kept in sessionStorage for the tab.
-  It is never in the URL, so it stays out of history, logs and referrers.
+  NO INLINE SCRIPT AND NO onclick ATTRIBUTES. The API sets
+  `script-src 'self'; script-src-attr 'none'`, which blocks both — the first
+  version of this page rendered perfectly and did nothing at all, because every
+  handler was silently refused. Behaviour lives in review.js, wired up with
+  addEventListener and event delegation.
 -->
 
 <style>
@@ -78,7 +81,6 @@
   .empty { text-align: center; color: var(--dim); padding: 12vh 20px; }
   .sechead { margin: 22px 0 10px; font-size: 13px; color: var(--dim);
              text-transform: uppercase; letter-spacing: .07em; }
-  .sechead:first-child { margin-top: 0; }
 </style>
 
 <div id="gate">
@@ -86,7 +88,7 @@
   <p>Paste the admin bot token. It is kept in this tab only.</p>
   <div class="row" style="justify-content:center">
     <input id="tok" type="password" placeholder="ADMIN_BOT_TOKEN" style="flex:1" autocomplete="off">
-    <button class="primary" onclick="unlock()">Open</button>
+    <button class="primary" id="unlock">Open</button>
   </div>
   <p id="gateerr" style="color:var(--bad)"></p>
 </div>
@@ -96,156 +98,23 @@
     <div class="row">
       <h1>Listing review</h1>
       <span class="tally" id="tally"></span>
-      <select id="src" onchange="load()" style="margin-left:auto">
+      <select id="src" style="margin-left:auto">
         <option value="">all sources</option>
         <option value="craigslist">craigslist</option>
         <option value="uloop">uloop</option>
       </select>
-      <button onclick="load()">Refresh</button>
+      <button id="refresh">Refresh</button>
     </div>
     <div class="row" style="margin-top:10px">
-      <button onclick="selectClean()">Select all clean on this page</button>
-      <button onclick="setAll(false)">Clear selection</button>
+      <button id="selClean">Select all clean on this page</button>
+      <button id="selNone">Clear selection</button>
       <span class="tally" id="selcount" style="margin-left:auto"></span>
-      <button class="primary" id="okBtn" onclick="bulk('approve')" disabled>Approve selected</button>
-      <button class="danger"  id="noBtn" onclick="bulk('reject')"  disabled>Reject selected</button>
+      <button class="primary" id="okBtn" disabled>Approve selected</button>
+      <button class="danger"  id="noBtn" disabled>Reject selected</button>
     </div>
   </header>
   <div id="msg"></div>
   <main id="out"></main>
 </div>
 
-<script>
-const $ = (id) => document.getElementById(id);
-let TOKEN = sessionStorage.getItem('haveniq_admin_token') || '';
-let rows = [];
-const picked = new Set();
-
-const api = (path, opts = {}) => fetch(path, {
-  ...opts,
-  headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) },
-});
-
-async function unlock() {
-  TOKEN = $('tok').value.trim();
-  if (!TOKEN) return;
-  const r = await api('/bot-admin/pending-listings?limit=1');
-  if (!r.ok) { $('gateerr').textContent = r.status === 401 || r.status === 403 ? 'Token rejected.' : 'Error ' + r.status; return; }
-  sessionStorage.setItem('haveniq_admin_token', TOKEN);
-  $('gate').hidden = true; $('app').hidden = false;
-  load();
-}
-
-const money = (n) => n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US');
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-function signals(raw) {
-  // risk_signals is jsonb; shapes vary by rule, so render defensively.
-  try {
-    const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    if (!v) return [];
-    if (Array.isArray(v)) return v.map(x => typeof x === 'string' ? x : (x.label || x.rule || x.code || JSON.stringify(x)));
-    return Object.keys(v);
-  } catch { return []; }
-}
-
-async function load() {
-  $('msg').textContent = 'Loading…';
-  picked.clear();
-  const src = $('src').value;
-  const r = await api('/bot-admin/pending-listings?limit=200' + (src ? '&source=' + encodeURIComponent(src) : ''));
-  if (!r.ok) { $('msg').textContent = 'Failed to load (' + r.status + ')'; return; }
-  const data = await r.json();
-  rows = data.listings || [];
-  const p = data.pending || {};
-  $('tally').innerHTML = `<b>${p.total ?? rows.length}</b> pending · <b>${p.flagged ?? 0}</b> flagged · showing ${rows.length}`;
-  $('msg').textContent = '';
-  render();
-}
-
-function render() {
-  if (!rows.length) { $('out').innerHTML = '<div class="empty">Queue is clear.</div>'; sync(); return; }
-  const flagged = rows.filter(r => (r.risk_score ?? 0) >= 50);
-  const clean   = rows.filter(r => (r.risk_score ?? 0) <  50);
-  $('out').innerHTML =
-    (flagged.length ? `<div class="sechead">Flagged — ${flagged.length}, read these</div><div class="grid">${flagged.map(card).join('')}</div>` : '') +
-    (clean.length   ? `<div class="sechead">Clean — ${clean.length}</div><div class="grid">${clean.map(card).join('')}</div>` : '');
-  sync();
-}
-
-function card(r) {
-  const sig = signals(r.risk_signals);
-  const flagged = (r.risk_score ?? 0) >= 50;
-  const shot = r.photo_url
-    ? `<img class="shot" src="${esc(r.photo_url)}" loading="lazy" onclick="toggle(${r.id})" alt="">`
-    : `<div class="nophoto" onclick="toggle(${r.id})">no photo</div>`;
-  return `
-  <div class="card${flagged ? ' flagged' : ''}" id="c${r.id}">
-    ${shot}
-    <div class="body">
-      <div class="addr">${esc(r.address || '(no address)')}</div>
-      <div class="meta">${esc(r.city || '')}${r.city ? ' · ' : ''}${r.beds ?? '?'} bed · ${r.baths ?? '?'} bath</div>
-      <div class="price">${money(r.perPerson)} <small>/person${r.total && r.total !== r.perPerson ? ' · ' + money(r.total) + ' total' : ''}</small></div>
-      <div class="tags">
-        <span class="tag src">${esc(r.source || 'manual')}</span>
-        <span class="tag${flagged ? ' risk' : ''}">risk ${r.risk_score ?? '—'}</span>
-        ${sig.slice(0, 3).map(s => `<span class="tag risk">${esc(s)}</span>`).join('')}
-      </div>
-      <div class="notes">${esc((r.notes || '').slice(0, 180))}</div>
-    </div>
-    <div class="foot">
-      <label><input type="checkbox" onchange="toggle(${r.id})" id="k${r.id}"> select</label>
-      ${r.source_url ? `<a href="${esc(r.source_url)}" target="_blank" rel="noopener noreferrer">original ↗</a>` : ''}
-    </div>
-  </div>`;
-}
-
-function toggle(id) {
-  picked.has(id) ? picked.delete(id) : picked.add(id);
-  sync();
-}
-function setAll(on) {
-  picked.clear();
-  if (on) rows.forEach(r => picked.add(r.id));
-  sync();
-}
-function selectClean() {
-  // Never sweeps up a flagged listing — those are the ones worth a human's eye,
-  // and a "select all" that quietly included them would defeat the point.
-  picked.clear();
-  rows.filter(r => (r.risk_score ?? 0) < 50).forEach(r => picked.add(r.id));
-  sync();
-}
-
-function sync() {
-  rows.forEach(r => {
-    const on = picked.has(r.id);
-    const box = $('k' + r.id); if (box) box.checked = on;
-    const el = $('c' + r.id); if (el) el.classList.toggle('sel', on);
-  });
-  $('selcount').textContent = picked.size ? picked.size + ' selected' : '';
-  $('okBtn').disabled = $('noBtn').disabled = picked.size === 0;
-}
-
-async function bulk(action) {
-  const ids = [...picked];
-  if (!ids.length) return;
-  if (!confirm(`${action === 'approve' ? 'Approve' : 'Reject'} ${ids.length} listing(s)?`)) return;
-  $('okBtn').disabled = $('noBtn').disabled = true;
-  $('msg').textContent = 'Working…';
-  // The endpoint caps a call at 200; chunk so a large selection still lands.
-  let done = 0;
-  for (let i = 0; i < ids.length; i += 200) {
-    const r = await api('/bot-admin/listings/bulk', {
-      method: 'POST',
-      body: JSON.stringify({ action, ids: ids.slice(i, i + 200), reason: 'reviewed in queue' }),
-    });
-    if (!r.ok) { $('msg').textContent = 'Failed (' + r.status + ')'; return; }
-    done += (await r.json()).acted || 0;
-  }
-  $('msg').textContent = `${action}d ${done} listing(s).`;
-  load();
-}
-
-if (TOKEN) { $('tok').value = TOKEN; unlock(); }
-</script>
+<script src="review.js"></script>

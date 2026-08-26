@@ -120,10 +120,10 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
     `INSERT INTO listings
        (address, city, school_near, beds, baths,
         total_rent_cents, per_person_rent_cents, notes,
-        latitude, longitude, geocoded_at,
+        latitude, longitude, geocoded_at, photo_url,
         source, source_url, source_posted_at,
         moderation_status, risk_score, risk_signals, created_by, is_active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now(), $11,$12,$13,$14,$15,$16,$17, TRUE)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now(), $11,$12,$13,$14,$15,$16,$17,$18, TRUE)
      ON CONFLICT (source_url) WHERE source_url IS NOT NULL DO NOTHING
      RETURNING id`,
     [
@@ -132,6 +132,11 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
       parsed.totalRentCents, perPersonCents,
       [parsed.title, parsed.notes].filter(Boolean).join('\n\n').slice(0, 4000),
       parsed.latitude, parsed.longitude,
+      // Extracted by every adapter and, until now, dropped on the floor. A
+      // listing with no image is the hardest kind to moderate: the photo is
+      // the fastest tell for a scam or a mismatched unit, and a queue of 500
+      // text rows is not something a person can actually work through.
+      parsed.photoUrl || null,
       source, parsed.sourceUrl, parsed.postedAt || null,
       status, risk.score, JSON.stringify(risk.signals), createdBy,
     ],

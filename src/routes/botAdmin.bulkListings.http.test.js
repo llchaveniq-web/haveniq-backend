@@ -153,3 +153,32 @@ test('the review page asks robots to stay away', async () => {
   assert.match(res.headers['x-robots-tag'] || '', /noindex/);
   assert.match(res.headers['cache-control'] || '', /no-store/);
 });
+
+test('the page carries no inline script and no inline handlers', async () => {
+  // The API sets script-src 'self' and script-src-attr 'none'. The first
+  // version of this page used an inline <script> and onclick attributes: it
+  // rendered perfectly and every handler was silently refused. supertest does
+  // not enforce CSP, so only a real browser caught it — this test is the guard
+  // that stops it coming back.
+  const res = await request(app).get('/bot-admin/review');
+  assert.doesNotMatch(res.text, /<script(?![^>]*\bsrc=)/i, 'inline <script> would be blocked');
+  assert.doesNotMatch(res.text, /\son[a-z]+\s*=/i, 'inline event handler would be blocked');
+  assert.match(res.text, /<script src="review\.js">/);
+});
+
+test('the review script is served from the same origin so script-src self allows it', async () => {
+  const res = await request(app).get('/bot-admin/review.js');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /javascript/);
+  assert.match(res.text, /addEventListener/);
+});
+
+test('the page widens img-src to https so listing photos actually load', async () => {
+  // Craigslist and Uloop photos are third-party URLs; under the app-wide
+  // img-src 'self' data: every card would render blank.
+  const res = await request(app).get('/bot-admin/review');
+  const csp = res.headers['content-security-policy'] || '';
+  assert.match(csp, /img-src[^;]*https:/);
+  assert.match(csp, /script-src 'self'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+});
