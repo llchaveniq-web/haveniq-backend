@@ -222,7 +222,32 @@ function parsePosting(html, url) {
   };
 }
 
+/**
+ * Posting URLs for a region — the shared adapter contract.
+ *
+ * Craigslist needs two hops: a 2,800-entry index, then the one regional
+ * housing sitemap out of it. Uloop needs one. The collector should not have to
+ * know which, so each adapter owns its own discovery and is handed the
+ * collector's polite fetcher to do it with. That keeps the robots gate and the
+ * rate limit in ONE place rather than duplicated per source, where a new
+ * adapter could quietly forget them.
+ */
+async function collectUrls(politeFetch, region) {
+  const index = await politeFetch(SITEMAP_INDEX);
+  if (!index.ok) return { urls: [], blocked: !!index.blocked, error: index.reason || index.status || index.error };
+
+  const sitemaps = housingSitemapsFor(index.body, region);
+  if (!sitemaps.length) return { urls: [], error: `no housing sitemap for region "${region}"` };
+
+  const sm = await politeFetch(sitemaps[0]);
+  if (!sm.ok) return { urls: [], blocked: !!sm.blocked, error: sm.reason || sm.status || sm.error };
+
+  return { urls: locs(sm.body) };
+}
+
 module.exports = {
+  NAME: 'craigslist',
+  collectUrls,
   SITEMAP_INDEX, CATEGORY,
   locs, housingSitemapsFor, parsePosting, cleanTitle, subcategory, mapAddress, RENTAL_CATS,
   priceCents, bedsBaths, coords, attributes, strip,

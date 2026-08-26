@@ -806,7 +806,10 @@ server.listen(PORT, () => {
     collectInFlight = true;
     try {
       const { collect } = require('./services/collector');
-      const SOURCES = { craigslist: require('./services/sources/craigslist') };
+      const SOURCES = {
+        craigslist: require('./services/sources/craigslist'),
+        uloop:      require('./services/sources/uloop'),
+      };
       for (const t of COLLECT_TARGETS) {
         const adapter = SOURCES[t.source];
         if (!adapter) { console.error('[collector] unknown source', t.source); continue; }

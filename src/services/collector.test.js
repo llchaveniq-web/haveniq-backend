@@ -156,7 +156,9 @@ test('coordinates from the posting are stored, so no forward geocode is needed',
 
 test('filterNew drops what we already hold, without fetching it', async () => {
   reset();
-  insertReturns = [{ source_url: 'https://x/b' }];      // the DB says it has b
+  // The query aliases both branches to `url` (listings.source_url and
+  // collector_seen.url), so that is the column the stub must return.
+  insertReturns = [{ url: 'https://x/b' }];              // the DB says it has b
   const { filterNew } = require('./collector');
   const out = await filterNew(['https://x/a', 'https://x/b', 'https://x/c'], 'craigslist');
 
@@ -178,4 +180,39 @@ test('filterNew keeps everything when the source is new to us', async () => {
   const { filterNew } = require('./collector');
   const urls = ['https://x/a', 'https://x/b'];
   assert.deepEqual(await filterNew(urls, 'craigslist'), urls);
+});
+
+// ── collector memory ───────────────────────────────────────────────────────
+
+test('filterNew also excludes URLs we tried and settled, not just stored ones', async () => {
+  // The bug this exists to prevent: an expired posting is never STORED, so
+  // listings.source_url alone would let the 410s at the top of a sitemap be
+  // re-requested every cycle, and a scheduled run would never reach the live
+  // listings behind them. Four of the first five LA postings were already gone.
+  reset();
+  const { filterNew } = require('./collector');
+  await filterNew(['https://x/a'], 'craigslist');
+  assert.match(inserts[0].sql, /FROM collector_seen/, 'consults the memory table');
+  assert.match(inserts[0].sql, /outcome <> 'failed'/, 'but a transient failure stays retryable');
+});
+
+test("remember() records the outcome and never throws", async () => {
+  reset();
+  const { remember } = require('./collector');
+  await remember('craigslist', 'https://x/a', 'expired');
+  assert.match(inserts[0].sql, /INSERT INTO collector_seen/);
+  assert.deepEqual(inserts[0].params, ['craigslist', 'https://x/a', 'expired']);
+  assert.match(inserts[0].sql, /ON CONFLICT \(source, url\) DO UPDATE/);
+});
+
+test('a bookkeeping failure never breaks a collection run', async () => {
+  // Losing a row here costs one wasted re-fetch next cycle. Throwing would
+  // abandon the rest of the run.
+  reset();
+  const { remember } = require('./collector');
+  const pool = require('../db/pool');
+  const original = pool.query;
+  pool.query = async () => { throw new Error('deadlock detected'); };
+  await assert.doesNotReject(() => remember('craigslist', 'https://x/a', 'stored'));
+  pool.query = original;
 });

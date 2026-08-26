@@ -18,8 +18,11 @@
 const pool = require('../src/db/pool');
 const { collect } = require('../src/services/collector');
 const craigslist = require('../src/services/sources/craigslist');
+const uloop = require('../src/services/sources/uloop');
 
-const SOURCES = { craigslist };
+// --region means a Craigslist metro code (lax, sfo) or a Uloop campus
+// subdomain (ucla, berkeley). Same flag, source-specific meaning.
+const SOURCES = { craigslist, uloop };
 
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`);
@@ -38,7 +41,7 @@ const flag = (name) => process.argv.includes(`--${name}`);
 
   const adapter = SOURCES[sourceName];
   if (!adapter) { console.error(`unknown source "${sourceName}". known: ${Object.keys(SOURCES).join(', ')}`); process.exit(1); }
-  if (!region) { console.error('--region is required (e.g. lax, sfo, nyc)'); process.exit(1); }
+  if (!region) { console.error('--region is required (craigslist: lax, sfo · uloop: ucla, berkeley)'); process.exit(1); }
   if (!school && !dryRun) { console.error('--school is required for a real run (e.g. --school "UCLA")'); process.exit(1); }
   if (!Number.isFinite(limit) || limit < 1 || limit > 500) { console.error('--limit must be 1-500'); process.exit(1); }
 

@@ -885,3 +885,23 @@ ALTER TABLE listings ADD COLUMN IF NOT EXISTS source_posted_at TIMESTAMPTZ;
 -- each other under a plain UNIQUE constraint.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_listings_source_url
   ON listings(source_url) WHERE source_url IS NOT NULL;
+
+-- ── Collector memory: URLs already attempted ─────────────── 2026-08-26 ──
+-- Without this a scheduled collector re-fetches its own dead ends forever.
+-- listings.source_url only remembers what was STORED, and an expired posting
+-- is never stored — so the 410s sitting at the top of a sitemap would be
+-- re-requested every single cycle and the run would never reach the live
+-- listings behind them.
+--
+-- outcome is deliberately not just a boolean:
+--   stored / expired / skipped  are settled, and are never retried
+--   failed                      is transient (a timeout, a 5xx) and IS retried
+CREATE TABLE IF NOT EXISTS collector_seen (
+  source   TEXT NOT NULL,
+  url      TEXT NOT NULL,
+  outcome  TEXT NOT NULL,
+  seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source, url)
+);
+CREATE INDEX IF NOT EXISTS idx_collector_seen_settled
+  ON collector_seen(source) WHERE outcome <> 'failed';

@@ -144,8 +144,20 @@ function parsePosting(html, url) {
   };
 }
 
+/**
+ * Posting URLs for a campus — the shared adapter contract.
+ *
+ * `region` here is the campus subdomain ("ucla", "berkeley"), not a metro. One
+ * fetch: Uloop publishes a single flat urlset per campus rather than an index.
+ */
+async function collectUrls(politeFetch, region) {
+  const sm = await politeFetch(SITEMAP_FOR(region));
+  if (!sm.ok) return { urls: [], blocked: !!sm.blocked, error: sm.reason || sm.status || sm.error };
+  return { urls: housingUrls(sm.body) };
+}
+
 module.exports = {
-  NAME, SITEMAP_FOR,
+  NAME, SITEMAP_FOR, collectUrls,
   locs, housingUrls, parsePosting,
   localBusiness, priceRange, bedCounts, photoUrl,
 };
