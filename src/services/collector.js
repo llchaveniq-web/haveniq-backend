@@ -73,6 +73,33 @@ async function politeFetch(url, { delayMs = DEFAULT_DELAY_MS } = {}) {
 }
 
 /**
+ * A monthly per-person rent has to be a plausible monthly per-person rent.
+ *
+ * Craigslist's housing sitemap carries properties FOR SALE, and the subcategory
+ * filter only fires when the breadcrumb declares a cat= — which the canonical
+ * /view/d/ URLs do not. So a Malibu canyon house listed at $1,300,000 arrived
+ * as a listing at $1,300,000 A MONTH, and the scam scorer rated it 15 out of
+ * 100 because it reads language, not arithmetic. Nothing about the words on a
+ * genuine for-sale posting looks like a scam; it simply is not a rental.
+ *
+ * The same band catches the other end: $150 a month is a nightly rate, a
+ * deposit, or a typo, and $0 is a parse failure.
+ *
+ * Deliberately wide. This is a sanity band, not a market opinion — its job is
+ * to catch a number that belongs to a different kind of transaction, not to
+ * decide what a student can afford. That is the filter's job, and the student's.
+ */
+const MIN_PER_PERSON_CENTS = 20000;      // $200/mo
+const MAX_PER_PERSON_CENTS = 1000000;    // $10,000/mo
+
+function implausibleRent(cents) {
+  if (!Number.isFinite(cents) || cents <= 0) return 'no usable rent';
+  if (cents < MIN_PER_PERSON_CENTS) return `$${cents / 100}/mo per person is too low to be a monthly rent`;
+  if (cents > MAX_PER_PERSON_CENTS) return `$${cents / 100}/mo per person is a sale price, not rent`;
+  return null;
+}
+
+/**
  * Store one parsed listing as pending, or report why it wasn't.
  *
  * `schoolNear` is supplied by the caller rather than inferred. A region code
@@ -100,6 +127,11 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
   const perPersonCents = parsed.pricedPerPerson
     ? parsed.totalRentCents
     : Math.round(parsed.totalRentCents / Math.max(1, parsed.beds));
+
+  // Checked before anything is written. A for-sale price stored as rent is not
+  // a listing a moderator should have to catch by eye at 250 rows a cycle.
+  const implausible = implausibleRent(perPersonCents);
+  if (implausible) return { stored: false, reason: implausible };
 
   const risk = assessListing({
     address,
@@ -270,4 +302,7 @@ async function collect(adapter, { region, schoolNear, city = null, limit = 25, d
   return stats;
 }
 
-module.exports = { collect, storeListing, politeFetch, filterNew, remember, UA };
+module.exports = {
+  collect, storeListing, politeFetch, filterNew, remember, UA,
+  implausibleRent, MIN_PER_PERSON_CENTS, MAX_PER_PERSON_CENTS,
+};

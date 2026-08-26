@@ -35,7 +35,7 @@ inject('./geocode', {
   haversineMiles: () => null,
 });
 
-const { storeListing } = require('./collector');
+const { storeListing, implausibleRent: cl_band } = require('./collector');
 
 const PARSED = {
   sourceUrl: 'https://www.craigslist.org/view/d/x/abc',
@@ -239,4 +239,48 @@ test('a listing with no photo stores null rather than a placeholder', async () =
   reset();
   await storeListing({ ...PARSED, photoUrl: null }, OPTS);
   assert.equal(paramOf('photo_url'), null);
+});
+
+// ─── Rent has to be a rent ────────────────────────────────────────────────
+//
+// Craigslist's housing sitemap carries properties FOR SALE, and the
+// subcategory filter only fires on pages whose breadcrumb declares a cat=,
+// which the canonical /view/d/ URLs do not. A Malibu house at $1,300,000
+// arrived as a listing at $1,300,000 a MONTH and scored 15/100 for scam risk,
+// because the scorer reads language and nothing about a genuine for-sale
+// posting reads as a scam. It simply is not a rental.
+
+test('a sale price is not stored as a monthly rent', async () => {
+  reset();
+  const out = await storeListing({ ...PARSED, totalRentCents: 130000000, beds: 1 }, OPTS);
+  assert.equal(out.stored, false);
+  assert.match(out.reason, /sale price/);
+});
+
+test('an implausibly low rent is not stored either', async () => {
+  // $150/mo is a nightly rate, a deposit, or a typo.
+  reset();
+  const out = await storeListing({ ...PARSED, totalRentCents: 15000, beds: 1 }, OPTS);
+  assert.equal(out.stored, false);
+});
+
+test('zero rent is refused rather than published as free', async () => {
+  reset();
+  assert.equal((await storeListing({ ...PARSED, totalRentCents: 0, beds: 1 }, OPTS)).stored, false);
+});
+
+test('the band is wide enough not to be a market opinion', async () => {
+  // Its job is to catch a number belonging to a different kind of transaction,
+  // not to decide what a student can afford. Deciding that is the filter's job.
+  assert.equal(cl_band(50000), null);      // $500 room
+  assert.equal(cl_band(120000), null);     // $1,200
+  assert.equal(cl_band(450000), null);     // $4,500 — expensive, still a rent
+  assert.equal(cl_band(999900), null);     // just under the ceiling
+  assert.ok(cl_band(1000100));             // just over
+  assert.ok(cl_band(19900));               // just under the floor
+});
+
+test('an ordinary listing still stores', async () => {
+  reset();
+  assert.equal((await storeListing(PARSED, OPTS)).stored, true);
 });
