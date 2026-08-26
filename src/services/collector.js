@@ -73,6 +73,25 @@ async function politeFetch(url, { delayMs = DEFAULT_DELAY_MS } = {}) {
 }
 
 /**
+ * Force a photo URL onto https.
+ *
+ * The app is served over https, so an http:// image is mixed content: browsers
+ * either silently upgrade it or block it outright, and which one you get
+ * depends on the browser and its settings. Either way it is not something to
+ * leave to chance on a card whose photo is the main thing a student looks at.
+ *
+ * Safe as a blanket rule rather than a per-host allowlist: if a host genuinely
+ * cannot serve https, the image was going to be blocked as mixed content
+ * anyway, so upgrading never makes an outcome worse. Verified for every http
+ * URL actually in the table — all S3, all identical over https.
+ */
+function secureUrl(url) {
+  return typeof url === 'string' && url.startsWith('http://')
+    ? 'https://' + url.slice(7)
+    : url;
+}
+
+/**
  * A monthly per-person rent has to be a plausible monthly per-person rent.
  *
  * Craigslist's housing sitemap carries properties FOR SALE, and the subcategory
@@ -168,7 +187,7 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
       // listing with no image is the hardest kind to moderate: the photo is
       // the fastest tell for a scam or a mismatched unit, and a queue of 500
       // text rows is not something a person can actually work through.
-      parsed.photoUrl || null,
+      secureUrl(parsed.photoUrl) || null,
       source, parsed.sourceUrl, parsed.postedAt || null,
       status, risk.score, JSON.stringify(risk.signals), createdBy,
     ],
@@ -304,5 +323,5 @@ async function collect(adapter, { region, schoolNear, city = null, limit = 25, d
 
 module.exports = {
   collect, storeListing, politeFetch, filterNew, remember, UA,
-  implausibleRent, MIN_PER_PERSON_CENTS, MAX_PER_PERSON_CENTS,
+  implausibleRent, MIN_PER_PERSON_CENTS, MAX_PER_PERSON_CENTS, secureUrl,
 };

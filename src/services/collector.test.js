@@ -35,7 +35,7 @@ inject('./geocode', {
   haversineMiles: () => null,
 });
 
-const { storeListing, implausibleRent: cl_band } = require('./collector');
+const { storeListing, implausibleRent: cl_band, secureUrl } = require('./collector');
 
 const PARSED = {
   sourceUrl: 'https://www.craigslist.org/view/d/x/abc',
@@ -283,4 +283,21 @@ test('the band is wide enough not to be a market opinion', async () => {
 test('an ordinary listing still stores', async () => {
   reset();
   assert.equal((await storeListing(PARSED, OPTS)).stored, true);
+});
+
+test('a photo url is stored over https, never http', async () => {
+  // The app is served over https, so an http image is mixed content — silently
+  // upgraded by some browsers, blocked outright by others. A card whose photo
+  // is the main thing a student looks at should not depend on which.
+  reset();
+  await storeListing({ ...PARSED, photoUrl: 'http://uloop.s3.amazonaws.com/a.jpg' }, OPTS);
+  assert.equal(paramOf('photo_url'), 'https://uloop.s3.amazonaws.com/a.jpg');
+});
+
+test('an https url and a missing one are both left alone', async () => {
+  assert.equal(secureUrl('https://x/a.jpg'), 'https://x/a.jpg');
+  assert.equal(secureUrl(null), null);
+  assert.equal(secureUrl(undefined), undefined);
+  // Only the scheme is touched — "http://" inside a path is not a scheme.
+  assert.equal(secureUrl('https://x/r?u=http://y'), 'https://x/r?u=http://y');
 });
