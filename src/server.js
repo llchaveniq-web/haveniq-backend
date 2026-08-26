@@ -777,7 +777,11 @@ server.listen(PORT, () => {
   // Targets are configured, not compiled, so adding a campus is an env change
   // rather than a deploy:
   //
-  //     COLLECT_TARGETS=craigslist:lax:UCLA,craigslist:sfo:UC Berkeley
+  //     COLLECT_TARGETS=craigslist:lax:UCLA;craigslist:sfo:UC Berkeley
+  //
+  // Separated by ';' because school names contain commas — the canonical name
+  // for UCLA is "University of California, Los Angeles", and a comma-separated
+  // list truncates it to "University of California", a school no student has.
   //
   // Unset means the collector stays dark, which is the right default for a job
   // that fetches from someone else's site.
@@ -789,13 +793,14 @@ server.listen(PORT, () => {
   // region actually publishes.
   //
   // Everything it collects lands as 'pending'. This job cannot publish.
-  const COLLECT_TARGETS = (process.env.COLLECT_TARGETS || '').split(',')
-    .map(t => t.trim()).filter(Boolean)
-    .map(t => {
-      const [source, region, ...school] = t.split(':');
-      return { source, region, school: school.join(':').trim() };
-    })
-    .filter(t => t.source && t.region && t.school);
+  const { parseCollectTargets } = require('./services/collectTargets');
+  const { targets: COLLECT_TARGETS, rejected: COLLECT_REJECTED } =
+    parseCollectTargets(process.env.COLLECT_TARGETS);
+  // Say what was thrown away. A target that fails to parse used to vanish in
+  // silence, so a typo looked exactly like a campus with no listings.
+  if (COLLECT_REJECTED.length) {
+    console.error('[collector] ignoring malformed target(s):', COLLECT_REJECTED.join(' | '));
+  }
 
   const COLLECT_PER_RUN = Number(process.env.COLLECT_PER_RUN || 150);
   const COLLECT_EVERY_MS = Number(process.env.COLLECT_EVERY_MIN || 30) * 60 * 1000;
