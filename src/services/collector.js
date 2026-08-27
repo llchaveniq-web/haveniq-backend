@@ -176,17 +176,22 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
   const { rows } = await pool.query(
     `INSERT INTO listings
        (address, city, school_near, beds, baths,
-        total_rent_cents, per_person_rent_cents, notes,
+        total_rent_cents, high_rent_cents, per_person_rent_cents, notes,
         latitude, longitude, geocoded_at, photo_url,
         source, source_url, source_posted_at,
         moderation_status, risk_score, risk_signals, created_by, is_active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now(), $11,$12,$13,$14,$15,$16,$17,$18, TRUE)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12,$13,$14,$15,$16,$17,$18,$19, TRUE)
      ON CONFLICT (source_url) WHERE source_url IS NOT NULL DO NOTHING
      RETURNING id`,
     [
       address, derivedCity || null, schoolNear,
       parsed.beds, parsed.baths,
-      parsed.totalRentCents, perPersonCents,
+      parsed.totalRentCents,
+      // The top of the range, when the source gave one. Its absence is what
+      // makes a single-price listing distinguishable from a building's floor.
+      parsed.highRentCents && parsed.highRentCents > parsed.totalRentCents
+        ? parsed.highRentCents : null,
+      perPersonCents,
       [parsed.title, parsed.notes].filter(Boolean).join('\n\n').slice(0, 4000),
       parsed.latitude, parsed.longitude,
       // Extracted by every adapter and, until now, dropped on the floor. A

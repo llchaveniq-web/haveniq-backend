@@ -324,3 +324,21 @@ test('a reverse-geocoded street NUMBER is kept as an address', async () => {
   await storeListing({ ...PARSED, address: null }, OPTS);
   assert.equal(paramOf('address'), '412 Bardeen Ave');
 });
+
+test('the top of a range is stored, so a from-price can be labelled as one', async () => {
+  reset();
+  await storeListing({ ...PARSED, totalRentCents: 62500, highRentCents: 70000 }, OPTS);
+  assert.equal(paramOf('total_rent_cents'), 62500);
+  assert.equal(paramOf('high_rent_cents'), 70000);
+});
+
+test('a single price stores no range rather than repeating itself', async () => {
+  // high === total is not a range, and storing it as one would put "from" on a
+  // price that is simply the price.
+  reset();
+  await storeListing({ ...PARSED, totalRentCents: 62500, highRentCents: 62500 }, OPTS);
+  assert.equal(paramOf('high_rent_cents'), null);
+  reset();
+  await storeListing({ ...PARSED, totalRentCents: 62500 }, OPTS);
+  assert.equal(paramOf('high_rent_cents'), null);
+});

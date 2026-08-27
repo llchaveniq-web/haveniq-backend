@@ -280,3 +280,19 @@ test('a known bath count is still a number', async () => {
   const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
   assert.equal(res.body.listings[0].baths, 1.5);
 });
+
+test('a range price is flagged as a from-price', async () => {
+  // A Uloop building lists several floorplans and we store the cheapest. That
+  // makes the headline a "from" price, and saying so in prose at the end of
+  // notes does not work — the card truncates before reaching it.
+  all = [row({ total_rent_cents: 62500, high_rent_cents: 70000 })];
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.listings[0].totalRent, 625);
+  assert.equal(res.body.listings[0].totalRentHigh, 700);
+});
+
+test('a single-price listing carries no range, so nothing claims one', async () => {
+  all = [row({ total_rent_cents: 62500, high_rent_cents: null })];
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.listings[0].totalRentHigh, null);
+});

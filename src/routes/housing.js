@@ -98,7 +98,7 @@ router.get('/listings', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
-              total_rent_cents, per_person_rent_cents, photo_url,
+              total_rent_cents, high_rent_cents, per_person_rent_cents, photo_url,
               contact_name, contact_email, contact_phone, available_from, notes, created_at,
               source, source_url
        FROM listings
@@ -153,6 +153,11 @@ router.get('/listings', requireAuth, async (req, res) => {
           ? Math.round(haversineMiles(campus, { lat: Number(r.latitude), lon: Number(r.longitude) }) * 10) / 10
           : null,
         totalRent:    r.total_rent_cents / 100,
+        // Present only when the source quoted a RANGE, which is what makes the
+        // headline a "from" price rather than the price. The card says so next
+        // to the number; it used to be explained in a sentence at the end of
+        // notes, which the card truncates before reaching the point.
+        totalRentHigh: r.high_rent_cents == null ? null : r.high_rent_cents / 100,
         perPerson:    r.per_person_rent_cents / 100,
         photoUrl:     r.photo_url,
         contactName:  r.contact_name,
@@ -198,7 +203,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
-              total_rent_cents, per_person_rent_cents, photo_url,
+              total_rent_cents, high_rent_cents, per_person_rent_cents, photo_url,
               contact_name, contact_email, contact_phone, available_from, notes, created_at,
               source, source_url
        FROM listings
@@ -218,6 +223,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       lat:           r.latitude  == null ? null : Number(r.latitude),
       lng:           r.longitude == null ? null : Number(r.longitude),
       totalRent:     r.total_rent_cents / 100,
+      totalRentHigh: r.high_rent_cents == null ? null : r.high_rent_cents / 100,
       perPerson:     r.per_person_rent_cents / 100,
       photoUrl:      r.photo_url,
       contactName:   r.contact_name,

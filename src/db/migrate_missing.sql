@@ -943,3 +943,16 @@ CREATE INDEX IF NOT EXISTS idx_listings_recheck
 -- a guess. The CHECK stays: NULL passes it, and any number present is still
 -- required to be positive.
 ALTER TABLE listings ALTER COLUMN baths DROP NOT NULL;
+
+-- ── Remember that a building price is a FROM price ──────────────────────
+--
+-- A Uloop listing is a building with several floorplans, so its price is a
+-- range and we store the low end — the honest choice for "can I live here".
+-- The adapter parsed the high end too and the collector dropped it, leaving
+-- the fact that it WAS a range recorded only in a prose sentence at the end of
+-- notes... which the card truncates. So 230 listings showed a from-price as
+-- the price, with the disclosure cut off mid-clause.
+--
+-- Stored properly, the card can say "from" next to the number instead of
+-- explaining it in a paragraph nobody reaches the end of.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS high_rent_cents INTEGER;
