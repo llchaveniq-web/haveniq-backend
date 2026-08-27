@@ -69,10 +69,22 @@ router.get('/listings', requireAuth, async (req, res) => {
     // by price was filtering 50 rows, not the market, and the 51st cheapest
     // place near campus simply did not exist as far as the app was concerned.
     // Capped at 500 so one request cannot ask for a whole table.
-    // How far from campus still counts as "near". Wide by default: USC to
-    // downtown is 3 miles, UCLA to USC is 12, and Orange Coast College sits 35
-    // from central LA — a tight radius would quietly re-create the empty tab.
-    const radiusMi = Math.min(Math.max(Number(req.query.radiusMi) || 30, 1), 200);
+    // How far from campus still counts as "near".
+    //
+    // Was 30, chosen when Orange Coast College had no listings at all and a
+    // tight radius would have re-created the empty tab it was meant to fix.
+    // That reason expired: OCC now has 761 listings inside 15 miles.
+    //
+    // 15 because widening past it buys almost nothing. Measured across the
+    // live data, USC's median per-person rent is $1,525 at 15 miles and $1,500
+    // at 30 — twenty-five dollars for four times the results. UCLA is the same
+    // shape, $1,555 to $1,498. A radius that quadruples the scrolling and
+    // moves the price by 1.6% is not helping anyone choose.
+    //
+    // Still a cap rather than a curation rule: distance is on every card and
+    // the Closest sort exists, so nearer places surface without hiding the
+    // rest. Callers can widen it per request up to 200.
+    const radiusMi = Math.min(Math.max(Number(req.query.radiusMi) || 15, 1), 200);
     const limit  = Math.min(Math.max(Number(req.query.limit) || 200, 1), 500);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
 

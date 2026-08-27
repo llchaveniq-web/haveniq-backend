@@ -310,3 +310,20 @@ test('an unlocatable campus comes back null rather than as a guess', async () =>
   const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
   assert.equal(res.body.campus, null);
 });
+
+test('the default radius is 15 miles, not 30', async () => {
+  // Widening past 15 buys almost nothing: USC's median per-person rent is
+  // $1,525 at 15 miles and $1,500 at 30 — four times the results for $25.
+  campusCoords = USC;
+  all = [at(34.0407, -118.2468), at(34.2, -118.9)];   // ~2mi and ~40mi out
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.listings.length, 1, 'a 40-mile listing must not be in the default view');
+  assert.ok(res.body.listings[0].distanceMi < 15);
+});
+
+test('a caller can still widen it deliberately', async () => {
+  campusCoords = USC;
+  all = [at(34.0407, -118.2468), at(34.2, -118.9)];
+  const res = await request(app).get('/housing/listings?school=USC&radiusMi=60').set(AS_USER);
+  assert.equal(res.body.listings.length, 2);
+});
