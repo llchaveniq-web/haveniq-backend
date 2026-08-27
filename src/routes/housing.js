@@ -229,7 +229,19 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'Listing not found' });
     const r = rows[0];
+
+    // Distance and campus, the same two the browse list returns. A detail
+    // screen that cannot say how far a place is from campus is missing the
+    // only number that makes an address mean anything to a student who does
+    // not know the city.
+    const { rows: userRows } = await pool.query('SELECT school FROM users WHERE id = $1', [req.user.id]);
+    const campus = await getSchoolCoords(req.query.school || userRows[0]?.school || null);
+
     res.json({
+      distanceMi: (campus && r.latitude != null)
+        ? Math.round(haversineMiles(campus, { lat: Number(r.latitude), lon: Number(r.longitude) }) * 10) / 10
+        : null,
+      campus: campus ? { lat: campus.lat, lon: campus.lon } : null,
       id:            r.id,
       address:       r.address,
       city:          r.city,

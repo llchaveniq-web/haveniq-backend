@@ -327,3 +327,22 @@ test('a caller can still widen it deliberately', async () => {
   const res = await request(app).get('/housing/listings?school=USC&radiusMi=60').set(AS_USER);
   assert.equal(res.body.listings.length, 2);
 });
+
+test('the detail view knows how far the place is from campus', async () => {
+  // An address means nothing to a student who does not know the city. The
+  // browse list has always said; the detail view could not.
+  campusCoords = USC;
+  all = [at(34.0407, -118.2468)];   // downtown LA, ~2mi from USC
+  const res = await request(app).get('/housing/listings/1').set(AS_USER);
+  assert.ok(res.body.distanceMi > 0 && res.body.distanceMi < 5);
+  assert.equal(res.body.campus.lat, USC.lat);
+});
+
+test('an unlocatable campus gives a null distance, not a zero', async () => {
+  // Zero would read as "on campus", which is the one thing it definitely is not.
+  campusCoords = null;
+  all = [at(34.0407, -118.2468)];
+  const res = await request(app).get('/housing/listings/1').set(AS_USER);
+  assert.equal(res.body.distanceMi, null);
+  assert.equal(res.body.campus, null);
+});
