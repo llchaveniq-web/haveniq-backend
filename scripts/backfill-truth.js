@@ -27,11 +27,16 @@
 const pool = require('../src/db/pool');
 const { politeFetch } = require('../src/services/collector');
 const craigslist = require('../src/services/sources/craigslist');
+const uloop = require('../src/services/sources/uloop');
 
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const dryRun = process.argv.includes('--dry-run');
 const scope = arg('scope', 'approved');
 const limit = Number(arg('limit', '400'));
+// One source at a time. A full pass re-fetches both, which at one request per
+// second is longer than most shells will wait — and the two halves fix
+// different things, so there is rarely a reason to run both.
+const only = arg('only', null);
 
 const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `moderation_status = 'approved'`;
 
@@ -46,6 +51,34 @@ const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `mode
       `UPDATE listings SET baths = NULL
         WHERE source = 'uloop' AND baths IS NOT NULL AND ${statusFilter}`);
   }
+
+  // ── Uloop: recover the top of the price range ───────────────────────────
+  //
+  // The adapter always parsed it; the collector used to drop it. Without it a
+  // building's cheapest floorplan is displayed as though it were the price,
+  // and the sentence that said otherwise is truncated off the card. This does
+  // need the page — unlike the bath count, the number was never ours to know.
+  const { rows: ul } = await pool.query(
+    `SELECT id, source_url, total_rent_cents FROM listings
+      WHERE source = 'uloop' AND source_url IS NOT NULL
+        AND high_rent_cents IS NULL AND ${statusFilter}
+      LIMIT $1`, [limit]);
+  console.log(`uloop: re-reading ${ul.length} page(s) for the price range`);
+  let ranged = 0, single = 0;
+  for (const r of ul) {
+    const res = await politeFetch(r.source_url);
+    if (!res.ok) continue;
+    const parsed = uloop.parsePosting(res.body, r.source_url);
+    if (!parsed) continue;
+    if (parsed.highRentCents > r.total_rent_cents) {
+      ranged++;
+      if (!dryRun) await pool.query(`UPDATE listings SET high_rent_cents = $2 WHERE id = $1`, [r.id, parsed.highRentCents]);
+    } else single++;
+  }
+  console.log(`  ${ranged} are ranges (now labelled "from"), ${single} are a single price
+`);
+
+  if (only === 'uloop') { await pool.end().catch(() => {}); return; }
 
   // ── Craigslist: only the page knows ─────────────────────────────────────
   const { rows } = await pool.query(
