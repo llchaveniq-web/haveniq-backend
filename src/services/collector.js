@@ -134,7 +134,13 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
   if (!address) {
     const rev = await reverseGeocode(parsed.latitude, parsed.longitude);
     if (!rev) return { stored: false, reason: 'no address and reverse geocode failed' };
-    address = rev.address;
+    // A reverse geocode with no street number is the nearest ROAD, not an
+    // address — 13 approved listings claimed to be at "Ronald Reagan Freeway"
+    // and "Metro G Line Busway". Nobody lives at a freeway, and a student
+    // reading that has been told something false about where the place is.
+    // The coordinates are still good, so say what is actually true: it is near
+    // that road. Craigslist words its own cross-streets the same way.
+    address = /[0-9]/.test(rev.address) ? rev.address : `near ${rev.address}`;
     derivedCity = derivedCity || rev.city;
   }
 

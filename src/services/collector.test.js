@@ -307,3 +307,20 @@ test('a null bath count reaches the database as null', async () => {
   await storeListing({ ...PARSED, baths: null }, OPTS);
   assert.equal(paramOf('baths'), null);
 });
+
+test('a reverse-geocoded road is stored as "near", not as an address', async () => {
+  // 13 approved listings claimed to be AT "Ronald Reagan Freeway" and "Metro G
+  // Line Busway". Nobody lives at a freeway. The coordinates are still good,
+  // so the true statement is that the place is near that road.
+  reset();
+  reverseResult = { address: 'Roscoe Boulevard', city: 'Los Angeles' };
+  await storeListing({ ...PARSED, address: null }, OPTS);
+  assert.equal(paramOf('address'), 'near Roscoe Boulevard');
+});
+
+test('a reverse-geocoded street NUMBER is kept as an address', async () => {
+  reset();
+  reverseResult = { address: '412 Bardeen Ave', city: 'Los Angeles' };
+  await storeListing({ ...PARSED, address: null }, OPTS);
+  assert.equal(paramOf('address'), '412 Bardeen Ave');
+});
