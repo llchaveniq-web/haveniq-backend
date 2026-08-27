@@ -239,6 +239,54 @@ function photoUrl(html) {
   return /^https?:\/\//i.test(url) ? url : null;
 }
 
+/**
+ * When the place is free, from the attribute group, or null.
+ *
+ * Craigslist writes it into the same string the bed count comes from:
+ *
+ *   "2BR / 1Ba 1100ft2 available sep 1"
+ *   "2BR / 1Ba  950ft2 available now"
+ *   "2BR / 2Ba  953ft2"                  <- plenty simply do not say
+ *
+ * bedsBaths() has been reading that string all along and throwing this away.
+ *
+ * Null when absent, and null when unparseable — never today-as-a-fallback. A
+ * guessed move-in date is the kind of invented fact that put a fabricated
+ * bathroom count on half the listings; "we were not told" is a real answer and
+ * the column is nullable so it can be given.
+ *
+ * `now` is injected so the year rollover is testable rather than a thing that
+ * only misbehaves each December.
+ */
+const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+
+function availableFrom(html, now = new Date()) {
+  const text = strip(first(html, /<div class="attrgroup">([\s\S]*?)<\/div>/));
+  if (!text) return null;
+
+  if (/available\s+now/i.test(text)) return now.toISOString().slice(0, 10);
+
+  const m = text.match(/available\s+([a-z]{3,9})\.?\s+(\d{1,2})\b/i);
+  if (!m) return null;
+
+  const mon = MONTHS.indexOf(m[1].slice(0, 3).toLowerCase());
+  const day = Number(m[2]);
+  if (mon < 0 || !(day >= 1 && day <= 31)) return null;
+
+  // No year is given. A month already behind us means next year — a posting
+  // put up in November saying "available feb 1" means the coming February,
+  // not one nine months gone.
+  let year = now.getUTCFullYear();
+  const candidate = new Date(Date.UTC(year, mon, day));
+  if (candidate < new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))) {
+    year += 1;
+  }
+  const d = new Date(Date.UTC(year, mon, day));
+  // Rejects the 31st of a 30-day month rather than letting it roll into the next.
+  if (d.getUTCMonth() !== mon) return null;
+  return d.toISOString().slice(0, 10);
+}
+
 /** Every attr chip: rent period, pets, laundry, parking, aircon. */
 function attributes(html) {
   return [...String(html).matchAll(/<div class="attr ([a-z_ -]+)"[^>]*>([\s\S]*?)<\/div>/g)]
@@ -310,6 +358,7 @@ function parsePosting(html, url) {
     latitude: lat,
     longitude: lon,
     postedAt: postedAt || null,
+    availableFrom: availableFrom(html),
     photoUrl: photoUrl(html),
     // The body plus the attribute chips, which is what the scam scorer reads.
     notes: [body, attrs.length ? attrs.join(' · ') : null].filter(Boolean).join('\n\n').slice(0, 4000),
@@ -345,6 +394,7 @@ module.exports = {
   collectUrls,
   SITEMAP_INDEX, CATEGORY,
   locs, housingSitemapsFor, parsePosting, cleanTitle, subcategory, mapAddress, RENTAL_CATS,
-  pricedPerPerson, rentPeriod, photoUrl, ROOM_SHARE_RE, NOT_HOUSING_RE, SHORT_STAY_RE,
+  pricedPerPerson, rentPeriod, photoUrl, availableFrom,
+  ROOM_SHARE_RE, NOT_HOUSING_RE, SHORT_STAY_RE,
   priceCents, bedsBaths, coords, attributes, strip,
 };

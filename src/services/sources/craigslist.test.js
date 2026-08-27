@@ -263,3 +263,51 @@ test('a room with no stated bed count is still kept, because its price is per pe
 test('a stated bed count is still used', () => {
   assert.equal(cl.parsePosting(REAL, 'u').beds, 1);   // 0BR studio -> 1
 });
+
+// ─── Availability ─────────────────────────────────────────────────────────
+//
+// It was in the markup the whole time. bedsBaths() reads the same attribute
+// string — "2BR / 1Ba 1100ft2 available sep 1" — takes the beds and the baths
+// and drops the rest, so available_from was null on all 464 approved listings
+// and a move-in filter had nothing to filter on.
+
+const AVAIL = (txt) =>
+  REAL.replace('0BR / 1Ba 569ft<sup>2</sup> available now', txt);
+const NOV = new Date(Date.UTC(2026, 10, 15));   // 15 Nov 2026
+
+test('"available now" is today, not a guess about later', () => {
+  assert.equal(cl.availableFrom(AVAIL('2BR / 1Ba available now'), NOV), '2026-11-15');
+});
+
+test('a month and a day become a real date', () => {
+  assert.equal(cl.availableFrom(AVAIL('2BR / 1Ba 1100ft2 available dec 1'), NOV), '2026-12-01');
+});
+
+test('a month already behind us means NEXT year', () => {
+  // A posting in November saying "available feb 1" means the coming February,
+  // not one nine months gone.
+  assert.equal(cl.availableFrom(AVAIL('2BR available feb 1'), NOV), '2027-02-01');
+});
+
+test('a full month name works as well as an abbreviation', () => {
+  assert.equal(cl.availableFrom(AVAIL('2BR available september 1'), NOV), '2027-09-01');
+  assert.equal(cl.availableFrom(AVAIL('2BR available Sept. 1'), NOV), '2027-09-01');
+});
+
+test('a posting that says nothing gets null, never today', () => {
+  // Most do not say. A guessed move-in date is the same class of invented fact
+  // as the fabricated bathroom count — "we were not told" is a real answer.
+  assert.equal(cl.availableFrom(AVAIL('2BR / 2Ba 953ft2'), NOV), null);
+  assert.equal(cl.availableFrom('<html></html>', NOV), null);
+});
+
+test('an impossible date is refused rather than rolled forward', () => {
+  // JS would happily turn 31 Feb into 3 March.
+  assert.equal(cl.availableFrom(AVAIL('2BR available feb 31'), NOV), null);
+  assert.equal(cl.availableFrom(AVAIL('2BR available smarch 4'), NOV), null);
+});
+
+test('parsePosting carries the date through', () => {
+  const p = cl.parsePosting(REAL, 'u');
+  assert.ok(p.availableFrom, 'the REAL fixture says "available now"');
+});

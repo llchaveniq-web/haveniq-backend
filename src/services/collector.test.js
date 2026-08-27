@@ -342,3 +342,15 @@ test('a single price stores no range rather than repeating itself', async () => 
   await storeListing({ ...PARSED, totalRentCents: 62500 }, OPTS);
   assert.equal(paramOf('high_rent_cents'), null);
 });
+
+test('an availability date reaches the database', async () => {
+  reset();
+  await storeListing({ ...PARSED, availableFrom: '2026-09-01' }, OPTS);
+  assert.equal(paramOf('available_from'), '2026-09-01');
+});
+
+test('a posting that never said gets null, not today', async () => {
+  reset();
+  await storeListing({ ...PARSED, availableFrom: null }, OPTS);
+  assert.equal(paramOf('available_from'), null);
+});

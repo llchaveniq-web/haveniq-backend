@@ -177,10 +177,10 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
     `INSERT INTO listings
        (address, city, school_near, beds, baths,
         total_rent_cents, high_rent_cents, per_person_rent_cents, notes,
-        latitude, longitude, geocoded_at, photo_url,
+        latitude, longitude, geocoded_at, photo_url, available_from,
         source, source_url, source_posted_at,
         moderation_status, risk_score, risk_signals, created_by, is_active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12,$13,$14,$15,$16,$17,$18,$19, TRUE)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12,$13,$14,$15,$16,$17,$18,$19,$20, TRUE)
      ON CONFLICT (source_url) WHERE source_url IS NOT NULL DO NOTHING
      RETURNING id`,
     [
@@ -199,6 +199,9 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
       // the fastest tell for a scam or a mismatched unit, and a queue of 500
       // text rows is not something a person can actually work through.
       secureUrl(parsed.photoUrl) || null,
+      // Null when the posting did not say. Most do not, and a guessed move-in
+      // date is the same invented fact as a guessed bathroom count.
+      parsed.availableFrom || null,
       source, parsed.sourceUrl, parsed.postedAt || null,
       status, risk.score, JSON.stringify(risk.signals), createdBy,
     ],
