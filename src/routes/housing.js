@@ -191,7 +191,11 @@ router.get('/listings', requireAuth, async (req, res) => {
     // which the SQL above already checked.
     const listings = mapped.filter(l => l.distanceMi == null || l.distanceMi <= radiusMi);
 
-    res.json({ listings });
+    // The campus goes back with the listings so the map can show what they are
+    // near. It is already resolved above for the distance filter; not returning
+    // it meant a map could plot every flat and not the one place they are all
+    // measured against.
+    res.json({ listings, campus: campus ? { lat: campus.lat, lon: campus.lon } : null });
   } catch (err) {
     console.error('listings fetch failed:', err);
     res.status(500).json({ error: 'Failed to load listings' });

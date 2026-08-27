@@ -61,7 +61,7 @@ const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `mode
   const { rows: ul } = await pool.query(
     `SELECT id, source_url, total_rent_cents FROM listings
       WHERE source = 'uloop' AND source_url IS NOT NULL
-        AND high_rent_cents IS NULL AND ${statusFilter}
+        AND (high_rent_cents IS NULL OR photo_urls IS NULL) AND ${statusFilter}
       LIMIT $1`, [limit]);
   console.log(`uloop: re-reading ${ul.length} page(s) for the price range`);
   let ranged = 0, single = 0;
@@ -70,10 +70,19 @@ const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `mode
     if (!res.ok) continue;
     const parsed = uloop.parsePosting(res.body, r.source_url);
     if (!parsed) continue;
-    if (parsed.highRentCents > r.total_rent_cents) {
-      ranged++;
-      if (!dryRun) await pool.query(`UPDATE listings SET high_rent_cents = $2 WHERE id = $1`, [r.id, parsed.highRentCents]);
-    } else single++;
+    const isRange = parsed.highRentCents > r.total_rent_cents;
+    if (isRange) ranged++; else single++;
+    if (!dryRun) {
+      // COALESCE so a page that has stopped serving its gallery does not wipe
+      // one we already recovered.
+      await pool.query(
+        `UPDATE listings
+            SET high_rent_cents = COALESCE($2::int, high_rent_cents),
+                photo_urls      = COALESCE($3::text[], photo_urls)
+          WHERE id = $1`,
+        [r.id, isRange ? parsed.highRentCents : null,
+         parsed.photoUrls?.length ? parsed.photoUrls : null]);
+    }
   }
   console.log(`  ${ranged} are ranges (now labelled "from"), ${single} are a single price
 `);

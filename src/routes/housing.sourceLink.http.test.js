@@ -296,3 +296,17 @@ test('a single-price listing carries no range, so nothing claims one', async () 
   const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
   assert.equal(res.body.listings[0].totalRentHigh, null);
 });
+
+test('the campus comes back with the listings, so a map can anchor on it', async () => {
+  // It was already resolved for the distance filter and thrown away. Without
+  // it a map plots every flat and not the one place they are measured from.
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.campus.lat, 34.0224);
+  assert.equal(res.body.campus.lon, -118.2851);
+});
+
+test('an unlocatable campus comes back null rather than as a guess', async () => {
+  campusCoords = null;
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.campus, null);
+});
