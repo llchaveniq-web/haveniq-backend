@@ -239,3 +239,27 @@ test('a posting that omits the bathroom count stores null, not 1', () => {
   // A stated one is still read.
   assert.equal(cl.parsePosting(REAL, 'u').baths, 1);
 });
+
+test('a whole-unit posting with no stated bed count is refused, not guessed at', () => {
+  // Per-person rent is total ÷ beds, so without beds the one number the
+  // product is built on cannot be derived. This used to write 1 and quote the
+  // ENTIRE rent as one person's share.
+  const noBr = REAL.replace('<div class="attrgroup"><span class="attr important">0BR / 1Ba 569ft<sup>2</sup> available now</span></div>', '');
+  assert.equal(cl.parsePosting(noBr, 'u'), null);
+});
+
+test('a room with no stated bed count is still kept, because its price is per person', () => {
+  // The bed count does not enter the arithmetic for a room, and 1 is what the
+  // tenant actually gets.
+  const room = REAL
+    .replace(/content="[^"]*"/, 'content="Private room for rent in Westwood - rooms &amp; shares - apartment room"')
+    .replace('<div class="attrgroup"><span class="attr important">0BR / 1Ba 569ft<sup>2</sup> available now</span></div>', '');
+  const p = cl.parsePosting(room, 'u');
+  assert.ok(p, 'a room should survive without a BR attribute');
+  assert.equal(p.pricedPerPerson, true);
+  assert.equal(p.beds, 1);
+});
+
+test('a stated bed count is still used', () => {
+  assert.equal(cl.parsePosting(REAL, 'u').beds, 1);   // 0BR studio -> 1
+});

@@ -282,6 +282,15 @@ function parsePosting(html, url) {
   const period = rentPeriod(attrs);
   if (period ? period !== 'monthly' : SHORT_STAY_RE.test(title)) return null;
 
+  // Per-person rent is derived by dividing the total by the bed count, so a
+  // whole-unit posting that never states its beds cannot be described
+  // truthfully — this used to write 1 and quote the entire rent as one
+  // person's share. A room is different: its price is already per person, so
+  // the bed count does not enter the arithmetic and 1 is what the tenant
+  // actually gets.
+  const perPerson = pricedPerPerson(cat, title);
+  if (beds == null && !perPerson) return null;
+
   return {
     sourceUrl: url,
     subcategory: cat,
@@ -292,8 +301,8 @@ function parsePosting(html, url) {
     totalRentCents: cents,
     // The collector divides by beds to get per-person. For a room the price
     // ALREADY is per-person, so it must not be divided again.
-    pricedPerPerson: pricedPerPerson(cat, title),
-    beds: beds ?? 1,
+    pricedPerPerson: perPerson,
+    beds: beds ?? 1,           // only reachable when the price is per person
     // Null when the posting does not state it, rather than 1. A default here
     // is indistinguishable from a parsed value once it is in the database.
     baths,
