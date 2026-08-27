@@ -82,7 +82,7 @@ const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `mode
 
   // ── Craigslist: only the page knows ─────────────────────────────────────
   const { rows } = await pool.query(
-    `SELECT id, source_url, beds, baths, available_from FROM listings
+    `SELECT id, source_url, beds, baths, available_from, photo_urls FROM listings
       WHERE source = 'craigslist' AND source_url IS NOT NULL AND ${statusFilter}
       ORDER BY moderation_status, id
       LIMIT $1`, [limit]);
@@ -112,17 +112,24 @@ const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `mode
     const availNow = r.available_from ? new Date(r.available_from).toISOString().slice(0, 10) : null;
     const bathsSame = parsed.baths === bathsNow;
     const availSame = (parsed.availableFrom ?? null) === availNow;
-    if (bathsSame && availSame) { same++; continue; }
+    // A posting's gallery was never stored, so any of them is an improvement.
+    const galleryNow = (r.photo_urls || []).length;
+    const gallerySame = galleryNow >= (parsed.photoUrls || []).length;
+    if (bathsSame && availSame && gallerySame) { same++; continue; }
 
     changed++;
     const notes = [];
     if (!bathsSame) notes.push(`baths ${bathsNow ?? 'null'} -> ${parsed.baths ?? 'null'}`);
     if (!availSame) notes.push(`available ${availNow ?? 'null'} -> ${parsed.availableFrom ?? 'null'}`);
+    if (!gallerySame) notes.push(`photos ${galleryNow} -> ${(parsed.photoUrls || []).length}`);
     console.log(`  ${notes.join(' · ')}`);
     if (!dryRun) {
       await pool.query(
-        `UPDATE listings SET baths = $2, available_from = $3 WHERE id = $1`,
-        [r.id, parsed.baths, parsed.availableFrom ?? null]);
+        `UPDATE listings SET baths = $2, available_from = $3,
+                photo_urls = COALESCE($4::text[], photo_urls)
+          WHERE id = $1`,
+        [r.id, parsed.baths, parsed.availableFrom ?? null,
+         parsed.photoUrls?.length ? parsed.photoUrls : null]);
     }
   }
 
