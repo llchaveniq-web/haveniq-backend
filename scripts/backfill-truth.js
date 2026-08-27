@@ -82,7 +82,7 @@ const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `mode
 
   // ── Craigslist: only the page knows ─────────────────────────────────────
   const { rows } = await pool.query(
-    `SELECT id, source_url, beds, baths FROM listings
+    `SELECT id, source_url, beds, baths, available_from FROM listings
       WHERE source = 'craigslist' AND source_url IS NOT NULL AND ${statusFilter}
       ORDER BY moderation_status, id
       LIMIT $1`, [limit]);
@@ -109,12 +109,20 @@ const statusFilter = scope === 'all' ? `moderation_status <> 'rejected'` : `mode
     }
 
     const bathsNow = r.baths == null ? null : Number(r.baths);
-    if (parsed.baths === bathsNow) { same++; continue; }
+    const availNow = r.available_from ? new Date(r.available_from).toISOString().slice(0, 10) : null;
+    const bathsSame = parsed.baths === bathsNow;
+    const availSame = (parsed.availableFrom ?? null) === availNow;
+    if (bathsSame && availSame) { same++; continue; }
 
     changed++;
-    console.log(`  baths ${bathsNow ?? 'null'} -> ${parsed.baths ?? 'null'}  ${r.source_url.slice(-28)}`);
+    const notes = [];
+    if (!bathsSame) notes.push(`baths ${bathsNow ?? 'null'} -> ${parsed.baths ?? 'null'}`);
+    if (!availSame) notes.push(`available ${availNow ?? 'null'} -> ${parsed.availableFrom ?? 'null'}`);
+    console.log(`  ${notes.join(' · ')}`);
     if (!dryRun) {
-      await pool.query(`UPDATE listings SET baths = $2 WHERE id = $1`, [r.id, parsed.baths]);
+      await pool.query(
+        `UPDATE listings SET baths = $2, available_from = $3 WHERE id = $1`,
+        [r.id, parsed.baths, parsed.availableFrom ?? null]);
     }
   }
 
