@@ -230,3 +230,12 @@ test('the craigslist logo is not passed off as a photo of the place', () => {
   assert.equal(cl.photoUrl('<meta property="og:image" content="/relative/path.jpg">'), null);
   assert.equal(cl.photoUrl('<html></html>'), null);
 });
+
+test('a posting that omits the bathroom count stores null, not 1', () => {
+  // A default is indistinguishable from a parsed value once it is in the
+  // database, so the guess would be permanent and invisible.
+  const noBa = REAL.replace('0BR / 1Ba 569ft<sup>2</sup> available now', '2BR 900ft<sup>2</sup>');
+  assert.equal(cl.parsePosting(noBa, 'u').baths, null);
+  // A stated one is still read.
+  assert.equal(cl.parsePosting(REAL, 'u').baths, 1);
+});

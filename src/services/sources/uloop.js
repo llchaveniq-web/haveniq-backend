@@ -152,7 +152,11 @@ function parsePosting(html, url) {
     totalRentCents: range.lowCents,
     highRentCents: range.highCents,
     beds: lowBeds,
-    baths: 1,                        // not advertised per building; the safe floor
+    // NOT KNOWN. Uloop does not advertise baths per building, and this used to
+    // write 1 and call it "the safe floor" — which put an invented number on
+    // every Uloop listing and showed it to students as fact. There is no safe
+    // floor for a figure someone decides on; null is the only true value.
+    baths: null,
     isStudio: beds[0] === 0,
     isRange,
     latitude: lat,

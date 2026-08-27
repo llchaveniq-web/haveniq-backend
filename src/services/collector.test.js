@@ -301,3 +301,9 @@ test('an https url and a missing one are both left alone', async () => {
   // Only the scheme is touched — "http://" inside a path is not a scheme.
   assert.equal(secureUrl('https://x/r?u=http://y'), 'https://x/r?u=http://y');
 });
+
+test('a null bath count reaches the database as null', async () => {
+  reset();
+  await storeListing({ ...PARSED, baths: null }, OPTS);
+  assert.equal(paramOf('baths'), null);
+});

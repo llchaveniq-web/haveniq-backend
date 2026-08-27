@@ -928,3 +928,18 @@ ALTER TABLE listings ADD COLUMN IF NOT EXISTS unavailable_at  TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_listings_recheck
   ON listings (last_checked_at NULLS FIRST)
   WHERE source_url IS NOT NULL AND is_active = TRUE;
+
+-- ── Let a listing say "we don't know" about bathrooms ────────────────────
+--
+-- baths was NOT NULL, so a collector with no bathroom count had no way to
+-- record that. Uloop does not advertise baths per building at all, and the
+-- adapter wrote 1 with a comment calling it "the safe floor" — which put an
+-- invented number on 230 of 480 approved listings, displayed to students as
+-- plain fact. Craigslist did the same via `baths ?? 1` whenever a posting
+-- omitted it.
+--
+-- A schema that cannot express uncertainty forces the code to fabricate. NULL
+-- is the honest value, and the app now omits the figure rather than printing
+-- a guess. The CHECK stays: NULL passes it, and any number present is still
+-- required to be positive.
+ALTER TABLE listings ALTER COLUMN baths DROP NOT NULL;

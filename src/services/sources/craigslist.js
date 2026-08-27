@@ -294,7 +294,9 @@ function parsePosting(html, url) {
     // ALREADY is per-person, so it must not be divided again.
     pricedPerPerson: pricedPerPerson(cat, title),
     beds: beds ?? 1,
-    baths: baths ?? 1,
+    // Null when the posting does not state it, rather than 1. A default here
+    // is indistinguishable from a parsed value once it is in the database.
+    baths,
     isStudio,
     latitude: lat,
     longitude: lon,

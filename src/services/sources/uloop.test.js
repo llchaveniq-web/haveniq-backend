@@ -148,3 +148,11 @@ test('malformed input degrades to null instead of throwing', () => {
     assert.equal(ul.parsePosting(junk, 'u'), null);
   }
 });
+
+test('does not invent a bathroom count it was never told', () => {
+  // This used to write baths: 1 and call it "the safe floor", putting a
+  // fabricated number on every Uloop listing and showing it to students as
+  // fact. Uloop does not advertise baths per building. There is no safe floor
+  // for a figure someone decides on.
+  assert.equal(ul.parsePosting(REAL, 'u').baths, null);
+});

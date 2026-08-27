@@ -263,3 +263,20 @@ test('the moderation gate still holds under distance filtering', async () => {
   const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
   assert.deepEqual(res.body.listings, []);
 });
+
+test('an unknown bath count survives the DTO as null, not 0', async () => {
+  // Number(null) is 0, which would print "0 baths" — a confident falsehood
+  // where the truth is that we do not know. Same coercion that once stored
+  // listings at null island.
+  all = [row({ baths: null })];
+  const list = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(list.body.listings[0].baths, null);
+  const one = await request(app).get('/housing/listings/1').set(AS_USER);
+  assert.equal(one.body.baths, null);
+});
+
+test('a known bath count is still a number', async () => {
+  all = [row({ baths: '1.5' })];
+  const res = await request(app).get('/housing/listings?school=USC').set(AS_USER);
+  assert.equal(res.body.listings[0].baths, 1.5);
+});

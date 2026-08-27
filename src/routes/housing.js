@@ -138,7 +138,9 @@ router.get('/listings', requireAuth, async (req, res) => {
         city:         r.city,
         schoolNear:   r.school_near,
         beds:         r.beds,
-        baths:        Number(r.baths),
+        // Number(null) is 0, which would print "0 baths" — a confident
+        // falsehood where the truth is that we do not know.
+        baths:        r.baths == null ? null : Number(r.baths),
         // NUMERIC comes back from pg as a STRING. Number() here, or the app
         // receives "33.64" where it expects 33.64 and every distance
         // calculation downstream silently becomes string concatenation.
@@ -211,7 +213,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       city:          r.city,
       schoolNear:    r.school_near,
       beds:          r.beds,
-      baths:         Number(r.baths),
+      baths:         r.baths == null ? null : Number(r.baths),
       // pg returns NUMERIC as a string; Number() or the app gets "33.64".
       lat:           r.latitude  == null ? null : Number(r.latitude),
       lng:           r.longitude == null ? null : Number(r.longitude),
