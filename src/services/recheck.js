@@ -40,7 +40,14 @@ async function recheckListings({ politeFetch, limit = 100, log = console.log, db
        FROM listings
       WHERE source_url IS NOT NULL
         AND is_active = TRUE
-      ORDER BY last_checked_at ASC NULLS FIRST
+      -- Approved first. Staleness only reaches a student through an APPROVED
+      -- listing; a pending one is behind the moderation queue where a human
+      -- will look at it anyway. Ordering on last_checked_at alone put every
+      -- row on an equal NULL footing, so the first live sweep spent all 100 of
+      -- its checks on pending rows nobody could see and re-verified none of
+      -- the 480 that were actually in the app.
+      ORDER BY (moderation_status = 'approved') DESC,
+               last_checked_at ASC NULLS FIRST
       LIMIT $1`,
     [limit],
   );

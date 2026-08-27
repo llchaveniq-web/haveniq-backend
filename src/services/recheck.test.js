@@ -88,7 +88,7 @@ test('the sweep takes the least recently checked first', async () => {
     return { rows: [] };
   };
   await recheckListings({ politeFetch: async () => ({ ok: true }), db, log: silent });
-  assert.match(seen, /ORDER BY last_checked_at ASC NULLS FIRST/);
+  assert.match(seen, /last_checked_at ASC NULLS FIRST/);
   // Never-checked listings sort first, so a new arrival cannot be starved.
   assert.match(seen, /is_active = TRUE/);
   assert.match(seen, /source_url IS NOT NULL/);
@@ -120,4 +120,17 @@ test('a mixed sweep reports each outcome separately', async () => {
   };
   const stats = await recheckListings({ politeFetch: async (u) => byUrl[u], db, log: silent });
   assert.deepEqual(stats, { checked: 4, live: 1, gone: 1, blocked: 1, failed: 1 });
+});
+
+test('approved listings are swept before pending ones', async () => {
+  // Staleness only reaches a student through an APPROVED listing. The first
+  // live sweep spent all 100 of its checks on pending rows nobody could see,
+  // because ordering on last_checked_at alone left every row tied at NULL.
+  const db = fakeDb([]);
+  let seen = '';
+  db.query = async (sql) => { if (/SELECT/i.test(sql)) seen = sql; return { rows: [] }; };
+  await recheckListings({ politeFetch: async () => ({ ok: true }), db, log: silent });
+  assert.match(seen, /ORDER BY \(moderation_status = 'approved'\) DESC/);
+  // And still least-recently-checked within each group.
+  assert.match(seen, /last_checked_at ASC NULLS FIRST/);
 });
