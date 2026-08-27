@@ -354,3 +354,17 @@ test('a posting that never said gets null, not today', async () => {
   await storeListing({ ...PARSED, availableFrom: null }, OPTS);
   assert.equal(paramOf('available_from'), null);
 });
+
+test('the whole gallery is stored, over https', async () => {
+  reset();
+  await storeListing({ ...PARSED, photoUrls: ['http://a/1.jpg', 'https://a/2.jpg'] }, OPTS);
+  assert.deepEqual(paramOf('photo_urls'), ['https://a/1.jpg', 'https://a/2.jpg']);
+});
+
+test('no photos stores null, not an empty array', async () => {
+  // A column that is sometimes [] and sometimes NULL makes every reader handle
+  // two shapes for one fact.
+  reset();
+  await storeListing({ ...PARSED, photoUrls: [] }, OPTS);
+  assert.equal(paramOf('photo_urls'), null);
+});

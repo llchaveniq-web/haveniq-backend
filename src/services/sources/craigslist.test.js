@@ -311,3 +311,32 @@ test('parsePosting carries the date through', () => {
   const p = cl.parsePosting(REAL, 'u');
   assert.ok(p.availableFrom, 'the REAL fixture says "available now"');
 });
+
+test('takes every photo on the posting, not just the first', () => {
+  // A real posting carries about eight. We kept one and called it the photo.
+  const many = REAL + [
+    '<img src="https://images.craigslist.org/00aaa_one_600x450.jpg">',
+    '<img src="https://images.craigslist.org/00bbb_two_600x450.jpg">',
+    '<img src="https://images.craigslist.org/00ccc_three_600x450.jpg">',
+  ].join('');
+  const urls = cl.photoUrls(many);
+  assert.equal(urls.length, 3);
+  assert.match(urls[0], /00aaa_one/);
+});
+
+test('the same image twice in the markup is one photo', () => {
+  // The visible slide and the thumbnail strip both carry it.
+  const dupe = '<img src="https://images.craigslist.org/00aaa_one_600x450.jpg">'.repeat(4);
+  assert.equal(cl.photoUrls(dupe).length, 1);
+});
+
+test('a gallery is capped, because every URL is a request some phone makes', () => {
+  const lots = Array.from({ length: 30 }, (_, i) =>
+    `<img src="https://images.craigslist.org/00x${i}_p${i}_600x450.jpg">`).join('');
+  assert.equal(cl.photoUrls(lots).length, 10);
+});
+
+test('a posting with no photos yields an empty list, not a logo', () => {
+  assert.deepEqual(cl.photoUrls('<html></html>'), []);
+  assert.deepEqual(cl.photoUrls('<img src="https://images.craigslist.org/peace_600x450.jpg">'), []);
+});

@@ -98,7 +98,7 @@ router.get('/listings', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
-              total_rent_cents, high_rent_cents, per_person_rent_cents, photo_url,
+              total_rent_cents, high_rent_cents, per_person_rent_cents, photo_url, photo_urls,
               contact_name, contact_email, contact_phone, available_from, notes, created_at,
               source, source_url
        FROM listings
@@ -160,6 +160,7 @@ router.get('/listings', requireAuth, async (req, res) => {
         totalRentHigh: r.high_rent_cents == null ? null : r.high_rent_cents / 100,
         perPerson:    r.per_person_rent_cents / 100,
         photoUrl:     r.photo_url,
+        photoUrls:    r.photo_urls ?? null,
         contactName:  r.contact_name,
         // The browse list's Email and Call actions read these. They were
         // absent from this DTO, so handleInquire always fell to its "no
@@ -203,7 +204,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, address, city, school_near, beds, baths,
               latitude, longitude,
-              total_rent_cents, high_rent_cents, per_person_rent_cents, photo_url,
+              total_rent_cents, high_rent_cents, per_person_rent_cents, photo_url, photo_urls,
               contact_name, contact_email, contact_phone, available_from, notes, created_at,
               source, source_url
        FROM listings
@@ -226,6 +227,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       totalRentHigh: r.high_rent_cents == null ? null : r.high_rent_cents / 100,
       perPerson:     r.per_person_rent_cents / 100,
       photoUrl:      r.photo_url,
+      photoUrls:     r.photo_urls ?? null,
       contactName:   r.contact_name,
       contactEmail:  r.contact_email,
       contactPhone:  r.contact_phone,

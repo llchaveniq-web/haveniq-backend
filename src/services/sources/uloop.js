@@ -103,6 +103,27 @@ function photoUrl(biz, html = '') {
   return null;
 }
 
+/**
+ * Every photo Uloop lazy-loads, plus the og:image if it is not already there.
+ *
+ * The gallery lives in data-src attributes on protocol-relative CDN URLs, so
+ * none of it appears in a src and all of it needs a scheme adding.
+ */
+function photoUrls(html, biz) {
+  const out = [];
+  const push = (u) => {
+    if (!u || PLACEHOLDER_RE.test(u)) return;
+    const abs = u.startsWith('//') ? 'https:' + u : u;
+    if (!out.includes(abs)) out.push(abs);
+  };
+  push(photoUrl(biz, html));
+  for (const m of String(html).matchAll(/data-src="((?:https?:)?\/\/[^"]+)"/g)) {
+    push(m[1]);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
 /** Bed counts advertised anywhere on the page, ascending and de-duplicated. */
 function bedCounts(html) {
   const found = [...String(html).matchAll(/(\d+)\s*BR\b/gi)]
@@ -163,6 +184,7 @@ function parsePosting(html, url) {
     longitude: lon,
     postedAt: null,                  // Uloop does not date its housing pages
     photoUrl: photoUrl(biz, html),
+    photoUrls: photoUrls(html, biz),
     notes: [summary, String(biz.description || '').trim()].filter(Boolean).join('\n\n').slice(0, 4000),
   };
 }
@@ -182,5 +204,5 @@ async function collectUrls(politeFetch, region) {
 module.exports = {
   NAME, SITEMAP_FOR, collectUrls,
   locs, housingUrls, parsePosting,
-  localBusiness, priceRange, bedCounts, photoUrl,
+  localBusiness, priceRange, bedCounts, photoUrl, photoUrls,
 };

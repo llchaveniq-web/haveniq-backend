@@ -287,6 +287,36 @@ function availableFrom(html, now = new Date()) {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Every photo on the posting, largest first in the order the seller arranged
+ * them.
+ *
+ * A posting carries eight or so; we stored one and called it the photo. Photos
+ * are the first thing a student looks at and the fastest way to tell a real
+ * listing from a re-used stock shot, so a single image was throwing away most
+ * of what makes a card trustworthy.
+ *
+ * De-duplicated by image id because the same picture appears more than once in
+ * the markup (the visible slide and the thumbnail strip), and capped: a
+ * twenty-photo posting is not twenty times more informative, and every URL
+ * here is a request some phone eventually makes.
+ */
+const MAX_PHOTOS = 10;
+
+function photoUrls(html) {
+  const seen = new Set();
+  const out = [];
+  for (const m of String(html).matchAll(/https:\/\/images\.craigslist\.org\/([A-Za-z0-9_]+)_(\d+x\d+)\.jpg/g)) {
+    const [url, id] = [m[0], m[1]];
+    if (seen.has(id)) continue;
+    if (/craigslist_logo|peace|default/i.test(url)) continue;
+    seen.add(id);
+    out.push(url);
+    if (out.length >= MAX_PHOTOS) break;
+  }
+  return out;
+}
+
 /** Every attr chip: rent period, pets, laundry, parking, aircon. */
 function attributes(html) {
   return [...String(html).matchAll(/<div class="attr ([a-z_ -]+)"[^>]*>([\s\S]*?)<\/div>/g)]
@@ -360,6 +390,7 @@ function parsePosting(html, url) {
     postedAt: postedAt || null,
     availableFrom: availableFrom(html),
     photoUrl: photoUrl(html),
+    photoUrls: photoUrls(html),
     // The body plus the attribute chips, which is what the scam scorer reads.
     notes: [body, attrs.length ? attrs.join(' · ') : null].filter(Boolean).join('\n\n').slice(0, 4000),
     attrs,
@@ -394,7 +425,7 @@ module.exports = {
   collectUrls,
   SITEMAP_INDEX, CATEGORY,
   locs, housingSitemapsFor, parsePosting, cleanTitle, subcategory, mapAddress, RENTAL_CATS,
-  pricedPerPerson, rentPeriod, photoUrl, availableFrom,
+  pricedPerPerson, rentPeriod, photoUrl, photoUrls, availableFrom,
   ROOM_SHARE_RE, NOT_HOUSING_RE, SHORT_STAY_RE,
   priceCents, bedsBaths, coords, attributes, strip,
 };

@@ -956,3 +956,15 @@ ALTER TABLE listings ALTER COLUMN baths DROP NOT NULL;
 -- Stored properly, the card can say "from" next to the number instead of
 -- explaining it in a paragraph nobody reaches the end of.
 ALTER TABLE listings ADD COLUMN IF NOT EXISTS high_rent_cents INTEGER;
+
+-- ── Every photo on a posting, not just the first ─────────────────────────
+--
+-- A Craigslist posting carries about eight images and the adapter kept one.
+-- Photos are the first thing a student looks at and the fastest way to tell a
+-- real listing from a re-used stock shot, so a single image threw away most of
+-- what makes a card checkable. Uloop's are lazy-loaded behind data-src, so
+-- none of them appeared in a src attribute at all.
+--
+-- photo_url stays as the cover — every existing read path uses it, and the
+-- first element here is the same image.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS photo_urls TEXT[];

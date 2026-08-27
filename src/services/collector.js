@@ -177,10 +177,10 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
     `INSERT INTO listings
        (address, city, school_near, beds, baths,
         total_rent_cents, high_rent_cents, per_person_rent_cents, notes,
-        latitude, longitude, geocoded_at, photo_url, available_from,
+        latitude, longitude, geocoded_at, photo_url, photo_urls, available_from,
         source, source_url, source_posted_at,
         moderation_status, risk_score, risk_signals, created_by, is_active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12,$13,$14,$15,$16,$17,$18,$19,$20, TRUE)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12,$13,$14,$15,$16,$17,$18,$19,$20,$21, TRUE)
      ON CONFLICT (source_url) WHERE source_url IS NOT NULL DO NOTHING
      RETURNING id`,
     [
@@ -199,6 +199,10 @@ async function storeListing(parsed, { source, schoolNear, city, createdBy = null
       // the fastest tell for a scam or a mismatched unit, and a queue of 500
       // text rows is not something a person can actually work through.
       secureUrl(parsed.photoUrl) || null,
+      // Null rather than an empty array when there are none: a column that is
+      // sometimes [] and sometimes NULL makes every reader handle two shapes
+      // for one fact.
+      parsed.photoUrls?.length ? parsed.photoUrls.map(secureUrl) : null,
       // Null when the posting did not say. Most do not, and a guessed move-in
       // date is the same invented fact as a guessed bathroom count.
       parsed.availableFrom || null,
