@@ -1,7 +1,12 @@
-// ─── Make the newly-collected metros visible to students ────────────────────
+// ─── Make collected listings visible to students ────────────────────────────
 //
-//   node scripts/publish-new-metros.js --dry-run
-//   node scripts/publish-new-metros.js
+//   node scripts/publish-pending.js --dry-run
+//   node scripts/publish-pending.js
+//   node scripts/publish-pending.js --school "University of California, Los Angeles" //                                   --school "Orange Coast College"
+//
+// With no --school it publishes the DEFAULT_SCOPE below: the campuses added
+// when the collector went from one metro to four. Naming schools explicitly
+// overrides that, and the scope in force is printed before anything happens.
 //
 // Collected listings land as `pending` and no student can see them. Adding a
 // campus is therefore only half the job: Orange Coast College once sat with
@@ -9,13 +14,13 @@
 // than a publish that had never been run. On 2026-08-28 COLLECT_TARGETS grew
 // from one metro to four, so the same trap is now set for three more.
 //
-// ── SCOPE, AND WHY IT IS THIS NARROW ────────────────────────────────────────
+// ── SCOPE ───────────────────────────────────────────────────────────────────
 //
-// Only the campuses added in that change, listed below. It will not touch the
-// ~7,200 pending listings for UCLA, Orange Coast College and USC. That backlog
-// is a much larger call — thousands of listings going live in one action — and
-// Jackson chose explicitly to keep it separate rather than fold it in here.
-// Widening SCHOOLS is not a tuning change; it is that decision.
+// The default is deliberately the small set. Publishing the LA and Orange
+// County backlog means thousands of listings going live in one action, which
+// is a different decision from making a new campus visible, and it should have
+// to be asked for by name rather than inherited from a default. Hence
+// --school: the wide run leaves a record of itself in the shell history.
 //
 // ── THE THRESHOLD IS OBSERVED, NOT INVENTED ─────────────────────────────────
 //
@@ -63,11 +68,14 @@
 // file, never user input.
 function fromRailway(service, key) {
   try {
-    const { execFileSync } = require('child_process');
-    const out = execFileSync(
-      'railway',
-      ['variables', '--service', service, '--json'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000, shell: true },
+    // One command string rather than argv + shell:true. Node warns about the
+    // latter because the args are concatenated unescaped; the service names
+    // here are fixed literals from this file, but a warning that is harmless
+    // today is a warning nobody reads tomorrow.
+    const { execSync } = require('child_process');
+    const out = execSync(
+      `railway variables --service ${service} --json`,
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 60000 },
     );
     return JSON.parse(out)[key] || null;
   } catch {
@@ -86,8 +94,9 @@ if (!process.env.DATABASE_URL) {
 
 const pool = require('../src/db/pool');
 
-// The campuses added when the collector went from one metro to four.
-const SCHOOLS = [
+// The campuses added when the collector went from one metro to four. Used
+// when no --school is given.
+const DEFAULT_SCOPE = [
   'University of California, Berkeley',
   'University of California, San Diego',
   'San Diego State University',
@@ -97,6 +106,13 @@ const SCHOOLS = [
 
 const arg = (n, d = null) => { const i = process.argv.indexOf('--' + n); return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : d; };
 const flag = (n) => process.argv.includes('--' + n);
+// --school is repeatable; arg() only ever sees the first one.
+const argAll = (n) => process.argv.reduce((acc, v, i) =>
+  (v === '--' + n && process.argv[i + 1] && !process.argv[i + 1].startsWith('--'))
+    ? acc.concat(process.argv[i + 1]) : acc, []);
+
+const named = argAll('school');
+const SCHOOLS = named.length ? named : DEFAULT_SCOPE;
 
 const API      = arg('api', process.env.API_BASE || 'https://api.haveniq.org');
 const TOKEN    = process.env.ADMIN_BOT_TOKEN || process.env.INTERNAL_API_KEY
@@ -130,7 +146,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const total = preview.reduce((a, r) => a + Number(r.publishable), 0);
   const held  = preview.reduce((a, r) => a + Number(r.held), 0);
 
-  console.log(`new-metro campuses only · risk <= ${MAX_RISK}\n`);
+  // Say the scope out loud. This line used to read "new-metro campuses only"
+  // regardless of what was actually being published, which on a 7,600-listing
+  // run across UCLA and Orange Coast would have been a caption describing a
+  // different action entirely.
+  console.log(`scope: ${named.length ? `${named.length} school(s) named on the command line` : 'default — the campuses added with the new metros'} · risk <= ${MAX_RISK}`);
+  for (const name of SCHOOLS) console.log(`   · ${name}`);
+  console.log('');
   for (const r of preview) {
     console.log(`  ${String(r.school_near).padEnd(42)} publish ${String(r.publishable).padStart(5)}   hold ${String(r.held).padStart(4)}   worst risk ${r.worst}`);
   }
