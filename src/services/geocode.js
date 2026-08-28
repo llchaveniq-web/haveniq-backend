@@ -64,8 +64,8 @@ async function geocodeListing({ address, city, schoolNear }) {
 
 /** The shared lookup. Every caller gets the same throttle and the same
  *  rejection rules, so a new call site can't quietly skip either. */
-async function geocodeOne(q) {
-  const url = `${NOMINATIM}?format=jsonv2&limit=1&q=${encodeURIComponent(q)}`;
+async function geocodeOne(q, { limit = 1, prefer = null } = {}) {
+  const url = `${NOMINATIM}?format=jsonv2&limit=${limit}&q=${encodeURIComponent(q)}`;
 
   try {
     await throttle();
@@ -78,8 +78,13 @@ async function geocodeOne(q) {
     const body = await res.json();
     if (!Array.isArray(body) || !body.length) return null;
 
-    const lat = Number(body[0].lat);
-    const lon = Number(body[0].lon);
+    // `prefer` lets a caller say what KIND of thing it is looking for and take
+    // that over Nominatim's own ranking. Free-text ranking optimises for string
+    // similarity, not for "is this the institution I named" — see geocodeSchool.
+    const hit = (prefer && body.find(r => prefer.test(String(r.type || '')))) || body[0];
+
+    const lat = Number(hit.lat);
+    const lon = Number(hit.lon);
     // A NaN or an out-of-range pair would be stored happily by Postgres and
     // then put a student in the ocean. Reject rather than persist nonsense.
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -91,16 +96,48 @@ async function geocodeOne(q) {
   }
 }
 
+// A campus is a university, a college or a school. Nominatim's `type` for the
+// real thing is one of these; a bus stop named after it, or an apartment block
+// that borrowed its name, is not.
+const CAMPUS_TYPE = /^(university|college|school)$/;
+
 /**
  * Coordinates for a campus, by the school NAME as stored on the user row.
  *
  * Appending "university" is deliberately NOT done: names here are already
  * full ("University of Southern California", "UC Irvine"), and bolting a word
  * onto a name that already contains it is how a query stops matching.
+ *
+ * ── Why this is not just geocodeOne(school) ────────────────────────────────
+ *
+ * It was, and it was wrong by 383 miles. "University of California, Berkeley"
+ * returned a point in IRVINE: Nominatim reads the comma as an address
+ * separator, so the official name becomes a street-address-shaped query and
+ * "Berkeley Court Apartments, University Town Center, Irvine" scores as an
+ * excellent match. "University of California, Los Angeles" returned Cal State
+ * LA. "University of California, San Diego" returned a school district office.
+ *
+ * Nothing above caught it. The range checks reject NaN and coordinates outside
+ * the planet — a plausible-looking point in the wrong city passes every one,
+ * gets cached by getSchoolCoords with ON CONFLICT DO NOTHING, and sticks. The
+ * student then sees listings from a city they have never been to, filtered by
+ * a radius drawn around the wrong campus.
+ *
+ * Two changes fix all eight schools currently in production to within 1.6 mi:
+ *
+ *   1. Drop the commas. The official names are comma-separated, which is
+ *      exactly what makes Nominatim parse them as addresses.
+ *   2. Ask for several results and take the one TYPED as a campus, rather than
+ *      whatever ranked first by string similarity.
+ *
+ * No country restriction: the app accepts .ac.uk and .edu.au addresses, and
+ * pinning to the US would silently break every school outside it. Verified
+ * without it.
  */
 async function geocodeSchool(school) {
   if (!school || typeof school !== 'string' || !school.trim()) return null;
-  return geocodeOne(school.trim());
+  const q = school.trim().replace(/,/g, ' ').replace(/\s+/g, ' ');
+  return geocodeOne(q, { limit: 8, prefer: CAMPUS_TYPE });
 }
 
 /**

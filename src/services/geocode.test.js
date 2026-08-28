@@ -12,7 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { geocodeListing, buildQuery } = require('./geocode');
+const { geocodeListing, geocodeSchool, buildQuery } = require('./geocode');
 
 const realFetch = global.fetch;
 function stubFetch(impl) { global.fetch = impl; }
@@ -120,4 +120,72 @@ test('geocodeSchool refuses an empty name instead of querying for ""', () => {
     geocodeSchool('   ').then(r => assert.equal(r, null)),
     geocodeSchool(null).then(r => assert.equal(r, null)),
   ]);
+});
+
+// ── geocodeSchool: the campus, not something named after it ────────────────
+//
+// This was geocodeOne(school) and it was wrong by 383 miles. "University of
+// California, Berkeley" returned a point in IRVINE, because Nominatim reads
+// the comma as an address separator and "Berkeley Court Apartments, University
+// Town Center, Irvine" is then an excellent match. UCLA returned Cal State LA.
+// Nothing caught it: the range checks above reject NaN and off-planet
+// coordinates, and a plausible point in the wrong city passes every one — then
+// getSchoolCoords caches it with ON CONFLICT DO NOTHING and it sticks forever.
+//
+// The network is stubbed here, so these pin the two decisions that fix it
+// rather than the provider's answers.
+
+test('geocodeSchool strips commas — the official name is not an address', async () => {
+  let asked = '';
+  stubFetch(async (url) => { asked = decodeURIComponent(String(url)); return ok([{ lat: '37.87', lon: '-122.26', type: 'university' }])(); });
+  await geocodeSchool('University of California, Berkeley');
+  assert.ok(!asked.includes(','), `query still carries a comma: ${asked}`);
+  assert.ok(asked.includes('University of California Berkeley'), asked);
+});
+
+test('geocodeSchool takes a campus-typed result over a better-ranked one', async () => {
+  // Exactly the Irvine failure: the apartment block ranks first on string
+  // similarity, and the university is further down the list.
+  stubFetch(ok([
+    { lat: '33.649', lon: '-117.836', type: 'residential' },   // Berkeley Court Apartments, Irvine
+    { lat: '33.651', lon: '-117.835', type: 'tertiary' },      // Berkeley Avenue, Irvine
+    { lat: '37.8719', lon: '-122.2585', type: 'university' },  // the actual campus
+  ]));
+  assert.deepEqual(await geocodeSchool('University of California, Berkeley'),
+    { lat: 37.8719, lon: -122.2585 });
+});
+
+test('geocodeSchool accepts college and school types too', async () => {
+  stubFetch(ok([
+    { lat: '1', lon: '1', type: 'bus_stop' },
+    { lat: '33.6712', lon: '-117.9112', type: 'college' },
+  ]));
+  assert.deepEqual(await geocodeSchool('Orange Coast College'), { lat: 33.6712, lon: -117.9112 });
+});
+
+test('geocodeSchool falls back to the first result when nothing is campus-typed', async () => {
+  // Better a ranked guess than no coordinates at all — the caller treats a
+  // miss as "no distance filtering", which is a worse experience than an
+  // approximate campus.
+  stubFetch(ok([{ lat: '10', lon: '20', type: 'suburb' }]));
+  assert.deepEqual(await geocodeSchool('Somewhere Polytechnic'), { lat: 10, lon: 20 });
+});
+
+test('geocodeSchool asks for several candidates, not just the top hit', async () => {
+  let asked = '';
+  stubFetch(async (url) => { asked = String(url); return ok([{ lat: '1', lon: '2', type: 'university' }])(); });
+  await geocodeSchool('UCLA');
+  assert.ok(/limit=([2-9]|\d{2,})/.test(asked), `expected limit > 1, got: ${asked}`);
+});
+
+test('listing geocoding still takes the first hit, unchanged', async () => {
+  // The school fix must not leak into address lookups, where a comma IS
+  // meaningful and the top hit is the right answer.
+  let asked = '';
+  stubFetch(async (url) => { asked = decodeURIComponent(String(url)); return ok([
+    { lat: '33.6405', lon: '-117.8443', type: 'house' },
+    { lat: '0', lon: '0', type: 'university' },
+  ])(); });
+  assert.deepEqual(await geocodeListing(ADDR), { lat: 33.6405, lon: -117.8443 });
+  assert.ok(asked.includes('412 Bardeen Ave, Irvine'), asked);
 });
