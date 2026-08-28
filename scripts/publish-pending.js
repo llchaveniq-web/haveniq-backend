@@ -83,16 +83,11 @@ function fromRailway(service, key) {
   }
 }
 
-// Order matters: src/db/pool reads process.env.DATABASE_URL at REQUIRE time,
-// so this has to happen before the require below or the pool is built with an
-// undefined connection string and the same "looks like a missing secret"
-// failure lands on the database instead of the token.
-if (!process.env.DATABASE_URL) {
-  const url = fromRailway('Postgres', 'DATABASE_PUBLIC_URL');
-  if (url) process.env.DATABASE_URL = url;
-}
-
-const pool = require('../src/db/pool');
+// No database connection. Everything here goes through the bot-admin API, so
+// the only credential needed is the admin token — which is what lets this run
+// from CI without putting a production DATABASE_URL into GitHub secrets. The
+// smaller blast radius is the point: a leaked read/write DB URL is a different
+// order of problem from a leaked API token that can only approve listings.
 
 // The campuses added when the collector went from one metro to four. Used
 // when no --school is given.
@@ -123,92 +118,97 @@ const BATCH    = 200;                       // the endpoint's own per-call cap
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+const api = async (path, init = {}) => {
+  const res = await fetch(`${API}${path}`, {
+    ...init,
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}`, ...(init.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, body };
+};
+
+/**
+ * Every pending listing, walked page by page.
+ *
+ * The queue is ordered risk DESC, so the listings this script will NEVER
+ * publish sit at the head of it permanently. Re-reading offset 0 each time
+ * would therefore return the same held-back rows forever and find nothing to
+ * do. So the whole queue is read BEFORE anything is approved — offsets stay
+ * stable because nothing has left the queue yet.
+ */
+async function readQueue() {
+  const all = [];
+  for (let offset = 0; ; offset += BATCH) {
+    const { ok, status, body } = await api(`/bot-admin/pending-listings?limit=${BATCH}&offset=${offset}`);
+    if (!ok) throw new Error(`pending-listings returned HTTP ${status}`);
+    const page = body.listings || [];
+    all.push(...page);
+    if (page.length < BATCH) return { all, tally: body.pending || null };
+    await sleep(200);
+  }
+}
+
 (async () => {
   if (!Number.isFinite(MAX_RISK) || MAX_RISK < 0 || MAX_RISK > 100) {
     console.error('--max-risk must be 0-100'); process.exit(1);
   }
-  if (!DRY && !TOKEN) {
+  if (!TOKEN) {
     console.error('No ADMIN_BOT_TOKEN in the environment, and Railway could not supply one.');
-    console.error('Either `railway link` this directory, or set ADMIN_BOT_TOKEN yourself.');
+    console.error('Set ADMIN_BOT_TOKEN, or `railway link` this directory.');
     process.exit(1);
   }
 
-  const { rows: preview } = await pool.query(
-    `SELECT school_near,
-            count(*) FILTER (WHERE coalesce(risk_score,0) <= $2) publishable,
-            count(*) FILTER (WHERE coalesce(risk_score,0) >  $2) held,
-            max(coalesce(risk_score,0)) worst
-       FROM listings
-      WHERE is_active AND moderation_status = 'pending' AND school_near = ANY($1::text[])
-      GROUP BY school_near ORDER BY publishable DESC`,
-    [SCHOOLS, MAX_RISK]);
-
-  const total = preview.reduce((a, r) => a + Number(r.publishable), 0);
-  const held  = preview.reduce((a, r) => a + Number(r.held), 0);
-
-  // Say the scope out loud. This line used to read "new-metro campuses only"
-  // regardless of what was actually being published, which on a 7,600-listing
-  // run across UCLA and Orange Coast would have been a caption describing a
-  // different action entirely.
   console.log(`scope: ${named.length ? `${named.length} school(s) named on the command line` : 'default — the campuses added with the new metros'} · risk <= ${MAX_RISK}`);
   for (const name of SCHOOLS) console.log(`   · ${name}`);
   console.log('');
-  for (const r of preview) {
-    console.log(`  ${String(r.school_near).padEnd(42)} publish ${String(r.publishable).padStart(5)}   hold ${String(r.held).padStart(4)}   worst risk ${r.worst}`);
+
+  const inScope = new Set(SCHOOLS);
+  const { all, tally } = await readQueue();
+  const eligible = all.filter(l => inScope.has(l.school_near) && Number(l.risk_score || 0) <= MAX_RISK);
+  const held     = all.filter(l => inScope.has(l.school_near) && Number(l.risk_score || 0) >  MAX_RISK);
+
+  const by = (rows) => rows.reduce((m, l) => (m[l.school_near] = (m[l.school_near] || 0) + 1, m), {});
+  const pub = by(eligible), hold = by(held);
+  for (const name of SCHOOLS) {
+    if (!pub[name] && !hold[name]) continue;
+    console.log(`  ${name.padEnd(42)} publish ${String(pub[name] || 0).padStart(5)}   hold ${String(hold[name] || 0).padStart(4)}`);
   }
-  console.log(`\n  total to publish: ${total}`);
-  console.log(`  left queued for a human: ${held}`);
+  console.log(`
+  queue read: ${all.length} pending overall${tally ? ` (API tally ${tally.total})` : ''}`);
+  console.log(`  total to publish: ${eligible.length}`);
+  console.log(`  left queued for a human: ${held.length}`);
+  // Out-of-scope work is not a silent omission — a scheduled run that quietly
+  // ignores a campus nobody added to SCHOOLS is how a backlog rebuilds unseen.
+  const outside = all.length - eligible.length - held.length;
+  if (outside) console.log(`  outside this scope, untouched: ${outside}`);
 
-  if (DRY) { console.log('\n(dry run — nothing published)'); await pool.end(); return; }
-  if (!total) { console.log('\nnothing to publish'); await pool.end(); return; }
+  if (DRY) { console.log('\n(dry run — nothing published)'); return; }
+  if (!eligible.length) { console.log('\nnothing to publish'); return; }
 
-  const { rows } = await pool.query(
-    `SELECT id FROM listings
-      WHERE is_active AND moderation_status = 'pending'
-        AND school_near = ANY($1::text[]) AND coalesce(risk_score,0) <= $2
-      ORDER BY created_at`,
-    [SCHOOLS, MAX_RISK]);
-  const ids = rows.map(r => r.id);
-  console.log(`\npublishing ${ids.length} in batches of ${BATCH}…`);
+  const ids = eligible.map(l => l.id);
+  console.log(`
+publishing ${ids.length} in batches of ${BATCH}…`);
 
   let ok = 0, failed = 0;
   for (let i = 0; i < ids.length; i += BATCH) {
     const batch = ids.slice(i, i + BATCH);
-    try {
-      const res = await fetch(`${API}/bot-admin/listings/bulk`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
-        body: JSON.stringify({
-          action: 'approve',
-          ids: batch,
-          reason: `new-metro bulk publish, collected, risk <= ${MAX_RISK}`,
-        }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        failed += batch.length;
-        console.error(`\n  batch ${Math.floor(i / BATCH) + 1}: HTTP ${res.status} ${body?.error || ''}`);
-      } else {
-        const acted = body.approved ?? body.acted ?? body.ids;
-        ok += Array.isArray(acted) ? acted.length : batch.length;
-        process.stdout.write('.');
-      }
-    } catch (e) {
-      failed += batch.length;
-      console.error(`\n  batch ${Math.floor(i / BATCH) + 1} failed: ${e.message}`);
-    }
-    await sleep(250);                       // don't stampede our own API
+    const { ok: good, status, body } = await api('/bot-admin/listings/bulk', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'approve', ids: batch, reason: `scheduled publish, risk <= ${MAX_RISK}` }),
+    }).catch(e => ({ ok: false, status: 0, body: { error: e.message } }));
+    if (!good) { failed += batch.length; console.error(`
+  batch ${Math.floor(i / BATCH) + 1}: HTTP ${status} ${body?.error || ''}`); }
+    else { const acted = body.approved ?? body.acted ?? body.ids; ok += Array.isArray(acted) ? acted.length : batch.length; process.stdout.write('.'); }
+    await sleep(250);
   }
 
-  const { rows: after } = await pool.query(
-    `SELECT school_near,
-            count(*) FILTER (WHERE moderation_status='approved') live,
-            count(*) FILTER (WHERE moderation_status='pending')  pending
-       FROM listings WHERE is_active AND school_near = ANY($1::text[])
-      GROUP BY school_near ORDER BY live DESC`, [SCHOOLS]);
-  console.log(`\n\napproved ${ok}, failed ${failed}\n`);
-  for (const r of after) {
-    console.log(`  ${String(r.school_near).padEnd(42)} live ${String(r.live).padStart(5)}   still pending ${String(r.pending).padStart(5)}`);
+  console.log(`
+
+approved ${ok}, failed ${failed}`);
+  const after = await api('/bot-admin/pending-listings?limit=1');
+  if (after.ok && after.body.pending) {
+    console.log(`queue now: ${after.body.pending.total} pending (${after.body.pending.flagged} flagged >= 50)`);
   }
-  await pool.end();
+  // A partial failure must not look like success to a scheduler.
+  if (failed) process.exit(1);
 })().catch(e => { console.error('publish failed:', e.message); process.exit(1); });
