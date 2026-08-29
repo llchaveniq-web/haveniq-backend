@@ -429,6 +429,10 @@ app.use('/feature-state', require('./routes/featureState')); // generic per-feat
 app.use('/walkscore', require('./routes/walkscore')); // Walk/Transit/Bike Score proxy (key stays server-side)
 app.use('/referrals', require('./routes/referrals')); // unique invite codes + referral attribution
 app.use('/circle',    require('./routes/circle'));    // your referred users + compatibility to each
+// The list half of the app's ConnectionsAPI. Sending and responding stay on
+// /matches/connect and /matches/respond, which already carry the eligibility
+// gating — this is the view Circle needs, not a second write path.
+app.use('/connections', require('./routes/connections'));
 // Cross-referenceable safety record: POST a report, GET /mine, GET /admin
 // (founder-only) surfaces same-person-different-reporters patterns. Inert until
 // the app adds its third fetch call. See routes/roommateSafety.js.
