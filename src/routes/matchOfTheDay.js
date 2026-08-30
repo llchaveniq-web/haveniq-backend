@@ -113,11 +113,36 @@ async function pickTodayMatch(userId) {
  * Hydrate a match_of_the_day row into the full payload the frontend
  * needs (photo, name, school, compat breakdown, why_matched).
  */
+/**
+ * Approved past-roommate vouches for one user.
+ *
+ * Deliberately its OWN query rather than a subquery inside hydrateMatch: the
+ * `vouches` table is not in schema.sql — routes/vouches.js creates it lazily
+ * behind an in-process `ready` flag the first time someone touches a vouch
+ * route. On a freshly migrated database nobody has done that yet, so joining
+ * it from the daily-match hydrate would throw `relation "vouches" does not
+ * exist` and take the WHOLE daily match down for every student, to add one
+ * badge. Isolated and caught, a missing table just means zero vouches.
+ *
+ * Indexed by idx_vouches_user (user_id, status), so this is a cheap lookup.
+ */
+async function approvedVouchCount(userId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM vouches WHERE user_id = $1 AND status = 'approved'`,
+      [userId],
+    );
+    return rows[0]?.n ?? 0;
+  } catch {
+    return 0;   // table absent, or any transient error — never break the card
+  }
+}
+
 async function hydrateMatch(userId, matchUserId, action) {
   const { rows } = await pool.query(
     `SELECT
        u.id, u.first_name, u.last_name, u.school, u.school_year, u.major,
-       u.bio, u.photo_url, u.is_verified,
+       u.bio, u.photo_url, u.is_verified, u.identity_verified_at,
        ph.urls AS photo_urls,
        cs.score, cs.breakdown, cs.why_matched
      FROM users u
@@ -141,6 +166,20 @@ async function hydrateMatch(userId, matchUserId, action) {
     photoUrl:     r.photo_url,
     photos:       photosFor(r),
     isVerified:   !!r.is_verified,
+    // Trust signals the client's TrustChips renders. It proves the strongest
+    // tier it can from what it is given: identityVerifiedAt -> "ID verified",
+    // otherwise isVerified -> ".edu verified". Without these two the daily
+    // pick could only ever show the weakest badge, even for a student who had
+    // completed Stripe Identity and earned past-roommate vouches.
+    //
+    // NOT included: trustTier. The client type describes it as "HavenIQ's
+    // primary anti-scammer defense", but no column, query or job anywhere in
+    // this backend ever produces one — it is client-side vocabulary with
+    // nothing behind it. Inventing a tier here would be exactly the kind of
+    // unearned claim TrustChips refuses to make, so the client keeps proving
+    // the floor from the two real signals below.
+    identityVerifiedAt: r.identity_verified_at || null,
+    vouchCount:   await approvedVouchCount(matchUserId),
     score:        r.score != null ? Math.round(Number(r.score)) : null,
     breakdown:    r.breakdown || {},
     whyMatched:   r.why_matched || null,

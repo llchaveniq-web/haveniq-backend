@@ -316,7 +316,7 @@ const validators = {
   // in lockstep with scoring.js DEALBREAKER_QUESTIONS keys.
   dealbreakers:    v => Array.isArray(v) && v.length <= 3 && v.every(x =>
     typeof x === 'string' &&
-    ['sleep', 'cleanliness', 'substances', 'alcohol', 'money', 'guests', 'communication', 'noise', 'space'].includes(x)
+    ['sleep', 'cleanliness', 'substances', 'alcohol', 'money', 'guests', 'communication', 'noise'].includes(x)
   ),
   // v8 hard/soft match deal-breakers (1d). Small JSON object the app saves so
   // the match query can filter on it. Strict: only known keys, correct types.
