@@ -30,9 +30,18 @@ name: Publish clean listings
 # is a second decision, and it should look like one in a diff.
 #
 # Required secret (repo -> Settings -> Secrets -> Actions):
-#   ADMIN_BOT_TOKEN — the same value as the Railway variable. Deliberately the
-#   ONLY credential: the script talks to the bot-admin API and never opens a
-#   database connection, so a leak here can approve listings and nothing else.
+#   HAVENIQ_ADMIN_TOKEN — the same value as the Railway ADMIN_BOT_TOKEN
+#   variable. Deliberately the ONLY credential: the script talks to the
+#   bot-admin API and never opens a database connection, so a leak here can
+#   approve listings and nothing else.
+#
+#   The name matters, and got this wrong. The workflow asked for a secret
+#   called ADMIN_BOT_TOKEN, which this repo does not have — it has
+#   HAVENIQ_ADMIN_TOKEN, the name safety-triage already uses successfully
+#   against the same middleware. So every scheduled run since the workflow
+#   moved here has exited 1 on the missing-secret guard, and nobody noticed,
+#   because the app repo's Actions are all red from a billing failure and a
+#   red check had stopped meaning anything.
 
 on:
   schedule:
@@ -72,7 +81,10 @@ jobs:
       # job that holds a production credential.
       - name: Publish
         env:
-          ADMIN_BOT_TOKEN: ${{ secrets.ADMIN_BOT_TOKEN }}
+          # The repo secret is named HAVENIQ_ADMIN_TOKEN; the script reads
+          # ADMIN_BOT_TOKEN, which is what the server's requireInternalKey
+          # middleware actually checks. Same value, two names.
+          ADMIN_BOT_TOKEN: ${{ secrets.HAVENIQ_ADMIN_TOKEN }}
         run: |
           if [ -z "$ADMIN_BOT_TOKEN" ]; then
             echo "::error::ADMIN_BOT_TOKEN is not set — add it in Settings > Secrets > Actions."
