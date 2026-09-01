@@ -784,3 +784,28 @@ CREATE INDEX IF NOT EXISTS idx_safety_reports_reporter ON roommate_safety_report
 -- tagged here so they're trivially findable for cleanup. This tag is the ONE
 -- thing that does NOT auto-revert when the flag flips off.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_via_skip_verification BOOLEAN DEFAULT false;
+
+-- ── Free-tier connect quota, per user per day ───────────────────────────────
+-- The cap used to live only in the app's premiumStore, persisted to the
+-- device's SecureStore. On web that means clearing site data hands a student a
+-- fresh allowance, and a second browser is a second allowance — so the thing
+-- HavenIQ+ is sold to lift was not actually enforced anywhere.
+--
+-- Deliberately NOT derived by counting connect_requests. That table is
+-- UNIQUE(from_user, to_user) and a re-send after the decline cooldown UPDATEs
+-- the existing row rather than inserting, so created_at is the FIRST send, not
+-- the latest. Counting it would silently under-count exactly the students who
+-- use the app most.
+--
+-- One row per user per day. `used` is only ever incremented, by the atomic
+-- upsert in src/lib/connectQuota.js.
+CREATE TABLE IF NOT EXISTS connect_usage (
+  user_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day      DATE NOT NULL DEFAULT CURRENT_DATE,
+  used     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);
+
+-- Yesterday's rows are never read. This keeps the "how many today" lookup on
+-- an index rather than a scan once the table has a season of history in it.
+CREATE INDEX IF NOT EXISTS idx_connect_usage_day ON connect_usage(day);

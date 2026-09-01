@@ -15,6 +15,7 @@ const {
   budgetsConflict, moveInConflict, hasRealBudget, moveInDays,
 } = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
+const { spendConnect, refundConnect } = require('../lib/connectQuota');
 // Pre-match photo gallery (owner decision 2026-07-22: faces visible while choosing).
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { loadDrift } = require('../services/pulseDrift');
@@ -1032,6 +1033,26 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
       return res.status(409).json({ error: 'Request already exists', status: existingRow.status });
     }
 
+    // ── Free-tier daily quota ────────────────────────────────────────────
+    // Spent HERE: after every eligibility gate above has passed and
+    // immediately before the write, so a request refused for compatibility, a
+    // block, viability or an un-cooled decline costs a student nothing. The
+    // check and the increment are ONE atomic statement inside spendConnect —
+    // see the double-tap race it closes there. Premium skips it entirely.
+    const quota = await spendConnect(req.user.id, req.user.is_premium);
+    if (!quota.ok) {
+      return res.status(402).json({
+        error: quota.limit === 0
+          ? 'Connecting is part of HavenIQ+.'
+          : `That's your ${quota.limit} for today. More tomorrow, or go unlimited with HavenIQ+.`,
+        reason: 'daily_quota',
+        limit: quota.limit,
+        used: quota.used,
+        remaining: 0,
+      });
+    }
+
+    try {
     if (existingRow) {
       // Revive the SAME row (updating from_user/to_user to this attempt's
       // direction) instead of inserting a second one — the table's
@@ -1049,6 +1070,12 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
         'INSERT INTO connect_requests (from_user, to_user, status) VALUES ($1, $2, $3)',
         [req.user.id, toUserId, 'pending']
       );
+    }
+    } catch (writeErr) {
+      // The connect was spent moments ago and the write it paid for did not
+      // land. Give it back rather than charging a student for nothing.
+      await refundConnect(req.user.id).catch(() => {});
+      throw writeErr;
     }
 
     // Outcome scaffolding: stamp the 'connect' funnel step + snapshot the score

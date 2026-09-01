@@ -3,6 +3,7 @@ const express = require('express');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const stripeUtil = require('../utils/stripe');
+const { quotaFor } = require('../lib/connectQuota');
 
 // ── Plan / cadence → Stripe Price mapping (server-side only) ─────────────────
 // The client sends only { plan, billing }. We NEVER trust a price from the
@@ -206,11 +207,22 @@ router.get('/status', requireAuth, async (req, res) => {
       [req.user.id],
     );
     if (!rows[0]) {
-      return res.json({ isPremium: false, plan: null, status: null, currentPeriodEnd: null });
+      // No subscription row — free tier. The quota still has to come back, or
+      // the app has nothing to render "2 of 5 left today" from and falls back
+      // to its own device-local count, which is the thing this replaced.
+      return res.json({
+        isPremium: false, plan: null, status: null, currentPeriodEnd: null,
+        connects: await quotaFor(req.user.id, false),
+      });
     }
     const r = rows[0];
+    const isPremium = PREMIUM_STATUSES.includes(r.status);
     res.json({
-      isPremium:        PREMIUM_STATUSES.includes(r.status),
+      isPremium,
+      // Derived from the SAME isPremium the response reports, so the badge and
+      // the allowance can never disagree — a student shown "HavenIQ+" while
+      // still being counted would be the worst version of this bug.
+      connects:         await quotaFor(req.user.id, isPremium),
       plan:             r.plan ?? null,
       status:           r.status ?? null,
       currentPeriodEnd: r.current_period_end ? new Date(r.current_period_end).toISOString() : null,

@@ -25,6 +25,14 @@ let insertCalls = [];
 
 inject('../db/pool', {
   query: async (sql, params) => {
+    // Free-tier daily quota ledger (src/lib/connectQuota.js). The connect
+    // endpoint spends one before writing, so a fake pool that does not answer
+    // this returns no rows and every request reads as "over the limit" — a 402
+    // instead of the behaviour under test. Grant it here; the quota's own
+    // semantics are covered in src/lib/connectQuota.test.js.
+    if (/INSERT INTO connect_usage/.test(sql)) return { rows: [{ used: 1 }] };
+    if (/SELECT used FROM connect_usage/.test(sql)) return { rows: [{ used: 1 }] };
+    if (/UPDATE connect_usage/.test(sql)) return { rows: [] };
     if (/SELECT score, is_hard_blocked, breakdown\s+FROM compatibility_scores/.test(sql)) {
       return { rows: [{ score: '80', is_hard_blocked: false, breakdown: {} }] };
     }

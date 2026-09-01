@@ -189,16 +189,28 @@ test('webhook: customer.subscription.updated syncs status to past_due (loses acc
 });
 
 // ── status ──
-test('status: no row → isPremium false', async () => {
+test('status: no row → isPremium false, and the free tier still gets its quota', async () => {
   const res = await request(app).get('/premium/status');
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body, { isPremium: false, plan: null, status: null, currentPeriodEnd: null });
+  assert.deepEqual(res.body, {
+    isPremium: false, plan: null, status: null, currentPeriodEnd: null,
+    // A user with no subscription row is the free tier, and the app renders
+    // "n of N left today" from exactly this. Omitting it here is what sent the
+    // app back to its own device-local count — the bypass the ledger replaced.
+    connects: { limit: 5, used: 0, remaining: 5, unlimited: false },
+  });
 });
 
 test('status: active → premium, canceled → not, ISO period', async () => {
   subRow = { status: 'active', plan: 'plus', current_period_end: new Date('2026-08-01T00:00:00.000Z') };
   let res = await request(app).get('/premium/status');
-  assert.deepEqual(res.body, { isPremium: true, plan: 'plus', status: 'active', currentPeriodEnd: '2026-08-01T00:00:00.000Z' });
+  assert.deepEqual(res.body, {
+    isPremium: true, plan: 'plus', status: 'active', currentPeriodEnd: '2026-08-01T00:00:00.000Z',
+    // Unlimited must come back as nulls, not as a big number the UI might
+    // print. Derived from the same isPremium above, so a premium badge and a
+    // counted allowance can never be shown together.
+    connects: { limit: null, used: 0, remaining: null, unlimited: true },
+  });
 
   subRow = { status: 'canceled', plan: 'plus', current_period_end: new Date('2026-08-01T00:00:00.000Z') };
   res = await request(app).get('/premium/status');
