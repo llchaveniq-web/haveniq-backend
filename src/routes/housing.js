@@ -118,6 +118,21 @@ router.get('/listings', requireAuth, async (req, res) => {
          -- A listing a human has not cleared is not shown to a student.
          -- This is the line the "no fake listings" promise rests on.
          AND moderation_status = 'approved'
+         -- Nobody renting a room as a student pays $6,000 a month for it.
+         --
+         -- The collector pulls whole markets, so it correctly ingests real
+         -- Beverly Hills and Pacific Heights rentals: 44 approved listings sit
+         -- above $15,000/mo, topping out at a $36,995 four-bed. The data is
+         -- right; the audience is wrong. Sorting by Priciest led a student —
+         -- or a housing director being shown the product — with a mansion,
+         -- which reads as a platform that does not know who it is for.
+         --
+         -- Judged on PER-PERSON rent, because that is what a student actually
+         -- pays. Against live data: median $1,517, p90 $2,650, p99 $4,500.
+         -- $6,000 sits well past p99 and hides 154 of 44,899 listings (0.34%),
+         -- so expensive-but-real markets survive and only the indefensible
+         -- tail goes. $72,000 a year for one bedroom is not student housing.
+         AND (per_person_rent_cents IS NULL OR per_person_rent_cents <= 600000)
          AND (
            $1::text IS NULL
            OR (
