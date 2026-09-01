@@ -131,6 +131,15 @@ const search = rateLimit({
   legacyHeaders: false,
 });
 
+// Provider callbacks, listed rather than pattern-matched. An explicit list is
+// harder to be quietly wrong about: adding a webhook is now a deliberate line
+// here instead of a hope that its path happens to fit a prefix.
+const PROVIDER_CALLBACK_PATHS = [
+  '/premium/webhook',   // Stripe — subscriptions
+  '/webhooks/resend',   // Resend — email bounces
+  '/sentry/webhook',    // Sentry — issue alerts
+];
+
 // ── Blanket per-IP cap on state-changing requests ───────────────────────────
 // The global limiter (server.js) counts ALL requests at 200 / 15 min, which is
 // sized for read traffic: feed refreshes, presence polls, thread opens. Writes
@@ -153,7 +162,25 @@ const writeLimiter = rateLimit({
     // Provider callbacks authenticate by HMAC signature, not by our key. Never
     // throttle them — a Stripe/Resend/Sentry retry burst would be dropped and
     // the event lost.
-    if (/^\/(webhooks|sentry|api)\//.test(req.path)) return true;
+    //
+    // Matched against the paths that actually exist, because the prefix form
+    // this replaced — /^\/(webhooks|sentry|api)\// — named Stripe first in its
+    // comment and then did not match it. Stripe is mounted at
+    // /premium/webhook (server.js: app.use('/premium', ...) + router.post
+    // ('/webhook')), which has no /webhooks/ prefix, so the one callback the
+    // exemption was written for was the one it missed:
+    //
+    //   /webhooks/resend   matched — and never reaches here anyway, being
+    //                      mounted above the limiters for raw-body reasons
+    //   /sentry/webhook    matched
+    //   /premium/webhook   DID NOT MATCH — throttled at 60 writes / 5 min per IP
+    //
+    // Stripe sends every event for every subscriber from a small shared pool of
+    // IPs, so a burst of signups plus Stripe's own retries share one budget. A
+    // 429 is not fatal (Stripe backs off and retries for days) but each one
+    // delays a paying student's account flipping to premium, which is the exact
+    // failure this skip exists to prevent.
+    if (PROVIDER_CALLBACK_PATHS.some(p => req.path === p || req.path.startsWith(p + '/'))) return true;
     // Internal callers (cron, the bot) are exempt only when they present a
     // valid internal key — the same constant-time check the endpoints use, so
     // the exemption cannot be claimed without the secret.
