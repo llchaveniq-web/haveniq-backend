@@ -9,14 +9,25 @@
 // Safety:
 //   • The founder email is hardcoded into the allowlist, so a missing or
 //     mistyped env var can NEVER lock the founder out of his own app.
-//   • Default state is LOCKED (fail-safe). The gate opens ONLY when
-//     PRELAUNCH_LOCK is explicitly set to the string "false".
+//   • Default state is OPEN. The gate LOCKS only when PRELAUNCH_LOCK is
+//     exactly the string "true" — an unset, empty, misspelt or wrongly-cased
+//     value all leave signup open to any verified .edu student.
+//
+//     (This said the opposite until 2026-09-01: "Default state is LOCKED
+//     (fail-safe). The gate opens ONLY when PRELAUNCH_LOCK is explicitly set
+//     to the string 'false'." That was true of an earlier version and the
+//     comment did not follow the code when it flipped on 2026-06-08. It is the
+//     kind of stale that gets read the night before a launch and acted on
+//     backwards — setting PRELAUNCH_LOCK=false to "open" the gate reads as a
+//     no-op against this code, and someone chasing a still-locked app would go
+//     looking for a bug that was never there.)
 //
 // Operating it:
 //   • Add a helper without a code change → set PRELAUNCH_ALLOWLIST in Railway
 //     to a comma-separated list of emails (e.g. "cam@x.edu,quinn@y.edu").
-//   • OPEN TO EVERYONE at launch → set PRELAUNCH_LOCK=false in Railway
-//     (or remove this gate in code and redeploy).
+//   • LOCK IT DOWN again → set PRELAUNCH_LOCK=true in Railway.
+//   • OPEN TO EVERYONE → unset PRELAUNCH_LOCK (or set it to anything but
+//     "true"). This is the current, default state.
 //
 // All comparisons are lowercased + trimmed to match how emails are stored.
 
