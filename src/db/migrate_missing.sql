@@ -785,6 +785,190 @@ CREATE INDEX IF NOT EXISTS idx_safety_reports_reporter ON roommate_safety_report
 -- thing that does NOT auto-revert when the flag flips off.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS created_via_skip_verification BOOLEAN DEFAULT false;
 
+-- —— Listing alerts (saved search — notify me about new places) ————— 2026-08-25 ——
+-- One alert per user (user_id IS the PK): the product question is "tell me
+-- about places near MY school under MY budget", not "manage a list of saved
+-- searches". A second row would be a feature nobody asked for and a fan-out
+-- multiplier on every listing insert.
+-- NULL max_per_person_cents / min_beds mean "no opinion", not "match nothing".
+CREATE TABLE IF NOT EXISTS listing_alerts (
+  user_id              UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  school_near          TEXT NOT NULL,
+  max_per_person_cents INTEGER CHECK (max_per_person_cents IS NULL OR max_per_person_cents > 0),
+  min_beds             INTEGER CHECK (min_beds IS NULL OR (min_beds BETWEEN 1 AND 10)),
+  is_active            BOOLEAN NOT NULL DEFAULT TRUE,
+  last_notified_at     TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- The fan-out query filters on school first, so that's the index that matters.
+CREATE INDEX IF NOT EXISTS idx_listing_alerts_school
+  ON listing_alerts(school_near) WHERE is_active = TRUE;
+
+-- —— Listing coordinates ———————————————————————————————— 2026-08-25 ——
+-- Listings carried an address and nothing else, so the app could only offer a
+-- Google Maps TEXT SEARCH, which can confidently resolve to the wrong street of
+-- the same name. Coordinates make the pin exact and are the prerequisite for
+-- radius search, walking distance and a real map view.
+-- NUMERIC, not float: these are compared and displayed, and binary float drift
+-- in a coordinate is the kind of bug nobody ever goes looking for.
+-- Nullable on purpose — geocoding fails (provider down, address not found) and
+-- a listing without coordinates must still work exactly as it did before.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS latitude    NUMERIC(9,6);
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS longitude   NUMERIC(9,6);
+-- Distinguishes "never attempted" (NULL) from "attempted and found nothing"
+-- (stamped, coords still NULL), so a backfill can skip addresses already known
+-- to be ungeocodable instead of retrying them forever.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS geocoded_at TIMESTAMPTZ;
+
+-- —— School coordinates cache ——————————————————————————— 2026-08-25 ——
+-- Schools are not a table here — they're a TEXT field on users and listings — so
+-- this is a cache keyed by the school NAME as stored, not a foreign key.
+-- Without campus coordinates there is no "N miles from campus", which is the
+-- whole point of having geocoded the listings.
+-- One row per distinct school name, geocoded once and reused by every student
+-- at that school forever. attempted_at separates "never looked" from "looked
+-- and found nothing", so an unresolvable name is not retried on every request.
+CREATE TABLE IF NOT EXISTS school_coords (
+  school       TEXT PRIMARY KEY,
+  latitude     NUMERIC(9,6),
+  longitude    NUMERIC(9,6),
+  attempted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── Listing moderation ──────────────────────────────── 2026-08-25 ──
+-- The landing page promises "no fake listings". That promise only survives
+-- opening up listing creation if something stands between a poster and a
+-- student. This is that gate.
+--
+-- moderation_status lives ON the listing rather than in a side table, because
+-- the read path has to filter on it and a join per feed request to answer
+-- "is this allowed to be seen" is the wrong shape.
+--
+-- DEFAULT 'approved' is deliberate, and only safe because of the backfill on
+-- the next line: every listing that exists today was founder-created, and a
+-- default of 'pending' would retroactively hide curated inventory. New
+-- non-founder listings are set to 'pending' explicitly by the route.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS moderation_status TEXT NOT NULL DEFAULT 'approved';
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS risk_score        INTEGER;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS risk_signals      JSONB;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS reviewed_by       UUID REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS reviewed_at       TIMESTAMPTZ;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS review_note       TEXT;
+UPDATE listings SET moderation_status = 'approved' WHERE moderation_status IS NULL;
+-- The feed filters on (is_active, moderation_status) together; the queue reads
+-- pending only, which is a tiny slice, so one partial index serves both.
+CREATE INDEX IF NOT EXISTS idx_listings_pending
+  ON listings(created_at) WHERE moderation_status = 'pending';
+
+-- ── Listing contact phone ──────────────────────────── 2026-08-25 ──
+-- The app has always SENT contactPhone (it's required in CreateListingPayload)
+-- and always READ it (RealListing.contactPhone, the Call button's render
+-- guard) — but the column never existed, so the create route dropped it and
+-- every read returned undefined. The Call button could therefore never render
+-- on any listing, and nobody would have noticed from the app side: a missing
+-- optional field looks exactly like a landlord who didn't give a number.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+
+-- ── Collected listings: provenance and de-duplication ────── 2026-08-26 ──
+-- source      which adapter produced this row ('craigslist'); NULL for the
+--             founder-entered listings that predate the collector.
+-- source_url  the posting it came from. UNIQUE, and that uniqueness IS the
+--             de-duplication: a collector re-run inserts ON CONFLICT DO
+--             NOTHING, so re-reading yesterday's sitemap is a no-op instead of
+--             filling the queue with duplicates a human then has to reject one
+--             by one.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS source           TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS source_url       TEXT;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS source_posted_at TIMESTAMPTZ;
+-- Partial, so the many founder rows with a NULL source_url do not collide with
+-- each other under a plain UNIQUE constraint.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_listings_source_url
+  ON listings(source_url) WHERE source_url IS NOT NULL;
+
+-- ── Collector memory: URLs already attempted ─────────────── 2026-08-26 ──
+-- Without this a scheduled collector re-fetches its own dead ends forever.
+-- listings.source_url only remembers what was STORED, and an expired posting
+-- is never stored — so the 410s sitting at the top of a sitemap would be
+-- re-requested every single cycle and the run would never reach the live
+-- listings behind them.
+--
+-- outcome is deliberately not just a boolean:
+--   stored / expired / skipped  are settled, and are never retried
+--   failed                      is transient (a timeout, a 5xx) and IS retried
+CREATE TABLE IF NOT EXISTS collector_seen (
+  source   TEXT NOT NULL,
+  url      TEXT NOT NULL,
+  outcome  TEXT NOT NULL,
+  seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (source, url)
+);
+CREATE INDEX IF NOT EXISTS idx_collector_seen_settled
+  ON collector_seen(source) WHERE outcome <> 'failed';
+
+-- ── Keeping collected listings honest after they are stored ──────────────
+--
+-- The collector only ever ADDED. filterNew deliberately skips anything already
+-- held so a cycle does not re-download a whole sitemap, which means nothing
+-- ever re-checked a listing once it was in. Craigslist housing expires in
+-- about 30 days and a rental comes down the moment it is let — often within
+-- days — so the queue would have drifted into advertising places that no
+-- longer exist, silently, with a "no fake listings" promise on the landing
+-- page. A listing for a flat already rented is not distinguishable from a fake
+-- one on the student's side.
+--
+-- last_checked_at drives the sweep order: least-recently-checked first, so the
+-- oldest information is always the next thing re-read.
+-- unavailable_at records WHEN the source stopped serving it, which is the
+-- difference between a listing a human rejected and one the world removed.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS last_checked_at TIMESTAMPTZ;
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS unavailable_at  TIMESTAMPTZ;
+
+-- The sweep asks for "collected, still live, longest since checked".
+CREATE INDEX IF NOT EXISTS idx_listings_recheck
+  ON listings (last_checked_at NULLS FIRST)
+  WHERE source_url IS NOT NULL AND is_active = TRUE;
+
+-- ── Let a listing say "we don't know" about bathrooms ────────────────────
+--
+-- baths was NOT NULL, so a collector with no bathroom count had no way to
+-- record that. Uloop does not advertise baths per building at all, and the
+-- adapter wrote 1 with a comment calling it "the safe floor" — which put an
+-- invented number on 230 of 480 approved listings, displayed to students as
+-- plain fact. Craigslist did the same via `baths ?? 1` whenever a posting
+-- omitted it.
+--
+-- A schema that cannot express uncertainty forces the code to fabricate. NULL
+-- is the honest value, and the app now omits the figure rather than printing
+-- a guess. The CHECK stays: NULL passes it, and any number present is still
+-- required to be positive.
+ALTER TABLE listings ALTER COLUMN baths DROP NOT NULL;
+
+-- ── Remember that a building price is a FROM price ──────────────────────
+--
+-- A Uloop listing is a building with several floorplans, so its price is a
+-- range and we store the low end — the honest choice for "can I live here".
+-- The adapter parsed the high end too and the collector dropped it, leaving
+-- the fact that it WAS a range recorded only in a prose sentence at the end of
+-- notes... which the card truncates. So 230 listings showed a from-price as
+-- the price, with the disclosure cut off mid-clause.
+--
+-- Stored properly, the card can say "from" next to the number instead of
+-- explaining it in a paragraph nobody reaches the end of.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS high_rent_cents INTEGER;
+
+-- ── Every photo on a posting, not just the first ─────────────────────────
+--
+-- A Craigslist posting carries about eight images and the adapter kept one.
+-- Photos are the first thing a student looks at and the fastest way to tell a
+-- real listing from a re-used stock shot, so a single image threw away most of
+-- what makes a card checkable. Uloop's are lazy-loaded behind data-src, so
+-- none of them appeared in a src attribute at all.
+--
+-- photo_url stays as the cover — every existing read path uses it, and the
+-- first element here is the same image.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS photo_urls TEXT[];
+
 -- ── Free-tier connect quota, per user per day ───────────────────────────────
 -- The cap used to live only in the app's premiumStore, persisted to the
 -- device's SecureStore. On web that means clearing site data hands a student a

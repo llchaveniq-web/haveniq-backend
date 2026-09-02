@@ -626,8 +626,42 @@ async function sendCrisisAlertEmail({ to, studentName, studentEmail, studentId, 
   });
 }
 
+/**
+ * "A place near you just went up." The listing-alert channel.
+ *
+ * This is the PRIMARY channel for listing alerts, not a fallback. Push does
+ * not reach web users and web is the launch funnel, so an alert that only
+ * pushed would silently reach almost nobody.
+ */
+async function sendListingAlertEmail({ toEmail, toName, perPerson, beds, address, city, userId = null }) {
+  const where = city ? `${address}, ${city}` : address;
+  const bedLabel = `${beds} bed${beds === 1 ? '' : 's'}`;
+  try {
+    await getResend().emails.send({
+      from: 'HavenIQ <noreply@haveniq.org>',
+      to:      toEmail,
+      subject: `A new place near you: $${perPerson}/mo per person`,
+      text: `Hi ${toName},\n\nA new place just went up near your school.\n\n${where}\n$${perPerson}/mo per person — ${bedLabel}\n\nOpen HavenIQ to see it.\n\nYou're getting this because you asked to hear about new places. You can turn it off any time in the Housing tab.\n\nHavenIQ`,
+      html: `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
+          <h2 style="color:#A33625;">A new place near you</h2>
+          <p style="color:#3F3A34;font-size:18px;margin:0 0 4px;"><strong>${escapeHtml(where)}</strong></p>
+          <p style="color:#75695A;margin:0 0 24px;">$${perPerson}/mo per person — ${bedLabel}</p>
+          <p style="color:#75695A;">Open HavenIQ to see it.</p>
+          <p style="color:#A39684;font-size:13px;margin-top:32px;">You're getting this because you asked to hear about new places near your school. You can turn it off any time in the Housing tab.</p>
+        </div>
+      `,
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'listing_alert' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'listing_alert', error: err.message });
+    throw err;
+  }
+}
+
 module.exports = {
   generateOTP, sendOTPEmail, sendMatchEmail,
+  sendListingAlertEmail,
   sendParentMatchEmail, sendParentInviteEmail,
   sendWelcomeEmail, sendSafetyAlertEmail,
   sendFounderSignupAlert,

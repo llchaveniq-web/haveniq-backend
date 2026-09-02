@@ -1,0 +1,37 @@
+# ─── Triage new safety reports ───────────────────────────────────────────────
+#
+# Moved here from haveniq-app on 2026-08-30, for the same reason as
+# synthetic-monitor.yml: that repo is private, its Actions are billed, and a
+# billing failure left this dead from 2026-08-15. Safety triage is the one bot
+# that should never be waiting on an invoice — a report costs nothing to read
+# and everything to miss.
+#
+# This repo is public, so its Actions are free and unaffected.
+#
+# NOTE: the copy in haveniq-app is disabled, not deleted, so this does not
+# double-run once billing there is settled.
+
+name: Safety Triage
+
+on:
+  schedule:
+    - cron: '40 */3 * * *'       # every 3 hours, offset off the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install --no-save @anthropic-ai/sdk@latest
+      - run: node scripts/safety-triage.mjs
+        env:
+          HAVENIQ_ADMIN_TOKEN: ${{ secrets.HAVENIQ_ADMIN_TOKEN }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

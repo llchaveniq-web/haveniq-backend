@@ -1,0 +1,345 @@
+/**
+ * Listing collector — the loop that turns a source into pending listings.
+ *
+ * Sits between the source adapters (which know how to read one site) and the
+ * moderation queue (which decides what a student sees). Its whole job is to do
+ * that safely and slowly:
+ *
+ *   robots gate  every URL passes isAllowed() before it is fetched, including
+ *                the sitemaps. A source we cannot read the rules for is not
+ *                crawled at all.
+ *   rate limit   one request per second by default, and a site's own
+ *                Crawl-delay wins when it declares one. Deliberately serial.
+ *   dedupe       source_url is UNIQUE, so a re-run over yesterday's sitemap is
+ *                a no-op rather than a queue full of duplicates.
+ *   score        every listing goes through listingRisk before it is stored.
+ *   pending      NOTHING published. Collected listings land as 'pending' and a
+ *                human approves them. That is the point: the landing page
+ *                promises no fake listings, and a collector that could publish
+ *                on its own would be the fastest way to break that promise.
+ *
+ * The collector NEVER retries a refusal with different headers, a different
+ * user agent, or from anywhere else. If a source starts saying no, it stops
+ * and reports that it stopped.
+ */
+
+const pool = require('../db/pool');
+const robots = require('./robots');
+const { assessListing } = require('./listingRisk');
+const { reverseGeocode } = require('./geocode');
+
+const UA = 'HavenIQBot/1.0 (+https://haveniq.org/bot)';
+const DEFAULT_DELAY_MS = 1100;
+const FETCH_TIMEOUT_MS = 25000;
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * Fetch a URL, but only if robots.txt allows it.
+ *
+ * Returns { ok, status, body, blocked }. `blocked` distinguishes "we were told
+ * not to" from "the request failed" — they look the same to a caller and mean
+ * very different things to a human reading the run report.
+ */
+async function politeFetch(url, { delayMs = DEFAULT_DELAY_MS } = {}) {
+  const verdict = await robots.isAllowed(url);
+  if (!verdict.allowed) return { ok: false, blocked: true, reason: verdict.reason };
+
+  // A site's declared Crawl-delay outranks our default whenever it is slower.
+  const wait = Math.max(delayMs, (verdict.crawlDelay || 0) * 1000);
+  await sleep(wait);
+
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xml' },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    // 404/410 is an EXPIRED posting, not a fault. Sitemaps include listings
+    // that have since been taken down, and Craigslist inventory churns fast
+    // enough that a normal run meets plenty of them. Counting those as
+    // failures made a perfectly healthy run exit non-zero and look broken.
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status,
+        blocked: res.status === 403,
+        gone: res.status === 404 || res.status === 410,
+      };
+    }
+    return { ok: true, status: res.status, body: await res.text() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * Force a photo URL onto https.
+ *
+ * The app is served over https, so an http:// image is mixed content: browsers
+ * either silently upgrade it or block it outright, and which one you get
+ * depends on the browser and its settings. Either way it is not something to
+ * leave to chance on a card whose photo is the main thing a student looks at.
+ *
+ * Safe as a blanket rule rather than a per-host allowlist: if a host genuinely
+ * cannot serve https, the image was going to be blocked as mixed content
+ * anyway, so upgrading never makes an outcome worse. Verified for every http
+ * URL actually in the table — all S3, all identical over https.
+ */
+function secureUrl(url) {
+  return typeof url === 'string' && url.startsWith('http://')
+    ? 'https://' + url.slice(7)
+    : url;
+}
+
+/**
+ * A monthly per-person rent has to be a plausible monthly per-person rent.
+ *
+ * Craigslist's housing sitemap carries properties FOR SALE, and the subcategory
+ * filter only fires when the breadcrumb declares a cat= — which the canonical
+ * /view/d/ URLs do not. So a Malibu canyon house listed at $1,300,000 arrived
+ * as a listing at $1,300,000 A MONTH, and the scam scorer rated it 15 out of
+ * 100 because it reads language, not arithmetic. Nothing about the words on a
+ * genuine for-sale posting looks like a scam; it simply is not a rental.
+ *
+ * The same band catches the other end: $150 a month is a nightly rate, a
+ * deposit, or a typo, and $0 is a parse failure.
+ *
+ * Deliberately wide. This is a sanity band, not a market opinion — its job is
+ * to catch a number that belongs to a different kind of transaction, not to
+ * decide what a student can afford. That is the filter's job, and the student's.
+ */
+const MIN_PER_PERSON_CENTS = 20000;      // $200/mo
+const MAX_PER_PERSON_CENTS = 1000000;    // $10,000/mo
+
+function implausibleRent(cents) {
+  if (!Number.isFinite(cents) || cents <= 0) return 'no usable rent';
+  if (cents < MIN_PER_PERSON_CENTS) return `$${cents / 100}/mo per person is too low to be a monthly rent`;
+  if (cents > MAX_PER_PERSON_CENTS) return `$${cents / 100}/mo per person is a sale price, not rent`;
+  return null;
+}
+
+/**
+ * Store one parsed listing as pending, or report why it wasn't.
+ *
+ * `schoolNear` is supplied by the caller rather than inferred. A region code
+ * is not a campus, and guessing which school a Los Angeles posting is "near"
+ * is exactly the kind of invented data the moderation queue exists to keep out.
+ */
+async function storeListing(parsed, { source, schoolNear, city, createdBy = null }) {
+  // An address is required by the schema and by the student. Craigslist maps
+  // one on roughly six postings in ten; the rest are derived from the
+  // posting's own coordinates.
+  let address = parsed.address;
+  let derivedCity = city;
+  if (!address) {
+    const rev = await reverseGeocode(parsed.latitude, parsed.longitude);
+    if (!rev) return { stored: false, reason: 'no address and reverse geocode failed' };
+    // A reverse geocode with no street number is the nearest ROAD, not an
+    // address — 13 approved listings claimed to be at "Ronald Reagan Freeway"
+    // and "Metro G Line Busway". Nobody lives at a freeway, and a student
+    // reading that has been told something false about where the place is.
+    // The coordinates are still good, so say what is actually true: it is near
+    // that road. Craigslist words its own cross-streets the same way.
+    address = /[0-9]/.test(rev.address) ? rev.address : `near ${rev.address}`;
+    derivedCity = derivedCity || rev.city;
+  }
+
+  // Per-person rent is the number HavenIQ is built on, and there are two ways
+  // a source states it. A whole-unit rental advertises the total, so it is
+  // divided by the bed count. A room or share advertises what ONE person pays,
+  // and dividing that again understates it by exactly the bed count — the bug
+  // that put a real $650 room in a 3BR into the queue as $216.
+  const perPersonCents = parsed.pricedPerPerson
+    ? parsed.totalRentCents
+    : Math.round(parsed.totalRentCents / Math.max(1, parsed.beds));
+
+  // Checked before anything is written. A for-sale price stored as rent is not
+  // a listing a moderator should have to catch by eye at 250 rows a cycle.
+  const implausible = implausibleRent(perPersonCents);
+  if (implausible) return { stored: false, reason: implausible };
+
+  const risk = assessListing({
+    address,
+    perPerson: perPersonCents / 100,
+    photoUrl: parsed.photoUrl || null,
+    contactEmail: null,          // Craigslist relays mail; no address is exposed
+    contactPhone: null,
+    notes: parsed.notes,
+    title: parsed.title,
+  });
+
+  // Even a clean score does not publish. A collected listing has no verified
+  // poster behind it, and no classifier can tell whether whoever wrote it
+  // controls the unit.
+  const status = risk.recommendation === 'reject' ? 'rejected' : 'pending';
+
+  const { rows } = await pool.query(
+    `INSERT INTO listings
+       (address, city, school_near, beds, baths,
+        total_rent_cents, high_rent_cents, per_person_rent_cents, notes,
+        latitude, longitude, geocoded_at, photo_url, photo_urls, available_from,
+        source, source_url, source_posted_at,
+        moderation_status, risk_score, risk_signals, created_by, is_active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now(), $12,$13,$14,$15,$16,$17,$18,$19,$20,$21, TRUE)
+     ON CONFLICT (source_url) WHERE source_url IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [
+      address, derivedCity || null, schoolNear,
+      parsed.beds, parsed.baths,
+      parsed.totalRentCents,
+      // The top of the range, when the source gave one. Its absence is what
+      // makes a single-price listing distinguishable from a building's floor.
+      parsed.highRentCents && parsed.highRentCents > parsed.totalRentCents
+        ? parsed.highRentCents : null,
+      perPersonCents,
+      [parsed.title, parsed.notes].filter(Boolean).join('\n\n').slice(0, 4000),
+      parsed.latitude, parsed.longitude,
+      // Extracted by every adapter and, until now, dropped on the floor. A
+      // listing with no image is the hardest kind to moderate: the photo is
+      // the fastest tell for a scam or a mismatched unit, and a queue of 500
+      // text rows is not something a person can actually work through.
+      secureUrl(parsed.photoUrl) || null,
+      // Null rather than an empty array when there are none: a column that is
+      // sometimes [] and sometimes NULL makes every reader handle two shapes
+      // for one fact.
+      parsed.photoUrls?.length ? parsed.photoUrls.map(secureUrl) : null,
+      // Null when the posting did not say. Most do not, and a guessed move-in
+      // date is the same invented fact as a guessed bathroom count.
+      parsed.availableFrom || null,
+      source, parsed.sourceUrl, parsed.postedAt || null,
+      status, risk.score, JSON.stringify(risk.signals), createdBy,
+    ],
+  );
+
+  if (!rows[0]) return { stored: false, reason: 'already collected' };
+  return { stored: true, id: rows[0].id, status, riskScore: risk.score };
+}
+
+/**
+ * Drop the postings we already hold, WITHOUT fetching them.
+ *
+ * This is the difference between a script someone runs and a job that runs
+ * itself. The insert already de-duplicates on source_url — but only after the
+ * page has been downloaded, so a scheduled collector would re-fetch all 4,600
+ * of a region's postings every cycle to discover it had seen 4,595 of them.
+ * One bulk query instead, and a repeat pass costs almost nothing: it fetches
+ * only what actually appeared since last time.
+ *
+ * It is also the polite behaviour. Re-reading someone else's entire sitemap
+ * every half hour is how a crawler stops being welcome.
+ */
+async function filterNew(urls, source) {
+  if (!urls.length) return urls;
+  const { rows } = await pool.query(
+    `SELECT source_url AS url FROM listings
+      WHERE source = $1 AND source_url = ANY($2::text[])
+      UNION
+     SELECT url FROM collector_seen
+      WHERE source = $1 AND url = ANY($2::text[]) AND outcome <> 'failed'`,
+    [source, urls],
+  );
+  const seen = new Set(rows.map(r => r.url));
+  return urls.filter(u => !seen.has(u));
+}
+
+/**
+ * Remember that we tried a URL, and how it went.
+ *
+ * listings.source_url only remembers what was STORED. An expired posting is
+ * never stored, so without this the 410s sitting at the top of a sitemap get
+ * re-requested every single cycle and a scheduled run never reaches the live
+ * listings behind them. Four of the first five LA postings were already gone
+ * when this was written, so that is not a corner case.
+ *
+ * 'failed' is written too but deliberately NOT treated as settled: a timeout or
+ * a 5xx should be retried next cycle, where an expired posting never should.
+ */
+async function remember(source, url, outcome) {
+  try {
+    await pool.query(
+      `INSERT INTO collector_seen (source, url, outcome) VALUES ($1, $2, $3)
+       ON CONFLICT (source, url) DO UPDATE SET outcome = EXCLUDED.outcome, seen_at = now()`,
+      [source, url, outcome],
+    );
+  } catch {
+    // Bookkeeping must never fail a collection run. The cost of losing a row
+    // here is one wasted re-fetch next cycle.
+  }
+}
+
+/**
+ * Run one source over one region.
+ *
+ * `limit` caps postings per run. There is no "collect everything" mode on
+ * purpose: 4,500 postings a day per region at one request per second is over
+ * an hour of someone else's bandwidth, and a first run should be small enough
+ * that a human can read every row it produced.
+ */
+async function collect(adapter, { region, schoolNear, city = null, limit = 25, dryRun = false, log = console.log }) {
+  const stats = { seen: 0, parsed: 0, stored: 0, skipped: 0, gone: 0, blocked: 0, failed: 0 };
+
+  // Discovery belongs to the adapter: Craigslist needs two hops through a
+  // 2,800-entry index, Uloop needs one flat urlset per campus, and the next
+  // source will differ again. The adapter is handed THIS polite fetcher rather
+  // than fetching for itself, so the robots gate and the rate limit stay in one
+  // place instead of being re-implemented — and forgotten — per source.
+  const found = await adapter.collectUrls(politeFetch, region);
+  if (found.error || !found.urls.length) {
+    log(found.error || `nothing published for "${region}"`);
+    if (found.blocked) stats.blocked = 1;
+    else if (found.error) stats.failed = 1;
+    return stats;
+  }
+
+  const all = found.urls;
+  // Drop what we already hold BEFORE spending a request on it. This is what
+  // makes a scheduled run cheap instead of a full re-download every cycle.
+  const fresh = dryRun ? all : await filterNew(all, adapter.NAME);
+  const urls = fresh.slice(0, limit);
+  log(`${all.length} available · ${all.length - fresh.length} already collected · taking ${urls.length}${dryRun ? ' (dry run)' : ''}\n`);
+  if (!urls.length) { log('nothing new'); return stats; }
+
+  for (const url of urls) {
+    stats.seen++;
+    const res = await politeFetch(url);
+    if (!res.ok) {
+      if (res.blocked) { stats.blocked++; log(`BLOCKED ${url.slice(0, 64)} — ${res.reason || res.status}`); }
+      else if (res.gone) { stats.gone++; if (!dryRun) await remember(adapter.NAME, url, 'expired'); }
+      else { stats.failed++; if (!dryRun) await remember(adapter.NAME, url, 'failed'); }
+      continue;
+    }
+
+    const parsed = adapter.parsePosting(res.body, url);
+    // A page we fetched and could not use (a parking space, no price) is
+    // settled: re-reading it next cycle would reach the same conclusion.
+    if (!parsed) { stats.skipped++; if (!dryRun) await remember(adapter.NAME, url, 'skipped'); continue; }
+    stats.parsed++;
+
+    if (dryRun) {
+      log(`WOULD STORE  $${parsed.totalRentCents / 100}  ${parsed.beds}br  ${(parsed.address || '(derive from coords)').slice(0, 34).padEnd(35)} ${parsed.title.slice(0, 40)}`);
+      continue;
+    }
+
+    try {
+      const out = await storeListing(parsed, { source: adapter.NAME, schoolNear, city });
+      if (!dryRun) await remember(adapter.NAME, url, 'stored');
+      if (out.stored) {
+        stats.stored++;
+        log(`${out.status.toUpperCase().padEnd(9)} risk:${String(out.riskScore).padStart(3)}  $${parsed.totalRentCents / 100}  ${parsed.title.slice(0, 46)}`);
+      } else {
+        stats.skipped++;
+      }
+    } catch (e) {
+      stats.failed++;
+      log(`FAILED ${e.message.slice(0, 70)}`);
+    }
+  }
+
+  log(`\nseen ${stats.seen} · parsed ${stats.parsed} · stored ${stats.stored} · skipped ${stats.skipped} · expired ${stats.gone} · blocked ${stats.blocked} · failed ${stats.failed}`);
+  return stats;
+}
+
+module.exports = {
+  collect, storeListing, politeFetch, filterNew, remember, UA,
+  implausibleRent, MIN_PER_PERSON_CENTS, MAX_PER_PERSON_CENTS, secureUrl,
+};

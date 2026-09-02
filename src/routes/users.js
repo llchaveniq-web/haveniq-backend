@@ -321,8 +321,13 @@ const validators = {
   // v8 hard/soft match deal-breakers (1d). Small JSON object the app saves so
   // the match query can filter on it. Strict: only known keys, correct types.
   match_dealbreakers: v => v != null && typeof v === 'object' && !Array.isArray(v) &&
-    Object.keys(v).every(k => ['smokeFree','petsOk','quietHours','cleanlinessMin','maxBudget','leaseLength','moveInBy'].includes(k)) &&
+    Object.keys(v).every(k => ['smokeFree','petFree','petsOk','quietHours','cleanlinessMin','maxBudget','leaseLength','moveInBy'].includes(k)) &&
     (v.smokeFree      === undefined || typeof v.smokeFree  === 'boolean') &&
+    // petFree mirrors smokeFree: TRUE means "I require a pet-free roommate".
+    // petsOk stays accepted (it predates this and is validated below) but is
+    // not read by the match query — a key whose ACTIVE state is `false` is a
+    // double negative, and indistinguishable from `undefined` at a glance.
+    (v.petFree        === undefined || typeof v.petFree    === 'boolean') &&
     (v.petsOk         === undefined || typeof v.petsOk     === 'boolean') &&
     (v.quietHours     === undefined || typeof v.quietHours === 'boolean') &&
     (v.cleanlinessMin === undefined || ['any','moderate','very_clean','spotless'].includes(v.cleanlinessMin)) &&

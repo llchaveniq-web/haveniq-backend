@@ -25,6 +25,8 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const crypto = require('crypto');
+const fs     = require('fs');
+const path   = require('path');
 
 // Demo / test accounts must NEVER receive a bot-drafted email or count as a
 // real signup to triage. Two flavors exist in production:
@@ -159,6 +161,233 @@ router.post('/signup/:userId/approve', requireBotToken, async (req, res) => {
   } catch (err) {
     console.error('[botAdmin] approve failed:', err);
     res.status(500).json({ error: 'Approve failed' });
+  }
+});
+
+// -- GET /bot-admin/pending-listings ------------------------------------
+// Listings waiting on a human. Returns the SIGNALS behind the score, not just
+// the number: a reviewer needs to know which rule fired to tell a real concern
+// from a phrasing coincidence.
+router.get('/pending-listings', requireBotToken, async (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  try {
+    const { rows } = await pool.query(`
+      SELECT id, address, city, school_near, beds, baths,
+             per_person_rent_cents, total_rent_cents, photo_url,
+             contact_name, contact_email,
+             notes, created_at, created_by, risk_score, risk_signals,
+             source, source_url
+      FROM listings
+      WHERE moderation_status = 'pending'
+        AND ($1::text IS NULL OR source IS NOT DISTINCT FROM $1)
+      ORDER BY risk_score DESC NULLS LAST, created_at ASC
+      LIMIT $2 OFFSET $3
+    `, [req.query.source || null, limit, offset]);
+
+    // The whole queue, not just this page. A reviewer working through 500
+    // listings needs to know how many are left and how many are flagged,
+    // and a per-page count answers neither.
+    const { rows: [tally] } = await pool.query(`
+      SELECT count(*)::int total,
+             count(*) FILTER (WHERE risk_score >= 50)::int flagged,
+             count(*) FILTER (WHERE risk_score <  50 OR risk_score IS NULL)::int clean
+        FROM listings
+       WHERE moderation_status = 'pending'
+         AND ($1::text IS NULL OR source IS NOT DISTINCT FROM $1)
+    `, [req.query.source || null]);
+
+    res.json({
+      count: rows.length,
+      pending: tally,
+      listings: rows.map(r => ({
+        ...r,
+        perPerson: r.per_person_rent_cents == null ? null : r.per_person_rent_cents / 100,
+        total: r.total_rent_cents == null ? null : r.total_rent_cents / 100,
+      })),
+    });
+  } catch (err) {
+    console.error('[botAdmin] pending-listings failed:', err);
+    res.status(500).json({ error: 'Query failed' });
+  }
+});
+
+// -- POST /bot-admin/listing/:id/approve ---------------------------------
+// Guarded on moderation_status = 'pending', so a double-submitted approval is
+// a no-op rather than silently re-publishing something a second reviewer had
+// already rejected.
+router.post('/listing/:id/approve', requireBotToken, async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const r = await pool.query(
+      `UPDATE listings
+          SET moderation_status = 'approved', reviewed_at = NOW(), review_note = $2
+        WHERE id = $1 AND moderation_status = 'pending'
+        RETURNING id`,
+      [id, reason ?? null],
+    );
+    const acted = r.rows.length > 0;
+    await audit('listing-review', 'approve', id, { reason: reason ?? null }, acted ? 'updated' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] listing approve failed:', err);
+    res.status(500).json({ error: 'Approve failed' });
+  }
+});
+
+// -- POST /bot-admin/listing/:id/reject ----------------------------------
+// Rejection is NOT a delete. The row stays so a pattern of similar rejected
+// listings remains queryable -- the same reasoning as roommate_safety_reports:
+// the second attempt from a source is only visible if the first was kept.
+router.post('/listing/:id/reject', requireBotToken, async (req, res) => {
+  const { id } = req.params;
+  const { reason } = req.body || {};
+  try {
+    const r = await pool.query(
+      `UPDATE listings
+          SET moderation_status = 'rejected', is_active = FALSE,
+              reviewed_at = NOW(), review_note = $2
+        WHERE id = $1 AND moderation_status <> 'rejected'
+        RETURNING id`,
+      [id, reason ?? null],
+    );
+    const acted = r.rows.length > 0;
+    await audit('listing-review', 'reject', id, { reason: reason ?? null }, acted ? 'updated' : 'noop');
+    res.json({ ok: true, acted });
+  } catch (err) {
+    console.error('[botAdmin] listing reject failed:', err);
+    res.status(500).json({ error: 'Reject failed' });
+  }
+});
+
+// -- GET /bot-admin/review ------------------------------------------------
+// The moderation queue as a page a person can work through.
+//
+// Served WITHOUT the token, because a browser cannot set an Authorization
+// header on a plain navigation. That is safe only because the shell contains no
+// data: it is markup and script, and every byte of listing data behind it comes
+// from the token-gated JSON endpoints the page calls after the reviewer pastes
+// the token in. The alternative — a token in the query string — would put a
+// long-lived admin credential into browser history, server logs and any
+// referrer header the page emits, which is a worse trade than serving an empty
+// page to whoever asks.
+const readView = (name) => {
+  try { return fs.readFileSync(path.join(__dirname, '../views/', name), 'utf8'); }
+  catch (err) { console.error('[botAdmin] view missing:', name, err.message); return null; }
+};
+const REVIEW_PAGE = readView('review.html');
+const REVIEW_JS   = readView('review.js');
+
+// The app-wide policy is `script-src 'self'; script-src-attr 'none';
+// img-src 'self' data:`. Two consequences this page has to live with:
+//
+//   1. Inline <script> and inline onclick are both refused, silently. The first
+//      version of this page rendered perfectly and did nothing whatsoever —
+//      every handler was blocked and nothing said so. Behaviour therefore lives
+//      in review.js, served from this same origin.
+//   2. img-src would block the listing photos, which come from Craigslist and
+//      Uloop. A queue of text rows is not reviewable — the photo is the fastest
+//      tell for a scam or a mismatched unit — so this ONE route widens img-src
+//      to https:, and nothing else. Scripts stay 'self', object-src stays none,
+//      and framing is denied outright since an admin page has no business in
+//      anyone's iframe.
+const REVIEW_CSP = [
+  "default-src 'self'",
+  "img-src 'self' data: https:",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "base-uri 'self'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
+
+router.get('/review', (_req, res) => {
+  if (!REVIEW_PAGE) return res.status(500).send('review page unavailable');
+  res.set('Content-Security-Policy', REVIEW_CSP);
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store');
+  res.send(REVIEW_PAGE);
+});
+
+router.get('/review.js', (_req, res) => {
+  if (!REVIEW_JS) return res.status(500).send('// review script unavailable');
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.set('Cache-Control', 'no-store');
+  res.send(REVIEW_JS);
+});
+
+// -- POST /bot-admin/listings/bulk ---------------------------------------
+// Approve or reject many listings in one call.
+//
+// This exists because the collector changed the shape of the problem. Reviewing
+// one listing per HTTP request was fine when listings arrived a few a week from
+// students; at 500 a day from two sources it is not review, it is a bottleneck
+// that keeps the housing tab empty.
+//
+// What it deliberately does NOT do is approve by rule. There is no "approve
+// everything under risk 50" endpoint, because that is a collector that
+// publishes on its own wearing a thin disguise, and the promise on the landing
+// page is that a human looked. Ids must be named explicitly by a caller that
+// has them on screen; the review page selects them from what it just rendered.
+//
+// Capped per call so a malformed client cannot approve the entire queue in one
+// request, and audited as a single row carrying every id — enough to reverse.
+const BULK_MAX = 200;
+
+router.post('/listings/bulk', requireBotToken, async (req, res) => {
+  const { action, reason } = req.body || {};
+  const raw = Array.isArray(req.body?.ids) ? req.body.ids : null;
+
+  if (action !== 'approve' && action !== 'reject') {
+    return res.status(400).json({ error: "action must be 'approve' or 'reject'" });
+  }
+  if (!raw || !raw.length) return res.status(400).json({ error: 'ids must be a non-empty array' });
+  if (raw.length > BULK_MAX) return res.status(400).json({ error: `at most ${BULK_MAX} ids per call` });
+
+  // listings.id is a UUID. This validated "positive integer" and cast to
+  // an integer array on the strength of an assumption about the schema, and
+  // the tests confirmed that assumption because they stubbed the database with
+  // integer ids — so the route could never have worked against the real table,
+  // and the tests could never have noticed. Checked against information_schema.
+  //
+  // The whole batch is refused if any id is malformed, rather than the junk
+  // being filtered out: a caller that sent three ids and sees two acted on
+  // cannot tell which one it lost, or why.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ids = raw.map(v => (typeof v === 'string' ? v.trim() : ''));
+  if (ids.some(v => !UUID_RE.test(v))) {
+    return res.status(400).json({ error: 'every id must be a listing UUID' });
+  }
+
+  try {
+    // Same guards as the single-listing routes: approving is only ever a
+    // transition OUT of pending, so a double-submit is a no-op rather than
+    // re-publishing something a second reviewer already rejected.
+    const sql = action === 'approve'
+      ? `UPDATE listings
+            SET moderation_status = 'approved', reviewed_at = NOW(), review_note = $2
+          WHERE id = ANY($1::uuid[]) AND moderation_status = 'pending'
+          RETURNING id`
+      : `UPDATE listings
+            SET moderation_status = 'rejected', is_active = FALSE,
+                reviewed_at = NOW(), review_note = $2
+          WHERE id = ANY($1::uuid[]) AND moderation_status <> 'rejected'
+          RETURNING id`;
+
+    const { rows } = await pool.query(sql, [ids, reason ?? null]);
+    const acted = rows.map(r => r.id);
+
+    await audit('listing-review', `bulk-${action}`, null,
+      { requested: ids, acted, reason: reason ?? null }, `${acted.length}/${ids.length}`);
+
+    res.json({ ok: true, action, requested: ids.length, acted: acted.length, ids: acted });
+  } catch (err) {
+    console.error('[botAdmin] bulk listing review failed:', err);
+    res.status(500).json({ error: 'Bulk review failed' });
   }
 });
 

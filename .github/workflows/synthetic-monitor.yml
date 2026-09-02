@@ -1,0 +1,36 @@
+# ─── Is app.haveniq.org up? ──────────────────────────────────────────────────
+#
+# Moved here from haveniq-app on 2026-08-30. That repo is PRIVATE, so its
+# Actions minutes are billed, and a billing failure has had every scheduled bot
+# in it dead since 2026-08-15 — including this one. This repo is public, so its
+# Actions are free and keep running regardless.
+#
+# The script is self-contained: no imports, no repo files read, one secret. It
+# probes the critical user paths (health, quiz fetch, auth/send-code, frontend
+# HTML, latency) and posts to Discord if anything breaks or slows past budget.
+#
+# NOTE: the copy in haveniq-app is disabled, not deleted, so this does not
+# double-run once billing there is settled. If you re-enable it there, disable
+# it here.
+
+name: Synthetic Monitor
+
+on:
+  schedule:
+    - cron: '0 * * * *'          # hourly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: node scripts/synthetic-monitor.mjs
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

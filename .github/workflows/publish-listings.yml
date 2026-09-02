@@ -1,0 +1,115 @@
+name: Publish clean listings
+
+# Approves collected housing listings that clear the risk bar, so a new
+# campus does not sit invisible behind a publish nobody remembered to run.
+# Orange Coast College once held 745 listings students could not see, and the
+# map read as missing coverage rather than an un-run publish.
+#
+# ── READ THIS BEFORE CHANGING THE SCHEDULE OR THE SCOPE ────────────────────
+#
+# This is the only automation in the project that makes content visible to
+# students without a human looking first. POST /bot-admin/listings/bulk
+# deliberately refuses to approve BY RULE — its comment calls that "a collector
+# that publishes on its own wearing a thin disguise" — and this workflow is
+# exactly that, running on a timer, by explicit decision (2026-08-28) rather
+# than by drift.
+#
+# What still stands between a scraped posting and a student:
+#   • the scam scorer, at collection time
+#   • the $200-$10,000 per-person sanity band in storeListing
+#   • --max-risk 45, which is where the approvals made BY HAND already sat:
+#     approved listings run risk 15-45, none has ever been approved at 50+,
+#     and rejected ones start at 70
+#
+# Anything above 45 stays queued for a person and is counted in the run log,
+# so the queue is the risky tail and only the risky tail. If that queue starts
+# growing, somebody has to work it — this job will never drain it.
+#
+# The schools are listed here rather than "all pending" on purpose. Adding a
+# campus to the collector should not silently start auto-publishing it: that
+# is a second decision, and it should look like one in a diff.
+#
+# Required secret (repo -> Settings -> Secrets -> Actions):
+#   HAVENIQ_ADMIN_TOKEN — the same value as the Railway ADMIN_BOT_TOKEN
+#   variable. Deliberately the ONLY credential: the script talks to the
+#   bot-admin API and never opens a database connection, so a leak here can
+#   approve listings and nothing else.
+#
+#   The name matters, and got this wrong. The workflow asked for a secret
+#   called ADMIN_BOT_TOKEN, which this repo does not have — it has
+#   HAVENIQ_ADMIN_TOKEN, the name safety-triage already uses successfully
+#   against the same middleware. So every scheduled run since the workflow
+#   moved here has exited 1 on the missing-secret guard, and nobody noticed,
+#   because the app repo's Actions are all red from a billing failure and a
+#   red check had stopped meaning anything.
+
+on:
+  schedule:
+    # Every four hours. The collector runs every 30 minutes, so this keeps the
+    # visible catalogue within a few hours of what has been collected without
+    # producing a run log nobody reads.
+    - cron: '25 */4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report what would be published, publish nothing'
+        type: boolean
+        default: false
+
+# One publish at a time. Two overlapping runs would each read the whole queue
+# and then try to approve the same ids; the endpoint guards on
+# moderation_status='pending' so the second is a no-op rather than damage, but
+# the run log would show hundreds of "approved" that were somebody else's.
+concurrency:
+  group: publish-listings
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # No `npm ci`. The script uses only node builtins and global fetch, and
+      # installing the backend's full dependency tree to make four HTTP calls
+      # would be a minute of CI and a much larger supply-chain surface for a
+      # job that holds a production credential.
+      - name: Publish
+        env:
+          # The repo secret is named HAVENIQ_ADMIN_TOKEN; the script reads
+          # ADMIN_BOT_TOKEN, which is what the server's requireInternalKey
+          # middleware actually checks. Same value, two names.
+          ADMIN_BOT_TOKEN: ${{ secrets.HAVENIQ_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$ADMIN_BOT_TOKEN" ]; then
+            echo "::error::ADMIN_BOT_TOKEN is not set — add it in Settings > Secrets > Actions."
+            exit 1
+          fi
+          node scripts/publish-pending.js \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }} \
+            --school "University of California, Los Angeles" \
+            --school "University of Southern California" \
+            --school "Orange Coast College" \
+            --school "University of California, Berkeley" \
+            --school "University of California, San Diego" \
+            --school "San Diego State University" \
+            --school "California State University, Sacramento" \
+            --school "University of California, Davis" \
+            | tee run.log
+
+      # A red X in the Actions tab is the alert. The script exits non-zero when
+      # any batch fails, so a partial publish cannot look like a clean run.
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '## Publish run'
+            echo '```'
+            tail -n 25 run.log 2>/dev/null || echo 'no output captured'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

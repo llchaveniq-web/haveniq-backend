@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>HavenIQ — listing review</title>
+
+<!--
+  Listing moderation queue.
+
+  The collector files everything as 'pending' and nothing reaches a student
+  until a human approves it. That gate is the product promise, so the goal here
+  is not to remove the human — it is to let one person actually LOOK at 500
+  listings in a sitting instead of one HTTP request at a time.
+
+  Hence: photos, because a stock image or a mansion priced like a studio is
+  obvious at a glance and invisible in JSON. Flagged listings sort first and
+  cannot be swept up by "select all clean". Selection is always explicit —
+  there is no approve-by-rule button, because that is just the collector
+  publishing on its own with extra steps.
+
+  NO INLINE SCRIPT AND NO onclick ATTRIBUTES. The API sets
+  `script-src 'self'; script-src-attr 'none'`, which blocks both — the first
+  version of this page rendered perfectly and did nothing at all, because every
+  handler was silently refused. Behaviour lives in review.js, wired up with
+  addEventListener and event delegation.
+-->
+
+<style>
+  :root {
+    --bg: #0f1115; --card: #181b22; --line: #262b35; --ink: #e8eaed;
+    --dim: #9aa3b2; --accent: #6ea8fe; --ok: #4ec9a0; --warn: #f0b849; --bad: #f2777a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 10; background: rgba(15,17,21,.94);
+           backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 12px 20px; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0 12px 0 0; font-weight: 600; letter-spacing: .01em; }
+  .tally { color: var(--dim); font-size: 13px; }
+  .tally b { color: var(--ink); font-weight: 600; }
+  button, select, input {
+    font: inherit; color: var(--ink); background: var(--card);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--ok); color: #04140e; border-color: transparent; font-weight: 600; }
+  button.danger { background: var(--bad); color: #1b0405; border-color: transparent; font-weight: 600; }
+  main { padding: 20px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          overflow: hidden; display: flex; flex-direction: column; }
+  .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .card.flagged { border-left: 3px solid var(--warn); }
+  .shot { width: 100%; aspect-ratio: 16/10; object-fit: cover; background: #22262f;
+          display: block; cursor: pointer; }
+  .nophoto { width: 100%; aspect-ratio: 16/10; background: #22262f; display: grid;
+             place-items: center; color: var(--dim); font-size: 13px; cursor: pointer; }
+  .body { padding: 12px; display: flex; flex-direction: column; gap: 7px; flex: 1; }
+  .addr { font-weight: 600; line-height: 1.3; }
+  .meta { color: var(--dim); font-size: 13px; }
+  .price { font-size: 19px; font-weight: 650; }
+  .price small { font-size: 12px; color: var(--dim); font-weight: 400; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tag { font-size: 11px; padding: 2px 7px; border-radius: 999px;
+         background: #22262f; color: var(--dim); border: 1px solid var(--line); }
+  .tag.risk { background: #3a2a12; color: var(--warn); border-color: #574018; }
+  .tag.src { background: #16283d; color: var(--accent); border-color: #21456b; }
+  .notes { font-size: 12.5px; color: var(--dim); max-height: 4.4em; overflow: hidden; }
+  .foot { display: flex; gap: 8px; align-items: center; padding: 10px 12px;
+          border-top: 1px solid var(--line); }
+  .foot label { display: flex; gap: 7px; align-items: center; cursor: pointer; font-size: 13px; }
+  .foot a { color: var(--accent); text-decoration: none; font-size: 12.5px; margin-left: auto; }
+  .foot a:hover { text-decoration: underline; }
+  input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--accent); }
+  #gate { max-width: 420px; margin: 14vh auto; text-align: center; }
+  #gate p { color: var(--dim); font-size: 13.5px; }
+  #msg { padding: 10px 20px; font-size: 13.5px; }
+  .empty { text-align: center; color: var(--dim); padding: 12vh 20px; }
+  .sechead { margin: 22px 0 10px; font-size: 13px; color: var(--dim);
+             text-transform: uppercase; letter-spacing: .07em; }
+</style>
+
+<div id="gate">
+  <h1>HavenIQ listing review</h1>
+  <p>Paste the admin bot token. It is kept in this tab only.</p>
+  <div class="row" style="justify-content:center">
+    <input id="tok" type="password" placeholder="ADMIN_BOT_TOKEN" style="flex:1" autocomplete="off">
+    <button class="primary" id="unlock">Open</button>
+  </div>
+  <p id="gateerr" style="color:var(--bad)"></p>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <div class="row">
+      <h1>Listing review</h1>
+      <span class="tally" id="tally"></span>
+      <select id="src" style="margin-left:auto">
+        <option value="">all sources</option>
+        <option value="craigslist">craigslist</option>
+        <option value="uloop">uloop</option>
+      </select>
+      <button id="refresh">Refresh</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button id="selClean">Select all clean on this page</button>
+      <button id="selNone">Clear selection</button>
+      <span class="tally" id="selcount" style="margin-left:auto"></span>
+      <button class="primary" id="okBtn" disabled>Approve selected</button>
+      <button class="danger"  id="noBtn" disabled>Reject selected</button>
+    </div>
+  </header>
+  <div id="msg"></div>
+  <main id="out"></main>
+</div>
+
+<script src="review.js"></script>

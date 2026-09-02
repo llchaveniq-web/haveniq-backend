@@ -429,6 +429,10 @@ app.use('/feature-state', require('./routes/featureState')); // generic per-feat
 app.use('/walkscore', require('./routes/walkscore')); // Walk/Transit/Bike Score proxy (key stays server-side)
 app.use('/referrals', require('./routes/referrals')); // unique invite codes + referral attribution
 app.use('/circle',    require('./routes/circle'));    // your referred users + compatibility to each
+// The list half of the app's ConnectionsAPI. Sending and responding stay on
+// /matches/connect and /matches/respond, which already carry the eligibility
+// gating — this is the view Circle needs, not a second write path.
+app.use('/connections', require('./routes/connections'));
 // Cross-referenceable safety record: POST a report, GET /mine, GET /admin
 // (founder-only) surfaces same-person-different-reporters patterns. Inert until
 // the app adds its third fetch call. See routes/roommateSafety.js.
@@ -769,6 +773,105 @@ server.listen(PORT, () => {
   };
   setTimeout(runHousingIngest, 10 * 60 * 1000);
   setInterval(runHousingIngest, 7 * 24 * 60 * 60 * 1000).unref?.();
+
+  // ── Listing collector ────────────────────────────────────────────
+  // Continuous, not on demand: a new posting should reach the moderation queue
+  // on its own, not when someone remembers to run a script.
+  //
+  // Targets are configured, not compiled, so adding a campus is an env change
+  // rather than a deploy:
+  //
+  //     COLLECT_TARGETS=craigslist:lax:UCLA;craigslist:sfo:UC Berkeley
+  //
+  // Separated by ';' because school names contain commas — the canonical name
+  // for UCLA is "University of California, Los Angeles", and a comma-separated
+  // list truncates it to "University of California", a school no student has.
+  //
+  // Unset means the collector stays dark, which is the right default for a job
+  // that fetches from someone else's site.
+  //
+  // Each cycle reads today's sitemap, drops every posting already held WITHOUT
+  // fetching it (collector.filterNew), and walks only what is new at one
+  // request per second. PER_RUN caps a cycle so it stays bounded and polite;
+  // at 150 per half hour that is 7,200 a day, comfortably above what a single
+  // region actually publishes.
+  //
+  // Everything it collects lands as 'pending'. This job cannot publish.
+  const { parseCollectTargets } = require('./services/collectTargets');
+  const { targets: COLLECT_TARGETS, rejected: COLLECT_REJECTED } =
+    parseCollectTargets(process.env.COLLECT_TARGETS);
+  // Say what was thrown away. A target that fails to parse used to vanish in
+  // silence, so a typo looked exactly like a campus with no listings.
+  if (COLLECT_REJECTED.length) {
+    console.error('[collector] ignoring malformed target(s):', COLLECT_REJECTED.join(' | '));
+  }
+
+  const COLLECT_PER_RUN = Number(process.env.COLLECT_PER_RUN || 150);
+  // 100 re-checks a cycle is under two minutes at one request per second, and
+  // sweeps a few hundred listings roughly every couple of hours — so the
+  // oldest thing a student can see is never stale by more than that.
+  const RECHECK_PER_RUN = Number(process.env.RECHECK_PER_RUN || 100);
+  const COLLECT_EVERY_MS = Number(process.env.COLLECT_EVERY_MIN || 30) * 60 * 1000;
+
+  let collectInFlight = false;
+  const runCollector = async () => {
+    if (collectInFlight || !COLLECT_TARGETS.length) return;
+    collectInFlight = true;
+    try {
+      const { collect } = require('./services/collector');
+      const SOURCES = {
+        craigslist: require('./services/sources/craigslist'),
+        uloop:      require('./services/sources/uloop'),
+      };
+      for (const t of COLLECT_TARGETS) {
+        const adapter = SOURCES[t.source];
+        if (!adapter) { console.error('[collector] unknown source', t.source); continue; }
+        try {
+          const stats = await collect(adapter, {
+            region: t.region, schoolNear: t.school,
+            limit: COLLECT_PER_RUN,
+            log: () => {},               // per-posting chatter stays out of the logs
+          });
+          console.log('[collector]', JSON.stringify({ ...t, ...stats }));
+          // A source that starts refusing us is worth a human knowing about.
+          // The collector does not try again wearing a different hat.
+          if (stats.blocked > 0) console.error('[collector] BLOCKED by', t.source, '-', stats.blocked, 'request(s) refused');
+        } catch (e) {
+          console.error('[collector] target failed', JSON.stringify(t), e.message);
+        }
+      }
+
+      // Re-read what we already hold, and retire what the source has dropped.
+      //
+      // Runs after collecting, on the same cycle, because it is the other half
+      // of the same job: adding new listings keeps the tab full, and this keeps
+      // it honest. Without it the app drifts into advertising flats that were
+      // let weeks ago — which, from a student's side, is exactly what a fake
+      // listing looks like.
+      try {
+        const { recheckListings } = require('./services/recheck');
+        const { politeFetch } = require('./services/collector');
+        const seen = await recheckListings({
+          politeFetch,
+          limit: RECHECK_PER_RUN,
+          log: () => {},              // per-listing chatter stays out of the logs
+        });
+        if (seen.checked) console.log('[recheck]', JSON.stringify(seen));
+        if (seen.blocked > 0) console.error('[recheck] BLOCKED on', seen.blocked, 'check(s) — listings left live, not retired');
+      } catch (err) {
+        console.error('[recheck] failed:', err.message);
+      }
+    } catch (err) {
+      console.error('[collector] could not start:', err.message);
+    } finally {
+      collectInFlight = false;
+    }
+  };
+  if (COLLECT_TARGETS.length) {
+    console.log('[collector] watching', COLLECT_TARGETS.map(t => `${t.source}:${t.region}->${t.school}`).join(', '));
+    setTimeout(runCollector, 4 * 60 * 1000);          // after boot settles
+    setInterval(runCollector, COLLECT_EVERY_MS).unref?.();
+  }
 
   // ── Outcome-learning 24/7 wiring (Phases 1–4) ──────────────────────────────
   // Two always-on jobs ride this existing scheduler; the ONE hard stop —

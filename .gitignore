@@ -9,3 +9,6 @@ yarn-error.log*
 .DS_Store
 dist/
 build/
+
+# scratch watchers created while debugging the collector
+*.tmp.js
