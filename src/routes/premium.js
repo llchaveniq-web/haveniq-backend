@@ -114,6 +114,19 @@ router.post('/checkout-session', requireAuth, async (req, res) => {
       mode: 'subscription',
       customer: customerId,
       line_items: [{ price: priceId, quantity: 1 }],
+      // Founding-cohort grants run through Stripe rather than around it: a
+      // percent-off promotion code is redeemed here, and Stripe -- not a
+      // reminder in someone's calendar -- ends it on schedule. When it lapses,
+      // the renewal fails and the subscription webhook flips is_premium back,
+      // so the grant expires the same way any other subscription does.
+      // Bound each code with max_redemptions when you create it; students
+      // share codes, and an unbounded 100%-off code is a free tier by accident.
+      allow_promotion_codes: true,
+      // A 100%-off cohort owes $0 today, so don't demand a card to start.
+      // Paying students are unaffected -- Stripe still collects when the
+      // amount due is above zero. Without this, "free for the founding 100"
+      // still opens with a credit-card form, which is where signups die.
+      payment_method_collection: 'if_required',
       client_reference_id: req.user.id,
       metadata: { userId: req.user.id, plan, billing },
       // Stamp the subscription too, so customer.subscription.* webhooks (which

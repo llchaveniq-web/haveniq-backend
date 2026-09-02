@@ -137,6 +137,21 @@ test('checkout: valid → creates customer + session with mapped price, client_r
   assert.ok(s.success_url.includes('/premium') && s.cancel_url.includes('/premium'));
 });
 
+// The founding-cohort launch plan depends on both of these. Without the first,
+// there is no box to type the code into; without the second, a $0 subscription
+// still opens with a card form. Neither has a visible symptom in our own tests
+// if it regresses -- checkout keeps returning a url -- so assert them.
+test('checkout: accepts promotion codes and skips card collection when $0 is due', async () => {
+  const res = await request(app).post('/premium/checkout-session')
+    .set('x-test-uid', 'user-123').send({ plan: 'plus', billing: 'monthly' });
+  assert.equal(res.status, 200);
+  const s = stripeCalls.sessions[0];
+  assert.equal(s.allow_promotion_codes, true, 'founding-cohort codes cannot be redeemed without this');
+  assert.equal(s.payment_method_collection, 'if_required', 'a 100%-off signup must not demand a card');
+  // if_required is only meaningful in subscription mode — guard the pairing
+  assert.equal(s.mode, 'subscription');
+});
+
 test('checkout: reuses an existing Stripe customer (no duplicate create)', async () => {
   userRow = { email: 'student@x.edu', stripe_customer_id: 'cus_EXISTING' };
   const res = await request(app).post('/premium/checkout-session').send({ plan: 'parent', billing: 'monthly' });
