@@ -58,6 +58,41 @@ const { requireBotToken } = require('../middleware/botAuth');
 // ── GET /housing/listings ──────────────────────────────────────────────────
 // Active listings near the caller's school, optionally filtered by max
 // per-person budget. Authenticated to discourage scraping; not paywalled.
+// ── Third-party descriptions are served as an excerpt, not republished ──────
+//
+// 45,289 of our listings come from Craigslist and every one of them stored the
+// poster's full description. Serving that verbatim is republication of someone
+// else's text, at scale, on a product we intend to charge for. Facts about a
+// property — address, beds, baths, rent, dates, coordinates — are not
+// copyrightable and we keep those in full. The prose is.
+//
+// So third-party listings now serve a bounded excerpt plus sourceUrl, which
+// the app already receives, so a student reads the rest at the source. That is
+// the ordinary posture of an aggregator rather than a mirror.
+//
+// Trimmed at a word boundary: a hard slice mid-word reads like corruption, and
+// a student cannot tell a truncated description from a broken one.
+//
+// Nothing is deleted. This is the serving layer, so the stored row is intact
+// and the posture is reversible — set THIRD_PARTY_EXCERPT_CHARS=0 to serve
+// full text again. Student-posted listings (source IS NULL) are ours by
+// submission and are never trimmed.
+//
+// This reduces exposure. It does not make the question go away, and it is not
+// legal advice: whether to carry this content at all is a decision for Jackson
+// and a lawyer, not for a query.
+const EXCERPT_CHARS = Number(process.env.THIRD_PARTY_EXCERPT_CHARS ?? 200);
+
+function serveNotes(notes, source) {
+  if (!source) return notes;                       // student-submitted: ours
+  if (!notes || !EXCERPT_CHARS) return notes;      // 0 disables the trim
+  const text = String(notes).trim();
+  if (text.length <= EXCERPT_CHARS) return text;
+  const cut = text.slice(0, EXCERPT_CHARS);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > EXCERPT_CHARS * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + '…';
+}
+
 router.get('/listings', requireAuth, async (req, res) => {
   try {
     const { rows: userRows } = await pool.query('SELECT school FROM users WHERE id = $1', [req.user.id]);
@@ -204,7 +239,7 @@ router.get('/listings', requireAuth, async (req, res) => {
         source:       r.source,
         sourceUrl:    r.source_url,
         availableFrom: r.available_from,
-        notes:        r.notes,
+        notes:        serveNotes(r.notes, r.source),
         createdAt:    r.created_at,
       }));
 
@@ -278,7 +313,7 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       source:        r.source,
       sourceUrl:     r.source_url,
       availableFrom: r.available_from,
-      notes:         r.notes,
+      notes:         serveNotes(r.notes, r.source),
       createdAt:     r.created_at,
     });
   } catch (err) {
@@ -578,3 +613,7 @@ router.post('/ingest-timing', requireBotToken, async (req, res) => {
 });
 
 module.exports = router;
+// Exported for tests. The excerpt rule is a posture decision about someone
+// else's copyright, so it gets asserted directly rather than inferred from a
+// route response.
+module.exports.serveNotes = serveNotes;
