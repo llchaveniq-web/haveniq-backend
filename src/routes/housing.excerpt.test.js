@@ -35,3 +35,14 @@ test('a short third-party description is left alone', () => {
 test('null notes stay null rather than becoming an ellipsis', () => {
   assert.equal(serveNotes(null, 'craigslist'), null);
 });
+
+test('student-submitted photos are served regardless of the third-party switch', () => {
+  const { servePhoto } = require('./housing');
+  assert.equal(servePhoto('https://res.cloudinary.com/x.jpg', null), 'https://res.cloudinary.com/x.jpg');
+});
+
+test('third-party photos are served while the switch is on (default)', () => {
+  const { servePhoto } = require('./housing');
+  assert.equal(servePhoto('https://images.craigslist.org/a.jpg', 'craigslist'),
+               'https://images.craigslist.org/a.jpg');
+});

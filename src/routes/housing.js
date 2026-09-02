@@ -93,6 +93,29 @@ function serveNotes(notes, source) {
   return (sp > EXCERPT_CHARS * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + '…';
 }
 
+// ── A switch for third-party photos, because the answer may need to change ──
+//
+// 43,443 listings point straight at images.craigslist.org. The operational
+// half of that is already handled in the app: housing-browser sets failedPhotos
+// on an image error and renders no photo block at all, so a blocked host
+// degrades to a card without a picture rather than a wall of broken images.
+//
+// What is NOT handled is the posture question, and that one is not ours to
+// settle in code. If counsel says stop, or Craigslist asks, the fix has to be
+// one variable and a restart — not a deploy, a build, and a wait, while the
+// thing you were asked to stop doing carries on.
+//
+// THIRD_PARTY_PHOTOS=off drops photo URLs for collected listings only. The app
+// already handles a listing with no photos, and sourceUrl still goes out, so a
+// student can see the pictures at the source. Student-submitted photos are
+// unaffected — those were given to us.
+const THIRD_PARTY_PHOTOS = (process.env.THIRD_PARTY_PHOTOS ?? 'on').toLowerCase() !== 'off';
+
+function servePhoto(value, source) {
+  if (!source) return value;                 // student-submitted: ours
+  return THIRD_PARTY_PHOTOS ? value : null;
+}
+
 router.get('/listings', requireAuth, async (req, res) => {
   try {
     const { rows: userRows } = await pool.query('SELECT school FROM users WHERE id = $1', [req.user.id]);
@@ -221,8 +244,8 @@ router.get('/listings', requireAuth, async (req, res) => {
         // notes, which the card truncates before reaching the point.
         totalRentHigh: r.high_rent_cents == null ? null : r.high_rent_cents / 100,
         perPerson:    r.per_person_rent_cents / 100,
-        photoUrl:     r.photo_url,
-        photoUrls:    r.photo_urls ?? null,
+        photoUrl:     servePhoto(r.photo_url, r.source),
+        photoUrls:    servePhoto(r.photo_urls ?? null, r.source),
         contactName:  r.contact_name,
         // The browse list's Email and Call actions read these. They were
         // absent from this DTO, so handleInquire always fell to its "no
@@ -304,8 +327,8 @@ router.get('/listings/:id', requireAuth, async (req, res) => {
       totalRent:     r.total_rent_cents / 100,
       totalRentHigh: r.high_rent_cents == null ? null : r.high_rent_cents / 100,
       perPerson:     r.per_person_rent_cents / 100,
-      photoUrl:      r.photo_url,
-      photoUrls:     r.photo_urls ?? null,
+      photoUrl:      servePhoto(r.photo_url, r.source),
+      photoUrls:     servePhoto(r.photo_urls ?? null, r.source),
       contactName:   r.contact_name,
       contactEmail:  r.contact_email,
       contactPhone:  r.contact_phone,
@@ -617,3 +640,4 @@ module.exports = router;
 // else's copyright, so it gets asserted directly rather than inferred from a
 // route response.
 module.exports.serveNotes = serveNotes;
+module.exports.servePhoto = servePhoto;
