@@ -2,8 +2,9 @@ name: Smoke test on push
 
 # Runs the smoke-test script after each push to main. The actual deploy
 # is handled by Railway (auto-deploys on push to main), so this workflow
-# WAITS for Railway to finish redeploying, then verifies every backend
-# route returns the expected status code.
+# WAITS until /health reports the SHA we just pushed, then verifies every
+# backend route returns the expected status code. Waiting on the SHA — not
+# just on a 200 — is what makes a green run mean "this commit is live".
 #
 # Why this matters: Railway deploys are "best effort" — they don't tell
 # us if a route 500s after the build succeeds. The smoke test catches
@@ -18,29 +19,67 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20   # the deploy wait alone can take 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Wait for Railway to redeploy
-        # Railway typically deploys in 60-120s. Poll /health until the
-        # service is responsive on the new deploy. Cap at 4 minutes so
-        # the workflow doesn't hang forever if Railway is having issues.
+      - name: Wait for Railway to deploy THIS commit
+        # Poll /health until it reports OUR commit — not merely until something
+        # answers 200. The previous version accepted any 200, which the OLD
+        # deploy also returns, so every smoke test could pass against the build
+        # we had just replaced. /health has published the deployed SHA all
+        # along (src/server.js, from RAILWAY_GIT_COMMIT_SHA); nothing read it.
+        #
+        # Requires 3 consecutive matching responses because Railway overlaps
+        # old and new instances during a rollout: one match can be the new
+        # instance answering while the old one still takes traffic.
+        #
+        # Note for re-runs: re-running an old run now fails here, since prod
+        # reports a newer SHA than that run's. That is the honest answer —
+        # you would be smoke-testing a build that is not live.
         run: |
+          set -uo pipefail
           BASE="https://haveniq-backend-production.up.railway.app"
-          echo "Waiting for $BASE to respond healthy..."
-          for i in {1..48}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health" || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "Backend healthy after ${i}*5s"
-              # Extra 60s grace period for Railway to fully swap traffic
-              # to the new deploy on a slow rollout.
-              sleep 60
-              exit 0
+          WANT="${GITHUB_SHA:0:7}"          # /health truncates to 7 chars
+          NEEDED=3                          # consecutive matches required
+          WAIT_SECS=600                     # build + deploy + rollout
+          DEADLINE=$(( SECONDS + WAIT_SECS ))
+
+          echo "Waiting for $BASE/health to report commit=$WANT"
+          streak=0; code=000; got="?"
+
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            resp=$(curl -sS --max-time 10 -w $'\n%{http_code}' "$BASE/health" 2>/dev/null) || resp=$'\n000'
+            code=$(printf '%s' "$resp" | tail -n1)
+            got=$(printf '%s' "$resp" | sed '$d' | jq -r '.commit // "?"' 2>/dev/null) || got="?"
+            [ -n "$got" ] || got="?"
+
+            if [ "$code" = "200" ] && [ "$got" = "$WANT" ]; then
+              streak=$(( streak + 1 ))
+              echo "  match $streak/$NEEDED (commit=$got, status=200)"
+              if [ "$streak" -ge "$NEEDED" ]; then
+                echo "✓ Railway is serving $WANT"
+                sleep 15   # let any straggling old instance drain
+                exit 0
+              fi
+            else
+              [ "$streak" -gt 0 ] && echo "  streak broken (was $streak)"
+              streak=0
+              echo "  waiting: status=$code commit=$got want=$WANT"
             fi
-            echo "  attempt $i: status=$STATUS, sleeping 5s"
             sleep 5
           done
-          echo "::error::Backend never reached healthy state in 4 minutes"
+
+          # Say which of the failure modes this is — they need different fixes.
+          if [ "$got" = "local" ]; then
+            echo "::error::/health reports commit=local — RAILWAY_GIT_COMMIT_SHA is not set on the Railway service, so this check can never pass. Set it (or re-link the service to the repo)."
+          elif [ "$got" = "?" ]; then
+            echo "::error::/health never returned a JSON commit field (last status=$code). Either the service is down, or the live build predates the commit field."
+          elif [ "$code" != "200" ]; then
+            echo "::error::Railway is serving $got but /health returns $code — deployed and unhealthy (check DB connectivity)."
+          else
+            echo "::error::Railway never deployed $WANT within ${WAIT_SECS}s — still serving $got. The deploy failed, was queued, or auto-deploy is off."
+          fi
           exit 1
 
       - name: Run smoke test
@@ -55,6 +94,7 @@ jobs:
           echo "Check the 'Run smoke test' step above for which routes failed." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Common causes:" >> $GITHUB_STEP_SUMMARY
+          echo "- Railway never deployed this commit (see the wait step above)" >> $GITHUB_STEP_SUMMARY
           echo "- DB schema drift (a migration didn't get applied to prod)" >> $GITHUB_STEP_SUMMARY
           echo "- Missing env var on Railway" >> $GITHUB_STEP_SUMMARY
           echo "- A route was renamed/removed without updating smoke-test.sh" >> $GITHUB_STEP_SUMMARY
