@@ -987,8 +987,21 @@ CREATE TABLE IF NOT EXISTS connect_usage (
   user_id  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   day      DATE NOT NULL DEFAULT CURRENT_DATE,
   used     INTEGER NOT NULL DEFAULT 0,
+  blocked  INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, day)
 );
+
+-- `blocked` counts the times the cap TURNED SOMEONE AWAY, which `used` cannot
+-- express: used stops at the limit and stays there, so a student who wanted one
+-- more connection and a student who wanted twenty look identical. That gap is
+-- the whole paywall signal — someone refused is someone who found the product
+-- worth more than the allowance — and it was being discarded.
+--
+-- Separate from `used` rather than derived, because a refusal is not an
+-- increment that failed: it is its own event, and it can happen on a day with
+-- no successful spend at all (FREE_CONNECTS_PER_DAY=0 refuses before any row
+-- exists, which is why the counter's write is an upsert, not an UPDATE).
+ALTER TABLE connect_usage ADD COLUMN IF NOT EXISTS blocked INTEGER NOT NULL DEFAULT 0;
 
 -- Yesterday's rows are never read. This keeps the "how many today" lookup on
 -- an index rather than a scan once the table has a season of history in it.

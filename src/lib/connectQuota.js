@@ -76,6 +76,36 @@ async function quotaFor(userId, isPremium) {
 }
 
 /**
+ * Count one refusal.
+ *
+ * `used` cannot carry this. It stops at the limit and stays there, so a student
+ * who wanted a sixth connection and one who wanted a twentieth are the same row.
+ * The difference is the entire paywall signal — a refusal is a student telling
+ * you the allowance is worth less to them than the product — and until now it
+ * was returned to the app as a 402 and then thrown away.
+ *
+ * An upsert, not an UPDATE, because a refusal can land on a day with no row:
+ * FREE_CONNECTS_PER_DAY=0 refuses before spendConnect ever inserts.
+ *
+ * Never throws. A counter is not worth turning a working 402 into a 500 for —
+ * the student's experience of being capped must not depend on the analytics
+ * write succeeding.
+ */
+async function recordBlocked(userId) {
+  try {
+    await pool.query(
+      `INSERT INTO connect_usage (user_id, day, used, blocked)
+            VALUES ($1, CURRENT_DATE, 0, 1)
+       ON CONFLICT (user_id, day) DO UPDATE
+              SET blocked = connect_usage.blocked + 1`,
+      [userId],
+    );
+  } catch (err) {
+    console.error('[connectQuota] blocked-counter write failed:', err?.message);
+  }
+}
+
+/**
  * Spend one connect. Returns { ok: true, used, remaining } or
  * { ok: false, limit, used } when the day's allowance is gone.
  *
@@ -90,7 +120,10 @@ async function spendConnect(userId, isPremium) {
   if (isPremium) return { ok: true, unlimited: true };
 
   const limit = dailyLimit();
-  if (limit <= 0) return { ok: false, limit, used: 0 };
+  if (limit <= 0) {
+    await recordBlocked(userId);
+    return { ok: false, limit, used: 0 };
+  }
 
   const { rows } = await pool.query(
     `INSERT INTO connect_usage (user_id, day, used)
@@ -104,6 +137,7 @@ async function spendConnect(userId, isPremium) {
 
   if (!rows[0]) {
     // The conflict path was refused, so the row is already at the cap.
+    await recordBlocked(userId);
     return { ok: false, limit, used: await usedToday(userId) };
   }
   const used = Number(rows[0].used);
@@ -119,4 +153,4 @@ async function refundConnect(userId) {
   );
 }
 
-module.exports = { dailyLimit, usedToday, quotaFor, spendConnect, refundConnect, DEFAULT_LIMIT };
+module.exports = { dailyLimit, usedToday, quotaFor, spendConnect, refundConnect, recordBlocked, DEFAULT_LIMIT };

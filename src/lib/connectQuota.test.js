@@ -15,13 +15,20 @@ const assert = require('node:assert');
 // the same semantics Postgres gives it: the DO UPDATE is refused when the
 // stored value is already at the cap, and no row comes back.
 const store = new Map();
+const blocked = new Map();
 let inFlight = 0, maxInFlight = 0;
+let blockedWriteFails = false;
 
 const fakePool = {
   query: async (sql, params = []) => {
     if (sql.includes('SELECT used FROM connect_usage')) {
       const v = store.get(params[0]);
       return { rows: v === undefined ? [] : [{ used: v }] };
+    }
+    if (sql.includes('SET blocked = connect_usage.blocked + 1')) {
+      if (blockedWriteFails) throw new Error('simulated counter failure');
+      blocked.set(params[0], (blocked.get(params[0]) ?? 0) + 1);
+      return { rows: [] };
     }
     if (sql.includes('INSERT INTO connect_usage')) {
       const [userId, limit] = params;
@@ -49,7 +56,10 @@ require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, expo
 
 const q = require('./connectQuota');
 
-test.beforeEach(() => { store.clear(); delete process.env.FREE_CONNECTS_PER_DAY; });
+test.beforeEach(() => {
+  store.clear(); blocked.clear(); blockedWriteFails = false;
+  delete process.env.FREE_CONNECTS_PER_DAY;
+});
 
 test('the limit is configurable, and a bad value never means unlimited', () => {
   delete process.env.FREE_CONNECTS_PER_DAY;
@@ -136,4 +146,51 @@ test('remaining never goes negative if the cap is lowered under a user', async (
   process.env.FREE_CONNECTS_PER_DAY = '2';
   const r = await q.quotaFor('u5', false);
   assert.equal(r.remaining, 0, 'must clamp at 0, not report -3');
+});
+
+
+// ── The refusal counter ──────────────────────────────────────────────────────
+//
+// `used` saturates at the limit, so it cannot distinguish a student who wanted
+// one more connection from one who wanted twenty. That difference is the signal
+// the launch plan turns on — run free until the cap starts catching people —
+// and it was being computed and discarded on every 402.
+
+test('a refusal is counted; a successful spend is not', async () => {
+  process.env.FREE_CONNECTS_PER_DAY = '2';
+  await q.spendConnect('u1', false);
+  await q.spendConnect('u1', false);
+  assert.equal(blocked.get('u1'), undefined, 'spending within the cap is not a refusal');
+
+  await q.spendConnect('u1', false);
+  await q.spendConnect('u1', false);
+  assert.equal(blocked.get('u1'), 2, 'each refusal counts, so demand past the cap is visible');
+});
+
+test('premium is never counted as refused', async () => {
+  process.env.FREE_CONNECTS_PER_DAY = '0';
+  const r = await q.spendConnect('vip', true);
+  assert.equal(r.ok, true);
+  assert.equal(blocked.get('vip'), undefined, 'a premium user is never turned away, so never a data point');
+});
+
+test('a limit of 0 is counted, though no usage row exists yet', async () => {
+  // The refusal happens before spendConnect ever inserts, which is why the
+  // counter's write has to be an upsert rather than an UPDATE.
+  process.env.FREE_CONNECTS_PER_DAY = '0';
+  const r = await q.spendConnect('u2', false);
+  assert.equal(r.ok, false);
+  assert.equal(blocked.get('u2'), 1, 'a day with no successful spend still records the refusal');
+});
+
+test('a failing counter write never breaks the refusal', async () => {
+  // A metrics write must not turn a working 402 into a 500. The student's
+  // experience of being capped cannot depend on analytics succeeding.
+  process.env.FREE_CONNECTS_PER_DAY = '1';
+  await q.spendConnect('u3', false);
+  blockedWriteFails = true;
+  const over = await q.spendConnect('u3', false);
+  assert.equal(over.ok, false, 'still a clean refusal');
+  assert.equal(over.limit, 1);
+  assert.equal(over.used, 1, 'and still reports the real count');
 });

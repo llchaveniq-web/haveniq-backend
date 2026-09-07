@@ -109,6 +109,9 @@ const fakePool = {
         quiz_completed: pool_.filter(u => u.quiz_completed).length,
       }] };
     }
+    if (sql.includes('AS blocked_attempts_7d')) {
+      return { rows: [{ at_cap_today: 4, blocked_today: 2, blocked_7d: 6, blocked_attempts_7d: 11 }] };
+    }
     if (sql.includes('GROUP BY school')) {
       const pool_ = sqlExcludesDemo(sql) ? SEED_USERS.filter(u => !isDemoEmail(u.email)) : SEED_USERS;
       const by = new Map();
@@ -363,7 +366,13 @@ test('metrics: full shape, and the seeded DEMO user is NOT counted in users/scho
   // Single request (the endpoint caches ~60s, so one compute), asserting the
   // shape AND the demo exclusion. Seed = 1 real (UC Berkeley) + 1 demo
   // (@haveniq-demo.edu / Demo University).
+  // Deliberately NOT the default of 5: with the default, a hardcoded literal in
+  // computeMetrics would satisfy every assertion below and the wiring to
+  // dailyLimit() would go untested. Verified by mutation — hardcoding 5 passes
+  // when this is unset, and fails with it set.
+  process.env.FREE_CONNECTS_PER_DAY = '3';
   const res = await asFounder(request(app).get('/admin/metrics'));
+  delete process.env.FREE_CONNECTS_PER_DAY;
   assert.equal(res.status, 200);
   const m = res.body;
   assert.equal(typeof m.generatedAt, 'string');
@@ -383,4 +392,20 @@ test('metrics: full shape, and the seeded DEMO user is NOT counted in users/scho
   // account still matters): the banned-count query carries no demo exclusion.
   const bannedQ = dbCalls.find(c => c.sql.includes('COALESCE(is_banned'));
   assert.ok(!sqlExcludesDemo(bannedQ.sql), 'safety (banned) count left as-is');
+
+  // Paywall pressure — the number the launch plan turns on. freeConnectsPerDay
+  // comes from the same dailyLimit() the enforcement path uses, so the
+  // dashboard cannot disagree with what students are actually hitting.
+  assert.deepEqual(m.paywall, {
+    freeConnectsPerDay: 3,
+    atCapToday: 4,
+    blockedToday: 2,
+    blockedUsers7d: 6,
+    blockedAttempts7d: 11,
+  });
+
+  // A seeded demo cohort hitting the cap would read as traction. It must not.
+  const paywallQ = dbCalls.find(c => c.sql.includes('AS blocked_attempts_7d'));
+  assert.ok(sqlExcludesDemo(paywallQ.sql), 'paywall counts must exclude demo accounts');
+  assert.deepEqual(paywallQ.params, [3], 'the cap is passed to SQL, not hardcoded');
 });

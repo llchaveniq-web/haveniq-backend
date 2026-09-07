@@ -5,6 +5,7 @@ const { requireFounder } = require('../middleware/requireFounder');
 const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { notDemo } = require('../lib/demoFilter');
+const { dailyLimit } = require('../lib/connectQuota');
 const { generateApiSecret, hashApiKey } = require('../lib/apiKeys');
 const { audit } = require('../services/auditLog');
 
@@ -624,7 +625,10 @@ let _metricsCache = null; // { at, data }
 const METRICS_TTL_MS = 60 * 1000;
 
 async function computeMetrics() {
-  const [users, schools, outcomes, shapes, lastRun, reports, banned] = await Promise.all([
+  // The free-tier cap, read the same way the enforcement path reads it, so the
+  // dashboard can never disagree with what students are actually hitting.
+  const freeLimit = dailyLimit();
+  const [users, schools, outcomes, shapes, lastRun, reports, banned, paywall] = await Promise.all([
     // User + school counts exclude demo/test accounts (both demo domains) so the
     // dashboard reflects real traction, not seed inflation. Safety counts below
     // are intentionally left unfiltered.
@@ -647,6 +651,23 @@ async function computeMetrics() {
     pool.query(`SELECT MAX(updated_at) AS last FROM dimension_models`),
     pool.query(`SELECT COUNT(*)::int AS n FROM user_reports WHERE status = 'open'`),
     pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE COALESCE(is_banned, FALSE) = TRUE`),
+    // Paywall pressure. atCapToday is the leading indicator — a student who
+    // spent the whole allowance, whether or not they then tried once more —
+    // and blocked* is the confirmed demand: they DID try and were refused.
+    // Demo accounts excluded for the same reason the user counts exclude them:
+    // a seeded cohort hitting a cap would read as traction.
+    pool.query(
+      `SELECT
+         (COUNT(DISTINCT cu.user_id) FILTER (WHERE cu.day = CURRENT_DATE AND cu.used >= $1))::int    AS at_cap_today,
+         (COUNT(DISTINCT cu.user_id) FILTER (WHERE cu.day = CURRENT_DATE AND cu.blocked > 0))::int   AS blocked_today,
+         (COUNT(DISTINCT cu.user_id) FILTER (WHERE cu.blocked > 0))::int                             AS blocked_7d,
+         (COALESCE(SUM(cu.blocked), 0))::int                                                         AS blocked_attempts_7d
+         FROM connect_usage cu
+         JOIN users u ON u.id = cu.user_id
+        WHERE cu.day >= CURRENT_DATE - INTERVAL '6 days'
+          AND ${notDemo('u.email')}`,
+      [freeLimit],
+    ),
   ]);
 
   return {
@@ -667,6 +688,16 @@ async function computeMetrics() {
     safety: {
       openReports: reports.rows[0].n,
       bannedUsers: banned.rows[0].n,
+    },
+    // The number that says whether the free tier is binding yet. The launch
+    // plan is to run free until the cap starts catching people and only then
+    // turn on paid; without this, that decision is a guess.
+    paywall: {
+      freeConnectsPerDay: freeLimit,
+      atCapToday:         paywall.rows[0].at_cap_today,
+      blockedToday:       paywall.rows[0].blocked_today,
+      blockedUsers7d:     paywall.rows[0].blocked_7d,
+      blockedAttempts7d:  paywall.rows[0].blocked_attempts_7d,
     },
   };
 }
