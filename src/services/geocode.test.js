@@ -178,6 +178,59 @@ test('geocodeSchool asks for several candidates, not just the top hit', async ()
   assert.ok(/limit=([2-9]|\d{2,})/.test(asked), `expected limit > 1, got: ${asked}`);
 });
 
+// ── geocodeSchool: colloquial names the provider has never heard of ────────
+//
+// "Cal State Fullerton", "Cal State Northridge" and "Cal State LA" all resolve.
+// "Cal State Long Beach" returns ZERO results — not a wrong campus, nothing —
+// though all four are mapped as "California State University, <city>". OSM's
+// aliases are just uneven, so the failure lands on one school at a time.
+//
+// It matters because getSchoolCoords caches with ON CONFLICT DO NOTHING and the
+// row is written by the FIRST student at a campus: one miss is a permanently
+// empty housing tab for everyone who signs up behind them.
+
+test('geocodeSchool retries a colloquial name with the official form', async () => {
+  const asked = [];
+  stubFetch(async (url) => {
+    const q = decodeURIComponent(String(url));
+    asked.push(q);
+    // Empty for the name as typed, the campus for the expanded name.
+    return q.includes('California State University')
+      ? ok([{ lat: '33.7818', lon: '-118.1152', type: 'university' }])()
+      : ok([])();
+  });
+
+  assert.deepEqual(await geocodeSchool('Cal State Long Beach'),
+    { lat: 33.7818, lon: -118.1152 });
+  assert.equal(asked.length, 2, 'should have retried once');
+  assert.ok(asked[0].includes('Cal State Long Beach'), asked[0]);
+  assert.ok(asked[1].includes('California State University Long Beach'), asked[1]);
+});
+
+test('geocodeSchool does not retry a name that already resolves', async () => {
+  // The retry is paid only by a school that would otherwise return null.
+  let calls = 0;
+  stubFetch(async () => { calls++; return ok([{ lat: '33.8831', lon: '-117.8852', type: 'university' }])(); });
+  await geocodeSchool('Cal State Fullerton');
+  assert.equal(calls, 1, 'a resolving name should cost one request');
+});
+
+test('geocodeSchool still returns null when neither form resolves', async () => {
+  let calls = 0;
+  stubFetch(async () => { calls++; return ok([])(); });
+  assert.equal(await geocodeSchool('Cal State Nowhere'), null);
+  assert.equal(calls, 2);
+});
+
+test('geocodeSchool does not expand a name that is already official', async () => {
+  // "California State" must not match the "Cal State" rule and become
+  // "California State University State University Long Beach".
+  const asked = [];
+  stubFetch(async (url) => { asked.push(decodeURIComponent(String(url))); return ok([])(); });
+  await geocodeSchool('California State University, Long Beach');
+  assert.equal(asked.length, 1, 'an official name has nothing to expand to');
+});
+
 test('listing geocoding still takes the first hit, unchanged', async () => {
   // The school fix must not leak into address lookups, where a comma IS
   // meaningful and the top hit is the right answer.
