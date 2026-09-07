@@ -405,28 +405,67 @@ router.get('/me/match-outcomes', requireAuth, async (req, res) => {
 // Aggregate cohort rates ONLY — never an individual's outcome, no user ids, no
 // answers. Any logged-in user may call it (no admin gate). Honest by
 // construction: no data → { ok:false }; never padded or seeded.
+// Outcome-Learning Loop A honesty floor for the campus split below — same
+// value as utils/cohortGate.ts's MIN_COHORT_SAMPLE and this route's own
+// sibling frictionValidation.js. A thin campus falls back to the global
+// pool rather than publish a curve nobody earned yet.
+const CAMPUS_SPLIT_FLOOR = 30;
+
+async function calibrationRows(schoolFilter) {
+  // Prefer the promoted predicted_score COLUMN, falling back to the details
+  // JSONB. The column was added precisely so the validation loop wouldn't
+  // depend on a JSON path, but this reader still only looked at the JSONB —
+  // so a row carrying the column without the JSON key would have been
+  // invisible to the very report it exists to feed. Identical results today
+  // (one writer populates both from the same value); robust if that changes.
+  // No alias on match_outcomes — keeps the SELECT/WHERE expressions
+  // byte-identical to the pre-campus-split query (still unambiguous: `users`
+  // has none of predicted_score/details/stage/answer/rating), so the join
+  // below only ever ADDS a clause rather than rewriting the ones that already
+  // existed and are covered by existing tests.
+  const params = [];
+  let schoolJoin = '';
+  let schoolClause = '';
+  if (schoolFilter) {
+    // reporter_id's own school is the pair's campus — matching is same-campus
+    // only, so the reporter's school already implies the pair's campus.
+    schoolJoin = 'JOIN users ON users.id = match_outcomes.reporter_id';
+    schoolClause = "AND users.school IS NOT NULL AND lower(trim(users.school)) = lower(trim($1))";
+    params.push(schoolFilter);
+  }
+  const { rows } = await pool.query(`
+    SELECT COALESCE(predicted_score::text, details->>'predictedScore') AS predicted_score,
+           details->>'stage'          AS stage,
+           details->>'answer'         AS answer,
+           details->>'rating'         AS rating
+      FROM match_outcomes
+      ${schoolJoin}
+     WHERE COALESCE(predicted_score::text, details->>'predictedScore') ~ '^[0-9.]+$'
+       ${schoolClause}`, params);
+  return rows.map((r) => ({
+    predictedScore: r.predicted_score, stage: r.stage, answer: r.answer, rating: r.rating,
+  }));
+}
+
 router.get('/match-outcomes/calibration', requireAuth, async (req, res) => {
   await ensureTable();
   try {
-    // Prefer the promoted predicted_score COLUMN, falling back to the details
-    // JSONB. The column was added precisely so the validation loop wouldn't
-    // depend on a JSON path, but this reader still only looked at the JSONB —
-    // so a row carrying the column without the JSON key would have been
-    // invisible to the very report it exists to feed. Identical results today
-    // (one writer populates both from the same value); robust if that changes.
-    const { rows } = await pool.query(`
-      SELECT COALESCE(predicted_score::text, details->>'predictedScore') AS predicted_score,
-             details->>'stage'          AS stage,
-             details->>'answer'         AS answer,
-             details->>'rating'         AS rating
-        FROM match_outcomes
-       WHERE COALESCE(predicted_score::text, details->>'predictedScore') ~ '^[0-9.]+$'`);
-    const result = computeCalibration(rows.map((r) => ({
-      predictedScore: r.predicted_score,
-      stage: r.stage,
-      answer: r.answer,
-      rating: r.rating,
-    })));
+    // docs/specs/outcome-learning.md §1, Loop A: "per campus once the campus
+    // clears the floor; global otherwise." Try the caller's own campus first;
+    // fall back to pooling every school when that campus is too thin to mean
+    // anything on its own (or the caller has no school on file). Response
+    // shape is identical either way — the frontend needs no changes.
+    const school = req.user.school && req.user.school.trim();
+    let result = null;
+    if (school) {
+      const campusResult = computeCalibration(await calibrationRows(school));
+      if (campusResult.ok && campusResult.totalSample >= CAMPUS_SPLIT_FLOOR) {
+        result = campusResult;
+      }
+    }
+    if (!result) {
+      result = computeCalibration(await calibrationRows(null));
+    }
     if (!result.ok) return res.status(404).json({ ok: false });
     return res.json(result);
   } catch (err) {
