@@ -30,13 +30,25 @@ function isDemo(col = 'email') {
 
 // "this column is NOT a demo/test account" — self-contained; safe to drop into
 // any WHERE/AND context, e.g. `AND ${notDemo('u.email')}`.
+//
+// SIM-ONLY OVERRIDE: cohort-sim seeds a @demo.haveniq.test cohort and must be
+// able to validate that the funnel + lifecycle actually COUNT/target them — but
+// this filter deliberately excludes that exact domain (see the header, which
+// calls it out by name). When SIM_INCLUDE_DEMO=1 — set ONLY by
+// scripts/cohort-sim.js, which refuses to run against production — the exclusion
+// is dropped so the sim can see its own seeded cohort. The env var is unset in
+// every real deployment, so production analytics + lifecycle email stay
+// demo-excluded, byte-for-byte identical.
 function notDemo(col = 'email') {
+  if (process.env.SIM_INCLUDE_DEMO === '1') return 'TRUE';
   return `(NOT ${isDemo(col)})`;
 }
 
 // JS-side equivalent for code paths that test an email in JavaScript (e.g. the
-// lifecycle send loop skipping a demo recipient). Kept in lock-step with the SQL.
+// lifecycle send loop skipping a demo recipient). Kept in lock-step with the SQL
+// — including the SIM_INCLUDE_DEMO sim-only override above.
 function isDemoEmail(email) {
+  if (process.env.SIM_INCLUDE_DEMO === '1') return false;
   const e = String(email || '').toLowerCase();
   return /\.test$/.test(e) || e.includes('@demo.') || e.includes('-demo.');
 }
