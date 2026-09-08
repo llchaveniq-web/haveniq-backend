@@ -81,6 +81,37 @@ const { requireBotToken } = require('../middleware/botAuth');
 // This reduces exposure. It does not make the question go away, and it is not
 // legal advice: whether to carry this content at all is a decision for Jackson
 // and a lawyer, not for a query.
+// ── One row per real place ──
+//
+// Craigslist reposts the same flat every few days with a different three
+// amenities leading the title, and the collector correctly sees each repost
+// as a new post: a distinct URL, a distinct id, its own photo set. Nothing
+// upstream is wrong, and nothing here can tell them apart by identity.
+//
+// Measured on the live table: 48,060 rows passing the filters below resolve
+// to 20,651 distinct places. 57% of the housing inventory is the same
+// buildings over and over — one address appears 162 times. A student
+// scrolling 393 results was seeing perhaps 170 places, the same handful
+// repeatedly, which reads as a market with nothing in it.
+//
+// Address + per-person rent + beds + baths. Baths is in the key on purpose:
+// it only separates 215 more rows, but there are 213 groups whose bath
+// counts genuinely disagree, and those are different units. Dropping rent
+// from the key would collapse 20,651 to 13,917 by merging a building's
+// cheap and expensive floorplans into one card, which is a different
+// listing to a student, so rent stays.
+//
+// Which row survives: one that HAS photos first — that alone rescues 239
+// places from showing a card with no picture — then the most recently
+// posted, since the newest repost is the one most likely still available.
+//
+// This is the serving layer. Nothing is deleted, every row keeps its own
+// source_url, and HOUSING_DEDUPE=off restores the previous behaviour
+// without a deploy.
+const DEDUPE = (process.env.HOUSING_DEDUPE ?? 'on') !== 'off';
+const DEDUPE_KEY = 'lower(trim(address)), coalesce(per_person_rent_cents,-1), coalesce(beds,-1), coalesce(baths,-1)';
+const DEDUPE_PICK = '(coalesce(array_length(photo_urls,1),0) > 0) DESC, source_posted_at DESC NULLS LAST, created_at DESC';
+
 const EXCERPT_CHARS = Number(process.env.THIRD_PARTY_EXCERPT_CHARS ?? 200);
 
 // ── Craigslist's own category breadcrumb ──
@@ -209,11 +240,19 @@ router.get('/listings', requireAuth, async (req, res) => {
     const lonPad = campus ? radiusMi / (69 * Math.max(0.1, Math.cos(campus.lat * Math.PI / 180))) : null;
 
     const { rows } = await pool.query(
-      `SELECT id, address, city, school_near, beds, baths,
+      `SELECT * FROM (
+         SELECT ${DEDUPE ? 'DISTINCT ON (' + DEDUPE_KEY + ')' : ''}
+                id, address, city, school_near, beds, baths,
               latitude, longitude,
               total_rent_cents, high_rent_cents, per_person_rent_cents, photo_url, photo_urls,
               contact_name, contact_email, contact_phone, available_from, notes, created_at,
               source, source_url
+              -- The row we SHOW may be an older post, picked because it
+              -- carries photos. The group's PLACE in the list must still
+              -- follow its freshest post, or preferring photos pushes a
+              -- listing's created_at back and drops it below the LIMIT
+              -- entirely. Measured: 30 places vanished without this.
+              ${DEDUPE ? ', max(created_at) OVER (PARTITION BY ' + DEDUPE_KEY + ') AS group_created_at' : ''}
        FROM listings
        WHERE is_active = TRUE
          -- A listing a human has not cleared is not shown to a student.
@@ -250,7 +289,9 @@ router.get('/listings', requireAuth, async (req, res) => {
          )
          AND ($2::integer IS NULL OR per_person_rent_cents <= $2)
          AND ($3::integer IS NULL OR beds >= $3)
-       ORDER BY created_at DESC
+         ${DEDUPE ? 'ORDER BY ' + DEDUPE_KEY + ', ' + DEDUPE_PICK : ''}
+       ) d
+       ORDER BY ${DEDUPE ? 'group_created_at' : 'created_at'} DESC
        LIMIT $4 OFFSET $5`,
       [callerSchool, maxPerPerson, minBeds, limit, offset,
        campus?.lat ?? null, campus?.lon ?? null, latPad, lonPad],
