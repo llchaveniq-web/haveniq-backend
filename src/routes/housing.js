@@ -83,10 +83,53 @@ const { requireBotToken } = require('../middleware/botAuth');
 // and a lawyer, not for a query.
 const EXCERPT_CHARS = Number(process.env.THIRD_PARTY_EXCERPT_CHARS ?? 200);
 
+// ── Craigslist's own category breadcrumb ──
+//
+// A collected post's first line is the source's title with its site
+// navigation glued on:
+//
+//   "Plank flooring Covered Parking Available - apts/housing for rent - apartment rent"
+//
+// 42,192 of the 47,647 collected listings carry one. It is a category path
+// from another site: it says nothing about the flat, it is identical across
+// tens of thousands of rows, and at ~41 characters it was consuming a fifth
+// of the excerpt below and the first two lines of the housing card — so the
+// description, which begins after the blank line, never reached the reader.
+//
+// Matched on Craigslist's fixed category vocabulary rather than "whatever
+// follows the last dash", because real titles end in dashes too: "male
+// preferred", "by owner" and "one adult" are all genuine title text in this
+// data and a positional rule would delete them.
+//
+// Stripped BEFORE the excerpt, so the 200 characters are spent on content.
+const CL_CATEGORIES = [
+  'apts/housing for rent', 'rooms & shares', 'sublets & temporary',
+  'office & commercial', 'parking & storage', 'vacation rentals',
+  'housing swap', 'real estate - by owner', 'real estate for sale',
+];
+// No escaping map: none of the categories above contains a regex
+// metacharacter, and the head line has already had its newline removed, so
+// `.*` cannot run past the end of the title.
+const BREADCRUMB = new RegExp(
+  ' - (?:' + CL_CATEGORIES.join('|') + ')(?: - .*)?$', 'i');
+
+function stripBreadcrumb(text) {
+  const nl = text.indexOf('\n');
+  const head = nl === -1 ? text : text.slice(0, nl);
+  const cleaned = head.replace(BREADCRUMB, '').trimEnd();
+  // If the breadcrumb was the entire line, keep the original rather than
+  // serving a note that opens on a blank line.
+  if (!cleaned) return text;
+  return cleaned + (nl === -1 ? '' : text.slice(nl));
+}
+
 function serveNotes(notes, source) {
   if (!source) return notes;                       // student-submitted: ours
-  if (!notes || !EXCERPT_CHARS) return notes;      // 0 disables the trim
-  const text = String(notes).trim();
+  if (!notes) return notes;
+  // The breadcrumb goes whether or not the excerpt is enabled — it is another
+  // site's navigation, never information here.
+  const text = stripBreadcrumb(String(notes).trim());
+  if (!EXCERPT_CHARS) return text;                 // 0 disables the trim
   if (text.length <= EXCERPT_CHARS) return text;
   const cut = text.slice(0, EXCERPT_CHARS);
   const sp = cut.lastIndexOf(' ');
