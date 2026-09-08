@@ -102,6 +102,47 @@ async function geocodeOne(q, { limit = 1, prefer = null } = {}) {
 const CAMPUS_TYPE = /^(university|college|school)$/;
 
 /**
+ * Colloquial campus names, expanded to the official form.
+ *
+ * Students store the name they say out loud. Nominatim matches a campus by its
+ * OSM name and whatever aliases someone happened to add, and those aliases are
+ * uneven in a way that is worse than simply absent: "Cal State Fullerton",
+ * "Cal State Northridge" and "Cal State LA" all resolve correctly, while
+ * "Cal State Long Beach" returns ZERO results — not a wrong campus, nothing at
+ * all. Every one of those campuses is mapped under "California State
+ * University, <city>". So this is not an abbreviation the provider understands;
+ * it is one it understands for some campuses and not others, which fails
+ * silently for exactly one school at a time and gives no signal that it has.
+ *
+ * That failure is expensive here specifically because of how the result is
+ * stored. getSchoolCoords caches with ON CONFLICT DO NOTHING and the row is
+ * created lazily by the FIRST student at a campus, so a miss is not a bad
+ * afternoon — it is a permanently empty housing tab for everyone who signs up
+ * after that student, with nothing in the logs pointing at the school name.
+ *
+ * Applied only as a RETRY, after the name as typed comes back empty. Names
+ * that already resolve keep resolving on the first request and cost no extra
+ * call, and the throttle means a second lookup is only ever paid by a school
+ * that would otherwise have returned null.
+ */
+const COLLOQUIAL = [
+  [/^cal state\b/i, 'California State University'],
+];
+
+/** Trim, drop the commas that make Nominatim read a name as an address. */
+function normalizeSchool(school) {
+  return school.trim().replace(/,/g, ' ').replace(/\s+/g, ' ');
+}
+
+/** The official form of a colloquial name, or the name unchanged. */
+function expandColloquial(q) {
+  for (const [pattern, formal] of COLLOQUIAL) {
+    if (pattern.test(q)) return q.replace(pattern, formal);
+  }
+  return q;
+}
+
+/**
  * Coordinates for a campus, by the school NAME as stored on the user row.
  *
  * Appending "university" is deliberately NOT done: names here are already
@@ -136,8 +177,16 @@ const CAMPUS_TYPE = /^(university|college|school)$/;
  */
 async function geocodeSchool(school) {
   if (!school || typeof school !== 'string' || !school.trim()) return null;
-  const q = school.trim().replace(/,/g, ' ').replace(/\s+/g, ' ');
-  return geocodeOne(q, { limit: 8, prefer: CAMPUS_TYPE });
+  const q = normalizeSchool(school);
+  const hit = await geocodeOne(q, { limit: 8, prefer: CAMPUS_TYPE });
+  if (hit) return hit;
+
+  // Nothing matched the name as typed. Try the official form once before
+  // giving up — see COLLOQUIAL above for why that is a different query and
+  // not just a longer one.
+  const formal = expandColloquial(q);
+  if (formal === q) return null;
+  return geocodeOne(formal, { limit: 8, prefer: CAMPUS_TYPE });
 }
 
 /**
