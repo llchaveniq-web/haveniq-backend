@@ -43,8 +43,16 @@ const analytics = require('../services/analytics');
 // emails to dodge the per-email limit). Both must pass.
 //
 // On a campus launch event, 30-50 students arrive from the same WiFi
-// egress; the per-IP signup bucket is generous enough (20/hour) that
-// legitimate launches still go through.
+// egress, and carrier CGNAT puts many phones behind one address too. This
+// comment used to claim 20/hour was "generous enough" for that, which it
+// plainly is not: the 21st student of the evening would be told "too many
+// signups from this network" and told to come back in an hour, on the one
+// night that matters. Raised to 60 so the number matches the intent.
+//
+// The abuse control that actually does the work is per EMAIL, not per IP:
+// 5 per 15 minutes and 1 per 30 seconds, both below. This bucket is a
+// backstop against one address rotating emails forever, and 60/hour still
+// bounds that while leaving a launch room to breathe.
 const sendLimitEmail = rateLimit({
   windowMs: 15 * 60 * 1000,  // 15 min
   max: 5,
@@ -75,7 +83,7 @@ const sendBurstLimit = rateLimit({
 // fires.
 const sendLimitIp = rateLimit({
   windowMs: 60 * 60 * 1000,  // 1 hour
-  max: 20,
+  max: 60,
   message: { error: 'Too many signups from this network. Try again in 1 hour.' },
   // Default keyGenerator (IP) is what we want here.
 });
@@ -88,9 +96,14 @@ const verifyLimitEmail = rateLimit({
     (req.body?.email || '').toString().toLowerCase().trim() || ipKeyGenerator(req),
 });
 
+// Same shared-egress problem as the signup bucket. 30 per 10 minutes is about
+// ten students once mistyped codes are counted, and a launch crowd verifies in
+// the same few minutes by definition. The per-code 3-attempt cap and the
+// per-email bucket are what stop brute force; this one only has to stop a
+// flood, so it can afford to be roomier.
 const verifyLimitIp = rateLimit({
   windowMs: 10 * 60 * 1000,  // 10 min
-  max: 30,
+  max: 90,
   message: { error: 'Too many verification attempts from this network.' },
 });
 
