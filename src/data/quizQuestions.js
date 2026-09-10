@@ -6,7 +6,7 @@
 // need the actual QUESTION TEXT + OPTION TEXT to hand the model something
 // meaningful. This file is that lookup table.
 //
-// It mirrors the 17 questions the app actually asks — frontend
+// It mirrors the 18 questions the app actually asks — frontend
 // constants/quiz.ts SCORED_IDS: 14, 48–57, 60, 62, 63, 65–67 (14 lifestyle /
 // behavioral + 3 stress-response). Older removed questions (attachment, Big
 // Five, HEXACO, etc. from the pre-2026 60-question set) were dropped: no

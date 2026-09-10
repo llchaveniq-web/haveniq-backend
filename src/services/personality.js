@@ -94,7 +94,7 @@ function buildWritingSection(writing) {
   return w ? w.slice(0, 6000) : '';
 }
 
-const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer a 17-question quiz about concrete living habits and how they handle conflict — cleanliness, order, sleep schedule, noise, social load, shared space, substances, money independence, disagreement style, follow-through, and stress response.
+const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer an 18-question quiz about concrete living habits and how they handle conflict — cleanliness, order, sleep schedule, noise, social load, shared space, substances, money independence, disagreement style, follow-through, and stress response.
 
 Given one student's answers, derive a Big Five (OCEAN) personality profile and a roommate archetype.
 
