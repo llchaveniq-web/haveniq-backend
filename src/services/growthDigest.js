@@ -226,19 +226,19 @@ async function ensureTable(pool) {
 
 function digestHtml(metrics, narrative) {
   const w = metrics.weekly;
-  const row = (label, d) => `<tr><td style="padding:4px 12px 4px 0;color:#75695A;">${label}</td><td style="padding:4px 0;font-weight:600;">${
+  const row = (label, d) => `<tr><td style="padding:4px 12px 4px 0;color:#625c52;">${label}</td><td style="padding:4px 0;font-weight:600;">${
     d.enoughData ? `${d.this} vs ${d.last} (${d.delta >= 0 ? '+' : ''}${d.delta})` : `${d.this} vs ${d.last} — not enough data yet`}</td></tr>`;
-  const funnelRows = metrics.funnel.map((s) => `<tr><td style="padding:2px 12px 2px 0;color:#75695A;">${s.stage}</td><td style="padding:2px 0;font-weight:600;">${s.count}</td></tr>`).join('');
-  return `<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;background:#F6EEDF;padding:28px 16px;">
+  const funnelRows = metrics.funnel.map((s) => `<tr><td style="padding:2px 12px 2px 0;color:#625c52;">${s.stage}</td><td style="padding:2px 0;font-weight:600;">${s.count}</td></tr>`).join('');
+  return `<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;background:#f4f0e8;padding:28px 16px;">
     <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
-      <div style="background:#A33625;padding:22px 28px;"><p style="margin:0;color:#fff;font-size:20px;font-weight:800;">HavenIQ ✦ Weekly growth</p></div>
-      <div style="padding:24px 28px;color:#2D2620;font-size:14px;line-height:1.6;">
+      <div style="background:#3f6a57;padding:22px 28px;"><p style="margin:0;color:#fff;font-size:20px;font-weight:800;">HavenIQ ✦ Weekly growth</p></div>
+      <div style="padding:24px 28px;color:#22201d;font-size:14px;line-height:1.6;">
         <p style="white-space:pre-wrap;margin:0 0 20px;">${narrative.replace(/</g, '&lt;')}</p>
-        <p style="margin:0 0 6px;font-weight:700;color:#75695A;text-transform:uppercase;font-size:12px;">This week vs last</p>
+        <p style="margin:0 0 6px;font-weight:700;color:#625c52;text-transform:uppercase;font-size:12px;">This week vs last</p>
         <table style="border-collapse:collapse;margin-bottom:18px;">${row('Signups', w.signups)}${row('Quiz completions', w.quizCompletions)}${row('Connect requests', w.connects)}${row('Referrals', w.referrals)}</table>
-        <p style="margin:0 0 6px;font-weight:700;color:#75695A;text-transform:uppercase;font-size:12px;">Activation funnel (eligible users)</p>
+        <p style="margin:0 0 6px;font-weight:700;color:#625c52;text-transform:uppercase;font-size:12px;">Activation funnel (eligible users)</p>
         <table style="border-collapse:collapse;">${funnelRows}</table>
-        <p style="margin:18px 0 0;color:#75695A;font-size:12px;">Informational only — no action taken, nothing sent to users. Matches carry no timestamp, so that stage is a level, not a weekly delta.</p>
+        <p style="margin:18px 0 0;color:#625c52;font-size:12px;">Informational only — no action taken, nothing sent to users. Matches carry no timestamp, so that stage is a level, not a weekly delta.</p>
       </div>
     </div></body></html>`;
 }

@@ -29,15 +29,15 @@ const FOOTER_TEXT  = "\n\n—\nYou're receiving this as a verified HavenIQ membe
   + 'To stop these occasional nudges, unsubscribe here: {{unsubUrl}}';
 
 function shell(bodyHtml) {
-  return `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#FBF1EA;margin:0;padding:40px 20px;">
+  return `<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f0e8;margin:0;padding:40px 20px;">
     <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-      <div style="background:#A33625;padding:28px;text-align:center;">
+      <div style="background:#3f6a57;padding:28px;text-align:center;">
         <p style="font-size:26px;font-weight:800;color:#fff;margin:0;">HavenIQ ✦</p>
       </div>
-      <div style="padding:32px;color:#2D2620;font-size:15px;line-height:1.6;">${bodyHtml}</div>
-      <div style="background:#FBF1EA;padding:18px 32px;text-align:center;border-top:1px solid #E8DCC6;">
-        <p style="color:#75695A;font-size:12px;margin:0;">You're receiving this as a verified HavenIQ member.
-          <a href="{{unsubUrl}}" style="color:#A33625;">Unsubscribe</a>.</p>
+      <div style="padding:32px;color:#22201d;font-size:15px;line-height:1.6;">${bodyHtml}</div>
+      <div style="background:#f4f0e8;padding:18px 32px;text-align:center;border-top:1px solid #efe8dd;">
+        <p style="color:#625c52;font-size:12px;margin:0;">You're receiving this as a verified HavenIQ member.
+          <a href="{{unsubUrl}}" style="color:#3f6a57;">Unsubscribe</a>.</p>
       </div>
     </div></body></html>`;
 }
@@ -50,21 +50,21 @@ const TEMPLATES = {
     segment: 'quiz_incomplete',
     subject: 'Your HavenIQ matches are one quiz away',
     text: `Hi {{firstName}},\n\nYou signed up for HavenIQ but haven't finished the compatibility quiz yet — and it's the one thing standing between you and your roommate matches. It takes about ten minutes.\n\nPick it back up: ${APP_URL}\n\n— HavenIQ${FOOTER_TEXT}`,
-    html: shell(`<p>Hi {{firstName}},</p><p>You signed up for HavenIQ but haven't finished the compatibility quiz yet — and it's the one thing standing between you and your roommate matches. It takes about ten minutes.</p><p><a href="${APP_URL}" style="color:#A33625;font-weight:600;">Pick up your quiz →</a></p><p style="color:#75695A;">— HavenIQ</p>`),
+    html: shell(`<p>Hi {{firstName}},</p><p>You signed up for HavenIQ but haven't finished the compatibility quiz yet — and it's the one thing standing between you and your roommate matches. It takes about ten minutes.</p><p><a href="${APP_URL}" style="color:#3f6a57;font-weight:600;">Pick up your quiz →</a></p><p style="color:#625c52;">— HavenIQ</p>`),
   },
   matches_waiting: {
     id: 'matches_waiting_v1',
     segment: 'matches_waiting',
     subject: 'Your roommate matches are ready ✦',
     text: `Hi {{firstName}},\n\nYour compatibility quiz is done and your matches are ready to browse. Open HavenIQ to see who you lined up with and send your first connect request.\n\n${APP_URL}\n\n— HavenIQ${FOOTER_TEXT}`,
-    html: shell(`<p>Hi {{firstName}},</p><p>Your compatibility quiz is done and your matches are ready to browse. Open HavenIQ to see who you lined up with and send your first connect request.</p><p><a href="${APP_URL}" style="color:#A33625;font-weight:600;">See your matches →</a></p><p style="color:#75695A;">— HavenIQ</p>`),
+    html: shell(`<p>Hi {{firstName}},</p><p>Your compatibility quiz is done and your matches are ready to browse. Open HavenIQ to see who you lined up with and send your first connect request.</p><p><a href="${APP_URL}" style="color:#3f6a57;font-weight:600;">See your matches →</a></p><p style="color:#625c52;">— HavenIQ</p>`),
   },
   invited_nobody: {
     id: 'invited_nobody_v1',
     segment: 'invited_nobody',
     subject: 'Know someone still looking for a roommate?',
     text: `Hi {{firstName}},\n\nThe more good people on HavenIQ, the better everyone's matches. If a friend is still figuring out their housing, send them your referral link — it's in your Settings.\n\n${APP_URL}\n\n— HavenIQ${FOOTER_TEXT}`,
-    html: shell(`<p>Hi {{firstName}},</p><p>The more good people on HavenIQ, the better everyone's matches. If a friend is still figuring out their housing, send them your referral link — it's in your Settings.</p><p><a href="${APP_URL}" style="color:#A33625;font-weight:600;">Grab your referral link →</a></p><p style="color:#75695A;">— HavenIQ</p>`),
+    html: shell(`<p>Hi {{firstName}},</p><p>The more good people on HavenIQ, the better everyone's matches. If a friend is still figuring out their housing, send them your referral link — it's in your Settings.</p><p><a href="${APP_URL}" style="color:#3f6a57;font-weight:600;">Grab your referral link →</a></p><p style="color:#625c52;">— HavenIQ</p>`),
   },
 };
 

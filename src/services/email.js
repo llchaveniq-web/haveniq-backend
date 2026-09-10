@@ -44,25 +44,25 @@ async function sendOTPEmail(email, code, firstName = '', userId = null) {
       html: `
         <!DOCTYPE html>
         <html>
-          <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FBF1EA; margin:0; padding:40px 20px;">
+          <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f4f0e8; margin:0; padding:40px 20px;">
             <div style="max-width:480px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-              <div style="background:#A33625; padding:32px; text-align:center;">
+              <div style="background:#3f6a57; padding:32px; text-align:center;">
                 <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
                 <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Your perfect roommate match</p>
               </div>
               <div style="padding:40px 32px;">
-                <p style="color:#2D2620; font-size:16px; margin:0 0 24px;">${greeting}</p>
-                <p style="color:#75695A; font-size:15px; line-height:1.6; margin:0 0 32px;">
+                <p style="color:#22201d; font-size:16px; margin:0 0 24px;">${greeting}</p>
+                <p style="color:#625c52; font-size:15px; line-height:1.6; margin:0 0 32px;">
                   Use the code below to verify your .edu email and access your HavenIQ matches.
                 </p>
-                <div style="background:#FBF1EA; border:2px dashed #A33625; border-radius:16px; padding:28px; text-align:center; margin-bottom:32px;">
-                  <p style="font-size:48px; font-weight:900; color:#A33625; letter-spacing:12px; margin:0;">${code}</p>
+                <div style="background:#f4f0e8; border:2px dashed #3f6a57; border-radius:16px; padding:28px; text-align:center; margin-bottom:32px;">
+                  <p style="font-size:48px; font-weight:900; color:#3f6a57; letter-spacing:12px; margin:0;">${code}</p>
                 </div>
-                <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0 0 8px;">⏱ This code expires in <strong>10 minutes</strong>.</p>
-                <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0;">🔒 HavenIQ will <strong>never</strong> call, text, or email you asking for this code.</p>
+                <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0 0 8px;">⏱ This code expires in <strong>10 minutes</strong>.</p>
+                <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0;">🔒 HavenIQ will <strong>never</strong> call, text, or email you asking for this code.</p>
               </div>
-              <div style="background:#FBF1EA; padding:20px 32px; text-align:center; border-top:1px solid #E8DCC6;">
-                <p style="color:#75695A; font-size:12px; margin:0;">
+              <div style="background:#f4f0e8; padding:20px 32px; text-align:center; border-top:1px solid #efe8dd;">
+                <p style="color:#625c52; font-size:12px; margin:0;">
                   You're receiving this because someone entered your .edu email on HavenIQ. If this wasn't you, ignore this email.
                 </p>
               </div>
@@ -88,9 +88,9 @@ async function sendMatchEmail(toEmail, toName, matchName, score, userId = null) 
       text: `Hi ${toName}! You have a new match on HavenIQ.\n\n${matchName} is ${score}% compatible with you. Open HavenIQ to see their full profile and connect.\n\nHavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#A33625;">Hi ${toName}! You have a new match ✦</h2>
-          <p style="color:#75695A;"><strong>${matchName}</strong> is <strong>${score}% compatible</strong> with you.</p>
-          <p style="color:#75695A;">Open HavenIQ to see their full profile and connect.</p>
+          <h2 style="color:#3f6a57;">Hi ${toName}! You have a new match ✦</h2>
+          <p style="color:#625c52;"><strong>${matchName}</strong> is <strong>${score}% compatible</strong> with you.</p>
+          <p style="color:#625c52;">Open HavenIQ to see their full profile and connect.</p>
         </div>
       `,
     });
@@ -126,35 +126,35 @@ async function sendParentMatchEmail({ parentEmail, studentName, matchName, match
     html: `
       <!DOCTYPE html>
       <html>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FBF1EA; margin:0; padding:40px 20px;">
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f4f0e8; margin:0; padding:40px 20px;">
           <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-            <div style="background:#A33625; padding:32px; text-align:center;">
+            <div style="background:#3f6a57; padding:32px; text-align:center;">
               <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
               <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Roommate matching for verified college students</p>
             </div>
             <div style="padding:36px 32px;">
-              <p style="color:#2D2620; font-size:17px; margin:0 0 16px;">Hi there,</p>
-              <p style="color:#2D2620; font-size:15px; line-height:1.6; margin:0 0 20px;">
+              <p style="color:#22201d; font-size:17px; margin:0 0 16px;">Hi there,</p>
+              <p style="color:#22201d; font-size:15px; line-height:1.6; margin:0 0 20px;">
                 <strong>${studentName}</strong> shared your email when they signed up for HavenIQ so we could let you know about big milestones. Here's the first one:
               </p>
-              <div style="background:#FBF1EA; border-left:4px solid #A33625; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
-                <p style="font-size:18px; color:#2D2620; margin:0 0 6px; font-weight:600;">${studentName} just matched with ${matchName}.</p>
-                <p style="font-size:14px; color:#75695A; margin:0;">${pctLine}</p>
+              <div style="background:#f4f0e8; border-left:4px solid #3f6a57; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
+                <p style="font-size:18px; color:#22201d; margin:0 0 6px; font-weight:600;">${studentName} just matched with ${matchName}.</p>
+                <p style="font-size:14px; color:#625c52; margin:0;">${pctLine}</p>
               </div>
-              <p style="color:#2D2620; font-size:14px; line-height:1.7; margin:0 0 18px;">
+              <p style="color:#22201d; font-size:14px; line-height:1.7; margin:0 0 18px;">
                 <strong>Why we tell you:</strong> Roommate decisions are big. We want you in the loop, not by sharing ${studentName}'s private profile, but by letting you know that the person they matched with is:
               </p>
-              <ul style="color:#2D2620; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 24px;">
+              <ul style="color:#22201d; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 24px;">
                 <li><strong>.edu verified:</strong> confirmed enrollment at ${matchSchool}</li>
-                <li><strong>Quiz-matched:</strong> 17-question clinical compatibility framework, not just preferences</li>
+                <li><strong>Quiz-matched:</strong> an 18-question clinical compatibility framework, not just preferences</li>
                 <li><strong>Anti-scam protected:</strong> contact details stay hidden until both students are .edu-verified and mutually agree to share them</li>
               </ul>
-              <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0 0 8px;">
+              <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0 0 8px;">
                 We won't email you about every match, just the first one. ${studentName} added your email and can remove it anytime in the HavenIQ app.
               </p>
             </div>
-            <div style="background:#FBF1EA; padding:18px 32px; text-align:center; border-top:1px solid #E8DCC6;">
-              <p style="color:#75695A; font-size:12px; margin:0;">HavenIQ · California-first roommate matching · haveniq.org</p>
+            <div style="background:#f4f0e8; padding:18px 32px; text-align:center; border-top:1px solid #efe8dd;">
+              <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · California-first roommate matching · haveniq.org</p>
             </div>
           </div>
         </body>
@@ -185,34 +185,34 @@ async function sendParentInviteEmail({ parentEmail, studentName, userId = null }
     html: `
       <!DOCTYPE html>
       <html>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FBF1EA; margin:0; padding:40px 20px;">
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f4f0e8; margin:0; padding:40px 20px;">
           <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-            <div style="background:#A33625; padding:32px; text-align:center;">
+            <div style="background:#3f6a57; padding:32px; text-align:center;">
               <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
               <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Roommate matching for verified college students</p>
             </div>
             <div style="padding:36px 32px;">
-              <p style="color:#2D2620; font-size:17px; margin:0 0 16px;">Hi there,</p>
-              <p style="color:#2D2620; font-size:15px; line-height:1.7; margin:0 0 20px;">
+              <p style="color:#22201d; font-size:17px; margin:0 0 16px;">Hi there,</p>
+              <p style="color:#22201d; font-size:15px; line-height:1.7; margin:0 0 20px;">
                 <strong>${name}</strong> added your email to their HavenIQ account so you can stay in the loop on their roommate search, one of the bigger decisions of the college year.
               </p>
-              <div style="background:#FBF1EA; border-left:4px solid #A33625; padding:18px 22px; border-radius:8px; margin:0 0 22px;">
-                <p style="font-size:14px; color:#2D2620; margin:0 0 10px; font-weight:600;">What you'll get:</p>
-                <p style="font-size:14px; color:#75695A; line-height:1.7; margin:0;">
+              <div style="background:#f4f0e8; border-left:4px solid #3f6a57; padding:18px 22px; border-radius:8px; margin:0 0 22px;">
+                <p style="font-size:14px; color:#22201d; margin:0 0 10px; font-weight:600;">What you'll get:</p>
+                <p style="font-size:14px; color:#625c52; line-height:1.7; margin:0;">
                   A heads-up at big milestones, like when ${name} connects with a roommate, including that the match is <strong>.edu&nbsp;verified</strong>. That's it. No spam.
                 </p>
               </div>
-              <p style="color:#2D2620; font-size:14px; line-height:1.7; margin:0 0 8px;"><strong>What we'll never share:</strong></p>
-              <ul style="color:#75695A; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 22px;">
+              <p style="color:#22201d; font-size:14px; line-height:1.7; margin:0 0 8px;"><strong>What we'll never share:</strong></p>
+              <ul style="color:#625c52; font-size:14px; line-height:1.8; padding-left:20px; margin:0 0 22px;">
                 <li>${name}'s private messages</li>
                 <li>Their match activity, preferences, or quiz answers</li>
               </ul>
-              <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0;">
+              <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0;">
                 ${name} added your email and can remove it anytime in the HavenIQ app.
               </p>
             </div>
-            <div style="background:#FBF1EA; padding:18px 32px; text-align:center; border-top:1px solid #E8DCC6;">
-              <p style="color:#75695A; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
+            <div style="background:#f4f0e8; padding:18px 32px; text-align:center; border-top:1px solid #efe8dd;">
+              <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
             </div>
           </div>
         </body>
@@ -241,40 +241,40 @@ async function sendWelcomeEmail(email, userId = null) {
     html: `
       <!DOCTYPE html>
       <html>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FBF1EA; margin:0; padding:40px 20px;">
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f4f0e8; margin:0; padding:40px 20px;">
           <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-            <div style="background:#A33625; padding:36px; text-align:center;">
+            <div style="background:#3f6a57; padding:36px; text-align:center;">
               <p style="font-size:32px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
               <p style="color:rgba(255,255,255,0.85); margin:6px 0 0; font-size:14px;">Roommate matching for verified college students</p>
             </div>
             <div style="padding:36px 32px;">
-              <p style="color:#2D2620; font-size:18px; margin:0 0 18px; font-weight:600;">You're in. Welcome to HavenIQ.</p>
-              <p style="color:#2D2620; font-size:15px; line-height:1.7; margin:0 0 22px;">
+              <p style="color:#22201d; font-size:18px; margin:0 0 18px; font-weight:600;">You're in. Welcome to HavenIQ.</p>
+              <p style="color:#22201d; font-size:15px; line-height:1.7; margin:0 0 22px;">
                 Every account on HavenIQ has a verified academic email, including yours now. No catfishing, no scammers, no marketing bots. Just real students looking for the right person to live with.
               </p>
 
-              <div style="background:#FBF1EA; border-left:4px solid #A33625; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
-                <p style="font-size:15px; color:#2D2620; margin:0 0 12px; font-weight:600;">3 things to do this week:</p>
-                <p style="font-size:14px; color:#75695A; line-height:1.8; margin:0;">
-                  <strong>1.</strong> Take the quiz. ~3 minutes, 17 questions, clinical-framework backed.<br/>
+              <div style="background:#f4f0e8; border-left:4px solid #3f6a57; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
+                <p style="font-size:15px; color:#22201d; margin:0 0 12px; font-weight:600;">3 things to do this week:</p>
+                <p style="font-size:14px; color:#625c52; line-height:1.8; margin:0;">
+                  <strong>1.</strong> Take the quiz. 10 questions to get matched, about two minutes. Eight more sharpen it.<br/>
                   <strong>2.</strong> Add a photo + a few real sentences on how you actually live. Specific beats generic.<br/>
                   <strong>3.</strong> Browse your matches and send your first connect request.
                 </p>
               </div>
 
-              <p style="color:#2D2620; font-size:14px; line-height:1.7; margin:0 0 18px;">
+              <p style="color:#22201d; font-size:14px; line-height:1.7; margin:0 0 18px;">
                 <strong>One thing to know:</strong> the quiz isn't a personality test for fun. It's how we predict roommate compatibility from things like attachment style, conflict patterns, and sleep schedule. The more honestly you answer, the better the matches.
               </p>
 
-              <p style="color:#75695A; font-size:13px; line-height:1.7; margin:0 0 8px;">
-                Questions? Hit us at <a href="mailto:support@haveniq.org" style="color:#A33625; text-decoration:none;">support@haveniq.org</a>.
+              <p style="color:#625c52; font-size:13px; line-height:1.7; margin:0 0 8px;">
+                Questions? Hit us at <a href="mailto:support@haveniq.org" style="color:#3f6a57; text-decoration:none;">support@haveniq.org</a>.
               </p>
-              <p style="color:#75695A; font-size:13px; line-height:1.7; margin:0;">
+              <p style="color:#625c52; font-size:13px; line-height:1.7; margin:0;">
                 See you in the matches feed.
               </p>
             </div>
-            <div style="background:#FBF1EA; padding:18px 32px; text-align:center; border-top:1px solid #E8DCC6;">
-              <p style="color:#75695A; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
+            <div style="background:#f4f0e8; padding:18px 32px; text-align:center; border-top:1px solid #efe8dd;">
+              <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
             </div>
           </div>
         </body>
@@ -311,20 +311,20 @@ async function sendSafetyAlertEmail({ reportId, category, severity, reason, deta
             </div>
             <div style="padding:24px;">
               <table style="width:100%; font-size:14px; color:#111827; border-collapse:collapse;">
-                <tr><td style="padding:6px 0; color:#75695A; width:120px;">Report ID</td><td style="padding:6px 0; font-family:monospace;">${reportId}</td></tr>
-                <tr><td style="padding:6px 0; color:#75695A;">Category</td><td style="padding:6px 0;"><strong>${category}</strong></td></tr>
-                <tr><td style="padding:6px 0; color:#75695A;">Severity</td><td style="padding:6px 0;"><strong>${severity}</strong></td></tr>
-                ${reason ? `<tr><td style="padding:6px 0; color:#75695A;">Reason</td><td style="padding:6px 0;">${reason}</td></tr>` : ''}
-                ${reporterId ? `<tr><td style="padding:6px 0; color:#75695A;">Reporter</td><td style="padding:6px 0; font-family:monospace;">${reporterId}</td></tr>` : '<tr><td style="padding:6px 0; color:#75695A;">Reporter</td><td style="padding:6px 0;"><em>anonymous</em></td></tr>'}
-                ${reportedId ? `<tr><td style="padding:6px 0; color:#75695A;">Reported user</td><td style="padding:6px 0; font-family:monospace;">${reportedId}</td></tr>` : ''}
+                <tr><td style="padding:6px 0; color:#625c52; width:120px;">Report ID</td><td style="padding:6px 0; font-family:monospace;">${reportId}</td></tr>
+                <tr><td style="padding:6px 0; color:#625c52;">Category</td><td style="padding:6px 0;"><strong>${category}</strong></td></tr>
+                <tr><td style="padding:6px 0; color:#625c52;">Severity</td><td style="padding:6px 0;"><strong>${severity}</strong></td></tr>
+                ${reason ? `<tr><td style="padding:6px 0; color:#625c52;">Reason</td><td style="padding:6px 0;">${reason}</td></tr>` : ''}
+                ${reporterId ? `<tr><td style="padding:6px 0; color:#625c52;">Reporter</td><td style="padding:6px 0; font-family:monospace;">${reporterId}</td></tr>` : '<tr><td style="padding:6px 0; color:#625c52;">Reporter</td><td style="padding:6px 0;"><em>anonymous</em></td></tr>'}
+                ${reportedId ? `<tr><td style="padding:6px 0; color:#625c52;">Reported user</td><td style="padding:6px 0; font-family:monospace;">${reportedId}</td></tr>` : ''}
               </table>
               ${details ? `
                 <div style="margin-top:18px; padding:14px; background:#F9FAFB; border-radius:8px; border-left:3px solid #DC2626;">
-                  <p style="margin:0 0 6px; font-size:12px; color:#75695A; text-transform:uppercase; letter-spacing:0.5px;">Details</p>
+                  <p style="margin:0 0 6px; font-size:12px; color:#625c52; text-transform:uppercase; letter-spacing:0.5px;">Details</p>
                   <p style="margin:0; font-size:14px; color:#111827; line-height:1.6; white-space:pre-wrap;">${details}</p>
                 </div>
               ` : ''}
-              <p style="margin:18px 0 0; font-size:12px; color:#75695A;">
+              <p style="margin:18px 0 0; font-size:12px; color:#625c52;">
                 Triage in Railway → user_reports table, or hit GET /admin/reports with founder auth.
               </p>
             </div>
@@ -363,34 +363,34 @@ async function sendFounderSignupAlert({
       subject: `🎯 New HavenIQ signup: ${email}`,
       html: `
         <!DOCTYPE html>
-        <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#F6EEDF; margin:0; padding:32px 16px;">
+        <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#f4f0e8; margin:0; padding:32px 16px;">
           <div style="max-width:560px; margin:0 auto; background:#fff; border-radius:16px; overflow:hidden;">
-            <div style="padding:24px 28px; border-bottom:1px solid #E8DCC6;">
-              <p style="margin:0; font-size:13px; color:#75695A; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">New signup · awaiting review</p>
-              <p style="margin:6px 0 0; font-size:22px; font-weight:700; color:#2D2620;">${safeFirstName} · ${safeSchool}</p>
+            <div style="padding:24px 28px; border-bottom:1px solid #efe8dd;">
+              <p style="margin:0; font-size:13px; color:#625c52; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">New signup · awaiting review</p>
+              <p style="margin:6px 0 0; font-size:22px; font-weight:700; color:#22201d;">${safeFirstName} · ${safeSchool}</p>
             </div>
             <div style="padding:24px 28px;">
-              <p style="margin:0 0 16px; color:#2D2620; font-size:15px; line-height:1.6;">
+              <p style="margin:0 0 16px; color:#22201d; font-size:15px; line-height:1.6;">
                 A new user just signed up. Eyeball the details, then paste one of the SQL lines below into Railway → Postgres → Query.
               </p>
               <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
-                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">Email</td><td style="padding:6px 0; color:#2D2620; font-size:14px; font-weight:600;">${email}</td></tr>
-                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">School</td><td style="padding:6px 0; color:#2D2620; font-size:14px;">${safeSchool}</td></tr>
-                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">Domain</td><td style="padding:6px 0; color:#2D2620; font-size:14px;">${schoolDomain || '—'}</td></tr>
-                <tr><td style="padding:6px 0; color:#75695A; font-size:13px;">User ID</td><td style="padding:6px 0; color:#75695A; font-size:12px; font-family:monospace;">${newUserId}</td></tr>
+                <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">Email</td><td style="padding:6px 0; color:#22201d; font-size:14px; font-weight:600;">${email}</td></tr>
+                <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">School</td><td style="padding:6px 0; color:#22201d; font-size:14px;">${safeSchool}</td></tr>
+                <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">Domain</td><td style="padding:6px 0; color:#22201d; font-size:14px;">${schoolDomain || '—'}</td></tr>
+                <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">User ID</td><td style="padding:6px 0; color:#625c52; font-size:12px; font-family:monospace;">${newUserId}</td></tr>
               </table>
 
-              <p style="margin:0 0 8px; color:#75695A; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">✅ Approve (paste into Railway)</p>
-              <div style="background:#F1E6D2; border-radius:8px; padding:12px; margin-bottom:18px;">
-                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#2D2620; word-break:break-all;">UPDATE users SET is_verified = TRUE WHERE id = '${newUserId}';</code>
+              <p style="margin:0 0 8px; color:#625c52; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">✅ Approve (paste into Railway)</p>
+              <div style="background:#dde8e0; border-radius:8px; padding:12px; margin-bottom:18px;">
+                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#22201d; word-break:break-all;">UPDATE users SET is_verified = TRUE WHERE id = '${newUserId}';</code>
               </div>
 
-              <p style="margin:0 0 8px; color:#75695A; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">❌ Reject (paste into Railway)</p>
+              <p style="margin:0 0 8px; color:#625c52; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">❌ Reject (paste into Railway)</p>
               <div style="background:#FAE5E5; border-radius:8px; padding:12px;">
-                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#2D2620; word-break:break-all;">UPDATE users SET is_banned = TRUE, ban_reason = 'failed manual review', banned_at = NOW() WHERE id = '${newUserId}';</code>
+                <code style="font-family: 'SF Mono', Menlo, monospace; font-size:12px; color:#22201d; word-break:break-all;">UPDATE users SET is_banned = TRUE, ban_reason = 'failed manual review', banned_at = NOW() WHERE id = '${newUserId}';</code>
               </div>
 
-              <p style="margin:24px 0 0; color:#75695A; font-size:12px; line-height:1.5;">
+              <p style="margin:24px 0 0; color:#625c52; font-size:12px; line-height:1.5;">
                 Tip: come back in 24 hours and run<br>
                 <code style="font-family:monospace; font-size:11px;">SELECT id, email, school, first_name, photo_url, bio FROM users WHERE is_verified = FALSE AND is_banned = FALSE AND created_at &gt; NOW() - INTERVAL '7 days' ORDER BY created_at DESC;</code><br>
                 for a batch view of everyone pending.
@@ -436,50 +436,50 @@ async function sendParentDigestEmail({
       subject: `${safeStudent}'s HavenIQ week`,
       html: `
         <!DOCTYPE html>
-        <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#F6EEDF; margin:0; padding:32px 16px;">
+        <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#f4f0e8; margin:0; padding:32px 16px;">
           <div style="max-width:560px; margin:0 auto; background:#fff; border-radius:16px; overflow:hidden;">
             <div style="padding:32px 28px 16px; text-align:center;">
-              <p style="margin:0; font-size:13px; color:#75695A; letter-spacing:0.8px; text-transform:uppercase; font-weight:600;">Weekly digest</p>
-              <p style="margin:8px 0 0; font-size:24px; font-weight:700; color:#2D2620; font-family:'Fraunces', serif;">${safeStudent}'s HavenIQ week</p>
+              <p style="margin:0; font-size:13px; color:#625c52; letter-spacing:0.8px; text-transform:uppercase; font-weight:600;">Weekly digest</p>
+              <p style="margin:8px 0 0; font-size:24px; font-weight:700; color:#22201d; font-family:'Fraunces', serif;">${safeStudent}'s HavenIQ week</p>
             </div>
 
             <div style="padding:16px 28px 8px;">
-              <p style="margin:0 0 20px; color:#75695A; font-size:14px; line-height:1.6;">
+              <p style="margin:0 0 20px; color:#625c52; font-size:14px; line-height:1.6;">
                 A short, private summary of how ${safeStudent}'s roommate search is going. We don't share match names or messages, only their activity. They control what they share with you directly.
               </p>
 
               <table style="width:100%; border-collapse:collapse; margin-bottom:20px;">
                 <tr>
-                  <td style="padding:14px; background:#F1E6D2; border-radius:12px 0 0 12px; text-align:center;">
-                    <p style="margin:0; font-size:28px; font-weight:800; color:#A33625;">${matchesThisWeek}</p>
-                    <p style="margin:4px 0 0; font-size:11px; color:#75695A; text-transform:uppercase; letter-spacing:0.5px;">New matches</p>
+                  <td style="padding:14px; background:#dde8e0; border-radius:12px 0 0 12px; text-align:center;">
+                    <p style="margin:0; font-size:28px; font-weight:800; color:#3f6a57;">${matchesThisWeek}</p>
+                    <p style="margin:4px 0 0; font-size:11px; color:#625c52; text-transform:uppercase; letter-spacing:0.5px;">New matches</p>
                   </td>
-                  <td style="padding:14px; background:#F1E6D2; text-align:center; border-left:1px solid #E8DCC6; border-right:1px solid #E8DCC6;">
-                    <p style="margin:0; font-size:28px; font-weight:800; color:#A33625;">${connectionsThisWeek}</p>
-                    <p style="margin:4px 0 0; font-size:11px; color:#75695A; text-transform:uppercase; letter-spacing:0.5px;">Connected</p>
+                  <td style="padding:14px; background:#dde8e0; text-align:center; border-left:1px solid #efe8dd; border-right:1px solid #efe8dd;">
+                    <p style="margin:0; font-size:28px; font-weight:800; color:#3f6a57;">${connectionsThisWeek}</p>
+                    <p style="margin:4px 0 0; font-size:11px; color:#625c52; text-transform:uppercase; letter-spacing:0.5px;">Connected</p>
                   </td>
-                  <td style="padding:14px; background:#F1E6D2; border-radius:0 12px 12px 0; text-align:center;">
-                    <p style="margin:0; font-size:28px; font-weight:800; color:#A33625;">${conversationsActive}</p>
-                    <p style="margin:4px 0 0; font-size:11px; color:#75695A; text-transform:uppercase; letter-spacing:0.5px;">Active chats</p>
+                  <td style="padding:14px; background:#dde8e0; border-radius:0 12px 12px 0; text-align:center;">
+                    <p style="margin:0; font-size:28px; font-weight:800; color:#3f6a57;">${conversationsActive}</p>
+                    <p style="margin:4px 0 0; font-size:11px; color:#625c52; text-transform:uppercase; letter-spacing:0.5px;">Active chats</p>
                   </td>
                 </tr>
               </table>
 
-              <p style="margin:8px 0 6px; color:#2D2620; font-size:14px; font-weight:600;">Profile progress</p>
-              <div style="background:#F1E6D2; border-radius:8px; height:8px; overflow:hidden; margin-bottom:8px;">
-                <div style="background:#A33625; height:100%; width:${pct}%;"></div>
+              <p style="margin:8px 0 6px; color:#22201d; font-size:14px; font-weight:600;">Profile progress</p>
+              <div style="background:#dde8e0; border-radius:8px; height:8px; overflow:hidden; margin-bottom:8px;">
+                <div style="background:#3f6a57; height:100%; width:${pct}%;"></div>
               </div>
-              <p style="margin:0 0 16px; color:#75695A; font-size:12px;">
+              <p style="margin:0 0 16px; color:#625c52; font-size:12px;">
                 ${pct}% complete · ${hasQuizCompleted ? 'Compatibility quiz ✓' : 'Quiz pending'} · ${hasPhoto ? 'Photo ✓' : 'No photo yet'}
               </p>
 
-              <p style="margin:24px 0 8px; color:#2D2620; font-size:14px; line-height:1.6;">
+              <p style="margin:24px 0 8px; color:#22201d; font-size:14px; line-height:1.6;">
                 Want a deeper look or have questions? ${safeStudent} can show you the full app anytime — they have direct control over what's shared.
               </p>
             </div>
 
-            <div style="padding:20px 28px; background:#F6EEDF; border-top:1px solid #E8DCC6;">
-              <p style="margin:0; font-size:11px; color:#75695A; line-height:1.5; text-align:center;">
+            <div style="padding:20px 28px; background:#f4f0e8; border-top:1px solid #efe8dd;">
+              <p style="margin:0; font-size:11px; color:#625c52; line-height:1.5; text-align:center;">
                 You're receiving this because ${safeStudent} added your email as a parent contact on HavenIQ.
                 <br>
                 To stop these digests, ${safeStudent} can remove your email from their profile settings.
@@ -508,9 +508,9 @@ async function sendConnectRequestEmail(toEmail, toName, fromName, score, userId 
       text: `Hi ${toName} — ${fromName}${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ. Open HavenIQ to see their profile and accept or pass.\n\n— HavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#a33625;">Hi ${toName} — someone wants to connect ✦</h2>
-          <p style="color:#57423d;"><strong>${fromName}</strong>${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ.</p>
-          <p style="color:#57423d;">Open HavenIQ to see their profile and accept or pass.</p>
+          <h2 style="color:#3f6a57;">Hi ${toName} — someone wants to connect ✦</h2>
+          <p style="color:#625c52;"><strong>${fromName}</strong>${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ.</p>
+          <p style="color:#625c52;">Open HavenIQ to see their profile and accept or pass.</p>
         </div>
       `,
     });
@@ -533,9 +533,9 @@ async function sendNewMessageEmail(toEmail, toName, fromName, userId = null) {
       text: `Hi ${toName} — ${fromName} just messaged you on HavenIQ. Open HavenIQ to read it and reply.\n\n— HavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#a33625;">Hi ${toName} — you have a new message</h2>
-          <p style="color:#57423d;"><strong>${fromName}</strong> just messaged you on HavenIQ.</p>
-          <p style="color:#57423d;">Open HavenIQ to read it and reply.</p>
+          <h2 style="color:#3f6a57;">Hi ${toName} — you have a new message</h2>
+          <p style="color:#625c52;"><strong>${fromName}</strong> just messaged you on HavenIQ.</p>
+          <p style="color:#625c52;">Open HavenIQ to read it and reply.</p>
         </div>
       `,
     });
@@ -559,19 +559,19 @@ async function sendSupportReplyEmail({ toEmail, toName, replyBody, originalMessa
     html: `
       <!DOCTYPE html>
       <html>
-        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FBF1EA; margin:0; padding:40px 20px;">
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f4f0e8; margin:0; padding:40px 20px;">
           <div style="max-width:520px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-            <div style="background:#A33625; padding:28px; text-align:center;">
+            <div style="background:#3f6a57; padding:28px; text-align:center;">
               <p style="font-size:26px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
             </div>
             <div style="padding:32px;">
-              <p style="color:#2D2620; font-size:16px; margin:0 0 16px;">Hi ${safe(toName) || 'there'},</p>
-              <p style="color:#2D2620; font-size:15px; line-height:1.7; margin:0 0 22px; white-space:pre-wrap;">${safe(replyBody)}</p>
-              ${originalMessage ? `<div style="background:#FBF1EA; border-left:4px solid #A33625; padding:14px 18px; border-radius:8px; margin:0 0 22px;">
-                <p style="font-size:12px; color:#75695A; margin:0 0 6px; text-transform:uppercase; letter-spacing:0.5px;">You wrote:</p>
-                <p style="font-size:14px; color:#75695A; line-height:1.6; margin:0; white-space:pre-wrap;">${safe(originalMessage).slice(0, 1000)}</p>
+              <p style="color:#22201d; font-size:16px; margin:0 0 16px;">Hi ${safe(toName) || 'there'},</p>
+              <p style="color:#22201d; font-size:15px; line-height:1.7; margin:0 0 22px; white-space:pre-wrap;">${safe(replyBody)}</p>
+              ${originalMessage ? `<div style="background:#f4f0e8; border-left:4px solid #3f6a57; padding:14px 18px; border-radius:8px; margin:0 0 22px;">
+                <p style="font-size:12px; color:#625c52; margin:0 0 6px; text-transform:uppercase; letter-spacing:0.5px;">You wrote:</p>
+                <p style="font-size:14px; color:#625c52; line-height:1.6; margin:0; white-space:pre-wrap;">${safe(originalMessage).slice(0, 1000)}</p>
               </div>` : ''}
-              <p style="color:#75695A; font-size:13px; line-height:1.6; margin:0;">Just reply to this email if you need anything else — it comes straight to us.</p>
+              <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0;">Just reply to this email if you need anything else — it comes straight to us.</p>
             </div>
           </div>
         </body>
@@ -589,13 +589,13 @@ async function sendSupportAckEmail(toEmail, toName) {
     reply_to: 'support@haveniq.org',
     subject:  'We got your message ✦',
     html: `
-      <!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#FBF1EA;margin:0;padding:40px 20px;">
+      <!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f0e8;margin:0;padding:40px 20px;">
         <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-          <div style="background:#A33625;padding:28px;text-align:center;"><p style="font-size:26px;font-weight:800;color:#fff;margin:0;">HavenIQ ✦</p></div>
+          <div style="background:#3f6a57;padding:28px;text-align:center;"><p style="font-size:26px;font-weight:800;color:#fff;margin:0;">HavenIQ ✦</p></div>
           <div style="padding:32px;">
-            <p style="color:#2D2620;font-size:16px;margin:0 0 16px;">Hi ${escapeHtml(toName || 'there')},</p>
-            <p style="color:#2D2620;font-size:15px;line-height:1.7;margin:0 0 18px;">Thanks for reaching out — we've got your message and a real person will get back to you. You can just reply to this email if you need to add anything.</p>
-            <p style="color:#75695A;font-size:13px;line-height:1.6;margin:0;">If it's urgent or you feel unsafe, contact your campus safety office or call 911.</p>
+            <p style="color:#22201d;font-size:16px;margin:0 0 16px;">Hi ${escapeHtml(toName || 'there')},</p>
+            <p style="color:#22201d;font-size:15px;line-height:1.7;margin:0 0 18px;">Thanks for reaching out — we've got your message and a real person will get back to you. You can just reply to this email if you need to add anything.</p>
+            <p style="color:#625c52;font-size:13px;line-height:1.6;margin:0;">If it's urgent or you feel unsafe, contact your campus safety office or call 911.</p>
           </div>
         </div>
       </body></html>`,
@@ -617,9 +617,9 @@ async function sendCrisisAlertEmail({ to, studentName, studentEmail, studentId, 
         <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
           <div style="background:#C0392B;padding:24px;"><p style="font-size:18px;font-weight:800;color:#fff;margin:0;">⚠️ Possible crisis signal</p></div>
           <div style="padding:28px;">
-            <p style="color:#2D2620;font-size:15px;line-height:1.7;margin:0 0 16px;">A message from <strong>${safe(studentName)}</strong> (${safe(studentEmail)}) tripped the self-harm / crisis detector. Consider checking in — a short, human "hey, are you okay?" can matter.</p>
-            <p style="color:#75695A;font-size:13px;line-height:1.6;margin:0 0 12px;">This is a heuristic detector, not a diagnosis — use your judgment. If you believe someone is in immediate danger, contact 911 or their campus safety office. The 988 Suicide &amp; Crisis Lifeline is available to share.</p>
-            <p style="color:#75695A;font-size:12px;margin:0;">Student ID: ${safe(studentId)}${conversationId ? ` · Conversation: ${safe(conversationId)}` : ''}</p>
+            <p style="color:#22201d;font-size:15px;line-height:1.7;margin:0 0 16px;">A message from <strong>${safe(studentName)}</strong> (${safe(studentEmail)}) tripped the self-harm / crisis detector. Consider checking in — a short, human "hey, are you okay?" can matter.</p>
+            <p style="color:#625c52;font-size:13px;line-height:1.6;margin:0 0 12px;">This is a heuristic detector, not a diagnosis — use your judgment. If you believe someone is in immediate danger, contact 911 or their campus safety office. The 988 Suicide &amp; Crisis Lifeline is available to share.</p>
+            <p style="color:#625c52;font-size:12px;margin:0;">Student ID: ${safe(studentId)}${conversationId ? ` · Conversation: ${safe(conversationId)}` : ''}</p>
           </div>
         </div>
       </body></html>`,
@@ -644,11 +644,11 @@ async function sendListingAlertEmail({ toEmail, toName, perPerson, beds, address
       text: `Hi ${toName},\n\nA new place just went up near your school.\n\n${where}\n$${perPerson}/mo per person — ${bedLabel}\n\nOpen HavenIQ to see it.\n\nYou're getting this because you asked to hear about new places. You can turn it off any time in the Housing tab.\n\nHavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#A33625;">A new place near you</h2>
-          <p style="color:#3F3A34;font-size:18px;margin:0 0 4px;"><strong>${escapeHtml(where)}</strong></p>
-          <p style="color:#75695A;margin:0 0 24px;">$${perPerson}/mo per person — ${bedLabel}</p>
-          <p style="color:#75695A;">Open HavenIQ to see it.</p>
-          <p style="color:#A39684;font-size:13px;margin-top:32px;">You're getting this because you asked to hear about new places near your school. You can turn it off any time in the Housing tab.</p>
+          <h2 style="color:#3f6a57;">A new place near you</h2>
+          <p style="color:#22201d;font-size:18px;margin:0 0 4px;"><strong>${escapeHtml(where)}</strong></p>
+          <p style="color:#625c52;margin:0 0 24px;">$${perPerson}/mo per person — ${bedLabel}</p>
+          <p style="color:#625c52;">Open HavenIQ to see it.</p>
+          <p style="color:#625c52;font-size:13px;margin-top:32px;">You're getting this because you asked to hear about new places near your school. You can turn it off any time in the Housing tab.</p>
         </div>
       `,
     });
