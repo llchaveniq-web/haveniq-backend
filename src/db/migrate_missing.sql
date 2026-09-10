@@ -1006,3 +1006,36 @@ ALTER TABLE connect_usage ADD COLUMN IF NOT EXISTS blocked INTEGER NOT NULL DEFA
 -- Yesterday's rows are never read. This keeps the "how many today" lookup on
 -- an index rather than a scan once the table has a season of history in it.
 CREATE INDEX IF NOT EXISTS idx_connect_usage_day ON connect_usage(day);
+
+-- ── users.is_demo ───────────────────────────────────────────────────────────
+--
+-- lib/demoFilter.js recognises a non-real account by the SHAPE of its address:
+-- a .test TLD, an @demo.* domain, an @*-demo.* domain. That works for accounts
+-- created by the cohort simulator, and not at all for accounts seeded by hand.
+--
+-- Production carried five seeded students on plain @usc.edu addresses
+-- (alex.chen, sam.okafor, jordan.lee, priya.shah, maya.rodriguez), created the
+-- same day, is_verified and quiz_completed both true. Nothing about those
+-- addresses is distinguishable from a real USC student, so every caller of
+-- notDemo() counted them as real: match feeds, signup stats, and lifecycle
+-- marketing email.
+--
+-- The email is what cost something. They were sent lifecycle mail, it hard
+-- bounced at USC, and Resend suppressed them: twenty suppressed sends in a
+-- window of a hundred, every one to a seeded address. Repeated hard bounces at
+-- a university domain is exactly what erodes a sending reputation, and that
+-- reputation is what decides whether real verification codes land at
+-- Microsoft-hosted schools. CSULB student mail is
+-- student-csulb-edu.mail.protection.outlook.com, so it is precisely that kind
+-- of filter.
+--
+-- A flag, not another pattern. These addresses are indistinguishable from real
+-- ones by shape, which is the whole problem: any ILIKE broad enough to catch
+-- alex.chen@usc.edu would also catch a real student at USC.
+--
+-- demoFilter.js's own closing note has prescribed this column for a while.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Partial: the column is false for essentially every row, so the index only
+-- needs to describe the handful that are not.
+CREATE INDEX IF NOT EXISTS idx_users_is_demo ON users(is_demo) WHERE is_demo;
