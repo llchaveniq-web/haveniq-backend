@@ -7,12 +7,19 @@
 // meaningful. This file is that lookup table.
 //
 // It mirrors the 18 questions the app actually asks — frontend
-// constants/quiz.ts SCORED_IDS: 14, 48–57, 60, 62, 63, 65–67 (14 lifestyle /
-// behavioral + 3 stress-response). Older removed questions (attachment, Big
+// constants/quiz.ts SCORED_IDS: 14, 48–57, 60, 62, 63, 65–67, 76 (15 lifestyle
+// / behavioral + 3 stress-response). Older removed questions (attachment, Big
 // Five, HEXACO, etc. from the pre-2026 60-question set) were dropped: no
 // student can answer them, so every consumer's id->text lookup already
 // skipped them. IDs stay non-contiguous — preserved from the original set.
 // If the frontend quiz text changes, mirror the change here.
+//
+// Q76 (pets) was the one that proved this comment cannot be trusted on its
+// own. The count here was corrected from 17 to 18 while the file still held
+// seventeen entries, so the header asserted a question that was not in it.
+// quizQuestions.idSet.test.js now parses this very enumeration and compares it
+// to the entries below, because the two drifting apart is the failure that
+// actually happened.
 
 module.exports = [
   {
@@ -199,6 +206,17 @@ module.exports = [
       "Need to step away and cool off first",
       "Go along to keep the peace",
       "Get quiet and let it simmer"
+    ]
+  },
+  {
+    "id": 76,
+    "category": "lifestyle",
+    "text": "Do you have a pet, or plan to bring one?",
+    "options": [
+      "No pet, and no plans to",
+      "No pet now, but I might want one",
+      "Yes, I have one",
+      "Yes, more than one"
     ]
   }
 ];
