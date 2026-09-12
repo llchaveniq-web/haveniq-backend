@@ -6,6 +6,7 @@ const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { notDemo } = require('../lib/demoFilter');
 const { dailyLimit } = require('../lib/connectQuota');
+const QUIZ_QUESTIONS = require('../data/quizQuestions');
 const { generateApiSecret, hashApiKey } = require('../lib/apiKeys');
 const { audit } = require('../services/auditLog');
 
@@ -320,17 +321,29 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
     // needs each user to have quiz_answers. Without this step the
     // demos exist but never appear in any feed.
     //
-    // We generate deterministic-ish random answers via random()::INT
-    // across all 26 questions. Index 0-2 keeps every answer within
-    // the valid range for both 3-option AND 4-option questions, so
-    // the scoring engine never trips on out-of-range option indices.
+    // Answers are generated per question from data/quizQuestions.js, the same
+    // mirror the AI prompts read, rather than from a list copied next to it.
     //
-    // The 26 question IDs are pulled from data/quizQuestions.js
-    // (non-contiguous because the v5 quiz preserved IDs from the
-    // original 60-question set).
-    const QUIZ_IDS = [1,3,9,14,15,17,22,25,29,31,32,33,35,37,38,42,45,47,50,54,55,57,58,60];
-    const answersJsonExpr = QUIZ_IDS
-      .map(id => `'${id}', (random() * 2)::INT`)
+    // The copied list had gone stale in both directions: it named 24 ids under
+    // a comment claiming 26, and only six of them (14, 50, 54, 55, 57, 60) are
+    // still scored. The other eighteen are dead ids from the pre-2026
+    // 60-question set that no student can answer, while twelve of the eighteen
+    // live questions got no answer at all.
+    //
+    // That is not cosmetic. scoring.js counts a question toward maxScore only
+    // when BOTH users answered it, so a demo seeded this way scored against a
+    // real student on at most six of eighteen questions and still displayed an
+    // ordinary-looking percentage, with nothing to say it rested on a third of
+    // the quiz. These demos appear in real students' feeds; that is the whole
+    // reason this INSERT exists.
+    //
+    // Reading the mirror also means the option index can respect each
+    // question's real option count instead of being clamped to 0-2 to stay
+    // safe for 3-option questions, so 4-option questions now use their fourth
+    // option. IDs stay non-contiguous, preserved from the original set.
+    const QUIZ_IDS = QUIZ_QUESTIONS.map(q => q.id);
+    const answersJsonExpr = QUIZ_QUESTIONS
+      .map(q => `'${q.id}', (random() * ${Math.max(0, q.options.length - 1)})::INT`)
       .join(', ');
     const insertQuizAnswers = await pool.query(`
       INSERT INTO quiz_answers (user_id, answers, completed)
