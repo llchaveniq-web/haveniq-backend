@@ -8,6 +8,7 @@ const { notDemo } = require('../lib/demoFilter');
 const { dailyLimit } = require('../lib/connectQuota');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { ENGINE_FLOOR, LIQUIDITY_FLOOR, LIQUIDITY_SQL } = require('../lib/liquidity');
+const { fetchReferralLoop, shapeReferralLoop } = require('../lib/referralLoop');
 const QUIZ_QUESTIONS = require('../data/quizQuestions');
 const { generateApiSecret, hashApiKey } = require('../lib/apiKeys');
 const { audit } = require('../services/auditLog');
@@ -643,7 +644,7 @@ async function computeMetrics() {
   // The free-tier cap, read the same way the enforcement path reads it, so the
   // dashboard can never disagree with what students are actually hitting.
   const freeLimit = dailyLimit();
-  const [users, schools, outcomes, shapes, lastRun, reports, banned, paywall, liquidity] = await Promise.all([
+  const [users, schools, outcomes, shapes, lastRun, reports, banned, paywall, liquidity, loop] = await Promise.all([
     // User + school counts exclude demo/test accounts (both demo domains) so the
     // dashboard reflects real traction, not seed inflation. Safety counts below
     // are intentionally left unfiltered.
@@ -684,6 +685,7 @@ async function computeMetrics() {
       [freeLimit],
     ),
     pool.query(LIQUIDITY_SQL, [MATCH_MIN_SCORE, ENGINE_FLOOR]),
+    fetchReferralLoop(pool),
   ]);
 
   return {
@@ -723,6 +725,10 @@ async function computeMetrics() {
         gapToLiquidity:   Math.max(0, LIQUIDITY_FLOOR - r.worst),
       })),
     },
+    // Whether this campus is growing itself yet. See src/lib/referralLoop.js
+    // for why this is the REALIZED loop rather than the invites-sent k-factor
+    // the playbook describes: the send half lives in PostHog, which is dark.
+    referralLoop: shapeReferralLoop(loop),
     matching: {
       outcomesLogged:  outcomes.rows[0].n,
       certifiedShapes: shapes.rows.map(r => ({ qid: r.qid, type: r.type })),
