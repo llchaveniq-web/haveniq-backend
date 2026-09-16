@@ -15,6 +15,8 @@
 // like one.
 const { Client } = require('pg');
 const { ENGINE_FLOOR, LIQUIDITY_FLOOR, LIQUIDITY_SQL } = require('../src/lib/liquidity');
+const { fetchReferralLoop, shapeReferralLoop } = require('../src/lib/referralLoop');
+const { notDemo } = require('../src/lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../src/lib/matchConfig');
 
 const SEED = process.argv.includes('--seed');
@@ -48,9 +50,19 @@ const SEED_SQL = `
 
   // The headline the dashboard showed before this metric existed, printed
   // alongside it, because the whole point is that the two disagree.
+  //
+  // It must carry the SAME demo filter /admin/metrics applies, or this script
+  // lies in the one place it exists to tell the truth. The first version did
+  // not, and on a database with 50 seeded demo accounts it printed "64 <- the
+  // number the dashboard used to show" against a dashboard that says 14. A
+  // comparison whose two sides are computed differently is not a comparison.
   const naive = await c.query(
     `SELECT school, COUNT(*)::int AS quiz_complete
-       FROM users WHERE quiz_completed IS TRUE AND school <> '' GROUP BY school ORDER BY 2 DESC`);
+       FROM users
+      WHERE quiz_completed IS TRUE AND school <> ''
+        AND COALESCE(is_banned, FALSE) = FALSE
+        AND ${notDemo('email')}
+      GROUP BY school ORDER BY 2 DESC`);
   const { rows } = await c.query(LIQUIDITY_SQL, [MATCH_MIN_SCORE, ENGINE_FLOOR]);
 
   console.log('feed floor ' + MATCH_MIN_SCORE + ', engine floor ' + ENGINE_FLOOR
@@ -66,5 +78,19 @@ const SEED_SQL = `
     console.log('   gap to a self-sustaining campus: ' + Math.max(0, LIQUIDITY_FLOOR - r.worst));
   }
   if (!rows.length) console.log('no campus has a matchable cohort yet');
+
+  // The other half of the go/no-go: is the campus growing itself, or is every
+  // student on it one you recruited by hand. Same script because both numbers
+  // are read at the same moment and neither means much alone.
+  console.log('');
+  console.log('referral loop (k = new quiz-complete students per student already here)');
+  for (const r of shapeReferralLoop(await fetchReferralLoop(c))) {
+    console.log('   ' + r.school);
+    console.log('      referrers / referred signups / of those in the pool : '
+      + r.referrers + ' / ' + r.referredSignups + ' / ' + r.referredQuizComplete);
+    console.log('      k : ' + (r.k === null
+      ? 'withheld, fewer than ' + r.kSuppressedBelow + ' students to divide by'
+      : r.k + (r.k >= 1 ? '   <- self-sustaining' : '')));
+  }
   await c.end();
 })().catch(e => { console.error(e.message); process.exit(1); });
