@@ -6,6 +6,8 @@ const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { generateOTP, sendOTPEmail } = require('../services/email');
 const { notDemo } = require('../lib/demoFilter');
 const { dailyLimit } = require('../lib/connectQuota');
+const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
+const { ENGINE_FLOOR, LIQUIDITY_FLOOR, LIQUIDITY_SQL } = require('../lib/liquidity');
 const QUIZ_QUESTIONS = require('../data/quizQuestions');
 const { generateApiSecret, hashApiKey } = require('../lib/apiKeys');
 const { audit } = require('../services/auditLog');
@@ -641,7 +643,7 @@ async function computeMetrics() {
   // The free-tier cap, read the same way the enforcement path reads it, so the
   // dashboard can never disagree with what students are actually hitting.
   const freeLimit = dailyLimit();
-  const [users, schools, outcomes, shapes, lastRun, reports, banned, paywall] = await Promise.all([
+  const [users, schools, outcomes, shapes, lastRun, reports, banned, paywall, liquidity] = await Promise.all([
     // User + school counts exclude demo/test accounts (both demo domains) so the
     // dashboard reflects real traction, not seed inflation. Safety counts below
     // are intentionally left unfiltered.
@@ -681,6 +683,7 @@ async function computeMetrics() {
           AND ${notDemo('u.email')}`,
       [freeLimit],
     ),
+    pool.query(LIQUIDITY_SQL, [MATCH_MIN_SCORE, ENGINE_FLOOR]),
   ]);
 
   return {
@@ -693,6 +696,33 @@ async function computeMetrics() {
     schools: schools.rows.map(r => ({
       school: r.school, users: r.users, verified: r.verified, quizCompleted: r.quiz_completed,
     })),
+    // The go/no-go number for opening a campus. See LIQUIDITY_SQL above for
+    // what is and is not modelled.
+    liquidity: {
+      engineFloor:    ENGINE_FLOOR,
+      liquidityFloor: LIQUIDITY_FLOOR,
+      matchMinScore:  MATCH_MIN_SCORE,
+      schools: liquidity.rows.map(r => ({
+        school:  r.school,
+        // Students in the matchable cohort: quiz done, not paused, not banned.
+        // Smaller than schools[].quizCompleted above, which counts paused and
+        // banned students too.
+        cohort:  r.cohort,
+        // How many other students each one can actually reach, at the bottom
+        // of the distribution and in the middle. worst and p10 are the numbers
+        // that decide; median flatters a lopsided campus.
+        worst:   r.worst,
+        p10:     r.p10,
+        median:  r.median,
+        // Students for whom the optimizer cannot form even one suite. Any
+        // number above zero means this campus is dead for somebody, whatever
+        // its headline count says.
+        belowEngineFloor: r.below_engine_floor,
+        // Distance from the worst-served student to a campus that carries
+        // itself. Zero means crossed, by the estimate in LIQUIDITY_FLOOR.
+        gapToLiquidity:   Math.max(0, LIQUIDITY_FLOOR - r.worst),
+      })),
+    },
     matching: {
       outcomesLogged:  outcomes.rows[0].n,
       certifiedShapes: shapes.rows.map(r => ({ qid: r.qid, type: r.type })),
