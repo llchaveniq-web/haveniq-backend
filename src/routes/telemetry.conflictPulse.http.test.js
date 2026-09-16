@@ -42,6 +42,12 @@ inject('../middleware/auth', {
   refuseBanned: (_q, _s, n) => n(),
 });
 inject('../services/email', { sendNewMessageEmail: async () => {}, sendSupportAckEmail: async () => {} });
+// conflictPulseJoin.js reuses matches.js's mayViewMatchDetail (same-campus-or-
+// connected gate) — this file's own tests are about the READ logic, not that
+// gate, so it's stubbed allow-by-default; the deny path gets its own test
+// below with a per-test override.
+let mayView = true;
+inject('./matches', { mayViewMatchDetail: async () => mayView });
 
 const express = require('express');
 const request = require('supertest');
@@ -59,6 +65,7 @@ const post = (events) => request(app).post('/telemetry/batch').send({ deviceId: 
 
 test.beforeEach(() => {
   telemetryInserts = []; cpInserts = []; cpInsertThrows = false; cpSelectRows = [];
+  mayView = true;
   require('../services/conflictPulses')._resetTableReady();
 });
 
@@ -129,4 +136,18 @@ test('GET /conflict-pulse/:matchId rejects a read about yourself (400)', async (
   const res = await request(app).get('/conflict-pulse/user-A'); // == req.user.id
   assert.equal(res.status, 400);
   assert.equal(res.body.ok, false);
+});
+
+// The gap this route shipped with: requireAuth alone let ANY authed user pass
+// ANY :matchId, with no check they were ever actually matched with that
+// person — the same bug class matches.js's /score-history, /openers, /explain
+// were already fixed for. This pins the fix: not-a-match must refuse, and
+// must never even reach the DB read.
+test('GET /conflict-pulse/:matchId refuses a non-match (403), and never reads their rows', async () => {
+  mayView = false;
+  cpSelectRows = [{ topic: 'guests', level: 1, raised: false, at: '100' }];
+  const res = await request(app).get('/conflict-pulse/some-stranger');
+  assert.equal(res.status, 403);
+  assert.equal(res.body.ok, false);
+  assert.equal(res.body.reads, undefined, 'no data leaks alongside the refusal');
 });

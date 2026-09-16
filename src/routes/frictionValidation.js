@@ -46,24 +46,41 @@ const MIN_COHORT_SAMPLE = 30;
 // no caller can ever route arbitrary text into the query.
 const GROUPABLE = new Set(['predictedFrictionCategory', 'predictedFrictionId']);
 
-async function aggregateFriction(column) {
+async function aggregateFriction(column, school) {
   if (!GROUPABLE.has(column)) throw new Error(`friction-validation: refusing to group by ${column}`);
+
+  // Optional campus scope: JOIN only when a school was actually requested, so
+  // the unscoped call site behaves byte-for-byte like before this existed.
+  // `school` is a bound param ($1), unlike `column` above — that one is a
+  // JSONB key name (can't be a $-param at all) and is allowlisted instead;
+  // this one is an ordinary value and gets parameterized normally.
+  const params = [];
+  let schoolJoin = '';
+  let schoolClause = '';
+  if (school) {
+    schoolJoin = 'JOIN users u ON u.id = mo.reporter_id';
+    schoolClause = "AND u.school IS NOT NULL AND lower(trim(u.school)) = lower(trim($1))";
+    params.push(school);
+  }
 
   const { rows } = await pool.query(
     `SELECT
-       details->>'${column}'                                             AS key,
-       count(*)                                                          AS n,
-       count(*) FILTER (WHERE details->>'frictionConfirmed' = 'yes')     AS confirmed_n,
-       count(*) FILTER (WHERE details->>'frictionConfirmed' IS NOT NULL) AS confirmed_reported_n,
-       count(*) FILTER (WHERE details->>'stressStretch' = 'clashed')     AS clashed_n,
-       count(*) FILTER (WHERE details->>'stressStretch' IS NOT NULL)     AS stress_reported_n,
-       count(*) FILTER (WHERE outcome = 'decided_not_to_continue')       AS dissolved_n,
-       avg((details->>'rating')::numeric)
-         FILTER (WHERE details->>'rating' IS NOT NULL)                   AS avg_rating
-     FROM match_outcomes
-     WHERE details->>'${column}' IS NOT NULL
-     GROUP BY details->>'${column}'
+       mo.details->>'${column}'                                             AS key,
+       count(*)                                                             AS n,
+       count(*) FILTER (WHERE mo.details->>'frictionConfirmed' = 'yes')     AS confirmed_n,
+       count(*) FILTER (WHERE mo.details->>'frictionConfirmed' IS NOT NULL) AS confirmed_reported_n,
+       count(*) FILTER (WHERE mo.details->>'stressStretch' = 'clashed')     AS clashed_n,
+       count(*) FILTER (WHERE mo.details->>'stressStretch' IS NOT NULL)     AS stress_reported_n,
+       count(*) FILTER (WHERE mo.outcome = 'decided_not_to_continue')       AS dissolved_n,
+       avg((mo.details->>'rating')::numeric)
+         FILTER (WHERE mo.details->>'rating' IS NOT NULL)                   AS avg_rating
+     FROM match_outcomes mo
+     ${schoolJoin}
+     WHERE mo.details->>'${column}' IS NOT NULL
+       ${schoolClause}
+     GROUP BY mo.details->>'${column}'
      ORDER BY n DESC`,
+    params,
   );
 
   return rows.map((r) => {
@@ -94,13 +111,23 @@ async function aggregateFriction(column) {
 // Two grains, same MIN_COHORT_SAMPLE floor: byCategory (coarser, clears the
 // floor faster) and byDetector (finer — compare detectors within a category and
 // retire the ones that don't predict).
+//
+// Optional ?school=<name> scopes both grains to one campus (docs/specs/
+// outcome-learning.md §1: "per campus once the campus clears the floor;
+// global otherwise") — this route is founder-only tooling, so unlike the
+// user-facing calibration endpoint, the founder picks the campus explicitly
+// rather than the backend guessing/falling back. Omitted entirely -> exact
+// previous global-pool behavior, unchanged for any existing caller.
 router.get('/admin/friction-validation', requireAuth, requireFounder, async (req, res) => {
   try {
+    const school = typeof req.query.school === 'string' && req.query.school.trim()
+      ? req.query.school.trim()
+      : null;
     const [byCategory, byDetector] = await Promise.all([
-      aggregateFriction('predictedFrictionCategory'),
-      aggregateFriction('predictedFrictionId'),
+      aggregateFriction('predictedFrictionCategory', school),
+      aggregateFriction('predictedFrictionId', school),
     ]);
-    res.json({ ok: true, byCategory, byDetector });
+    res.json({ ok: true, byCategory, byDetector, school });
   } catch (err) {
     console.error('[friction-validation] GET / failed', err.message);
     // Fail closed — never fabricate a rate on error.
