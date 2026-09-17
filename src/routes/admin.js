@@ -528,6 +528,64 @@ router.post('/users/:id/resend-otp', requireAuth, requireFounder, async (req, re
   }
 });
 
+/**
+ * POST /admin/signup-code  { email }  → { code, expiresAt }
+ *
+ * A code the founder can hand over by any channel that is not email.
+ *
+ * Every other rescue in this file keys on /users/:id, and a student stuck at
+ * the verification step HAS NO USER ROW: it is created at /verify-code, after
+ * the code is typed. So the one student who needs rescuing is the one none of
+ * them can reach. That is not hypothetical. The first real signup this product
+ * had asked for four codes at LBCC in eleven minutes, every one delivered,
+ * every one unread, and there was no way to get him in short of hoping the
+ * fifth escaped the filter.
+ *
+ * This returns the code instead of mailing it, which is the whole point: the
+ * student is already replying somewhere (a text, a DM), and that channel has no
+ * spam filter between him and the six digits. `send: true` also mails it, for
+ * when the founder wants both.
+ *
+ * Founder-only and audited. It is a real capability — anyone holding it can
+ * sign in as any address — so it is gated exactly like the review-approve and
+ * unlock routes above, it writes who issued it and for whom, and the code it
+ * mints is the ordinary one: hashed at rest, ten minutes, single use, and the
+ * attempt cap on /verify-code still applies.
+ */
+router.post('/signup-code', requireAuth, requireFounder, async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    // Same academic-TLD gate /auth/send-code applies. A founder should not be
+    // able to mint a code for a gmail address by typing it here.
+    const academicTldRegex = /\.(edu|edu\.(au|cn|mx|ph|sg|tr|in|ng|pk|hk|tw|my|id|br|co|pe|ar)|ac\.(uk|nz|jp|kr|in|za|il|th|ir|cn|ae))$/;
+    if (!email.includes('@') || !academicTldRegex.test(email.split('@')[1] || '')) {
+      return res.status(400).json({ error: 'Not a school email address.' });
+    }
+
+    // Clear anything pending for that address, including a burned or
+    // locked-out one, so this works on the fifth attempt as well as the first.
+    await pool.query('DELETE FROM otp_codes WHERE email = $1', [email]);
+    const code = generateOTP();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await pool.query(
+      "INSERT INTO otp_codes (email, code, expires_at, purpose) VALUES ($1, $2, $3, 'signup')",
+      [email, hashOtp(code), expiresAt],
+    );
+
+    let mailed = false;
+    if (req.body?.send === true) {
+      try { await sendOTPEmail(email, code); mailed = true; }
+      catch (e) { console.error('[admin/signup-code] email send failed:', e.message); }
+    }
+
+    console.warn(`[admin/signup-code] founder ${req.user?.email || req.user?.id} issued a code for ${email} (mailed=${mailed})`);
+    return res.json({ code, expiresAt, mailed });
+  } catch (err) {
+    console.error('[admin/signup-code] failed:', err);
+    return res.status(500).json({ error: 'could not issue a code' });
+  }
+});
+
 // POST /admin/users/:id/unlock — clear the OTP lockout/cooldown (the attempts
 // lockout the verify-code flow enforces) so the user can try again.
 router.post('/users/:id/unlock', requireAuth, requireFounder, async (req, res) => {
