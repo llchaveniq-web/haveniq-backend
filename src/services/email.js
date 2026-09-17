@@ -36,15 +36,48 @@ async function sendOTPEmail(email, code, firstName = '', userId = null) {
     await getResend().emails.send({
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      email,
-      subject: `${code} is your HavenIQ verification code`,
+      // Written to be found in a JUNK FOLDER, which is where this one lands.
+      //
+      // All four codes sent to an LBCC student on 2026-09-16 were DELIVERED,
+      // confirmed against Resend, and he never typed a digit. A .edu mailbox is
+      // Microsoft under a university's own filtering: the message got through
+      // the door and into a folder he did not open.
+      //
+      // A junk list gives no notification, no preview pane and no patience. A
+      // student sees one line: sender, subject, and on a phone about thirty-five
+      // characters of it. So the code leads, where truncation cannot reach it,
+      // and the rest is short enough to survive. This was "741800 is your
+      // HavenIQ verification code", forty characters, which cuts to
+      // "...HavenIQ verificatio" on a phone.
+      subject: `${code} is your HavenIQ code`,
       // Plain-text alternative — multipart emails land in the inbox far more
       // reliably than HTML-only, which .edu spam filters penalize. This is the
       // signup gate, so deliverability here gates the entire funnel.
-      text: `${greeting}\n\nYour HavenIQ verification code is: ${code}\n\nUse it to verify your .edu email and access your matches. This code expires in 10 minutes.\n\nHavenIQ will never call, text, or email you asking for this code. If this wasn't you, just ignore this email.\n\nHavenIQ`,
+      // The code leads here too: some clients preview the plain part, and a
+      // first line of "Hi there," tells a student scanning junk nothing.
+      text: `Your HavenIQ code is ${code}
+
+${greeting}
+
+Enter it in the app to verify your .edu email. It expires in 10 minutes.
+
+HavenIQ will never call, text, or email you asking for this code. If this wasn't you, just ignore this email.
+
+HavenIQ`,
       html: `
         <!DOCTYPE html>
         <html>
           <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f4f0e8; margin:0; padding:40px 20px;">
+            <!-- Preheader: the preview line a mail list shows after the subject.
+                 With none, the client grabs whatever text comes first, which was
+                 the brand header and a tagline. This is the SECOND line a
+                 student reads in a junk folder, so it carries the thing that
+                 matters. Hidden in the rendered mail, then padded so nothing
+                 else gets pulled in behind it. -->
+            <div style="display:none; max-height:0; overflow:hidden; opacity:0; mso-hide:all;">
+              Enter ${code} to finish verifying your school email. Expires in 10 minutes.
+              &#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;
+            </div>
             <div style="max-width:480px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
               <div style="background:#3f6a57; padding:32px; text-align:center;">
                 <p style="font-size:28px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
