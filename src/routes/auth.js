@@ -364,8 +364,27 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
     // Refuse to send OTPs to addresses Resend has flagged as
     // undeliverable. Without this we keep firing codes at dead
     // mailboxes, burning the per-email rate-limit budget for nothing.
+    // Two places, because at signup there is often no users row to read.
+    //
+    // This check only ever looked at `users`, and a student requesting a
+    // verification code has no users row: it is created at /verify-code, after
+    // the code is typed. So the one address whose bounce actually ends the
+    // funnel was the one address this could not see, and every retry sailed
+    // through and bounced again. The code row carries it now (see
+    // routes/resendWebhook.js).
     const { rows: badRows } = await pool.query(
-      'SELECT email_undeliverable_reason FROM users WHERE LOWER(email) = $1 AND email_undeliverable = TRUE',
+      `SELECT COALESCE(u.email_undeliverable_reason, o.delivery_status) AS email_undeliverable_reason
+         FROM (SELECT $1::text AS e) x
+         LEFT JOIN users u
+           ON LOWER(u.email) = x.e AND u.email_undeliverable = TRUE
+         LEFT JOIN LATERAL (
+           SELECT delivery_status FROM otp_codes
+            WHERE email = x.e
+              AND delivery_status IN ('bounced', 'complained')
+              AND created_at > NOW() - INTERVAL '7 days'
+            ORDER BY created_at DESC LIMIT 1
+         ) o ON TRUE
+        WHERE u.id IS NOT NULL OR o.delivery_status IS NOT NULL`,
       [emailLower],
     );
     if (badRows[0]) {

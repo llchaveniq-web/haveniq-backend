@@ -111,7 +111,30 @@ router.post('/', async (req, res) => {
           WHERE LOWER(email) = $2`,
         [reason, emailLower],
       );
-      console.warn(`[resend webhook] flagged ${emailLower}: ${reason}`);
+
+      // ALSO onto the code itself, because at signup there is no user row yet.
+      //
+      // This is how the first real signup was lost without a trace. The UPDATE
+      // above is the only place a bounce was ever recorded, and it keys on
+      // `users`. A student who asks for a verification code has no users row:
+      // it is created at /verify-code, after the code is typed. So a hard
+      // bounce on a VERIFICATION code, the one email whose failure ends the
+      // funnel, updated zero rows and was discarded. Nothing was flagged,
+      // nothing was logged, and send-code's own undeliverable check reads
+      // `users`, so the next attempt sailed straight through and bounced again.
+      //
+      // Four codes went to two LBCC addresses. attempts = 0 on every one: he
+      // never typed a digit, because nothing ever arrived. The system held no
+      // record of that at all.
+      const { rowCount } = await pool.query(
+        `UPDATE otp_codes
+            SET delivery_status = $1,
+                delivered_at    = NOW()
+          WHERE email = $2
+            AND created_at > NOW() - INTERVAL '1 day'`,
+        [reason === 'spam complaint' ? 'complained' : 'bounced', emailLower],
+      );
+      console.warn(`[resend webhook] flagged ${emailLower}: ${reason} (${rowCount} code row(s))`);
     } catch (err) {
       console.error('[resend webhook] DB update failed:', err.message);
     }
