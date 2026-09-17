@@ -67,9 +67,38 @@ router.post('/', async (req, res) => {
   if (!to || typeof to !== 'string') return res.json({ ok: true, skipped: 'no to' });
   const emailLower = to.trim().toLowerCase();
 
-  // Hard bounce + complaint = flag user. Soft bounces and delivery
-  // events are noise we don't act on (Resend retries soft bounces
-  // automatically; deliveries are just confirmation).
+  // Delivery events are NOT just confirmation.
+  //
+  // That is what this comment used to say, and it is the assumption that made
+  // the first real signup loss invisible. A student at LBCC asked for a code,
+  // could not find it, and never came back. Nothing bounced, because nothing
+  // failed: a message that lands in a university Junk folder is a DELIVERED
+  // message. Recording the delivery is the only way to tell "Resend handed it
+  // to the school and it is sitting in a filter" apart from "it never left",
+  // and those two need completely different answers.
+  if (type === 'email.delivered' || type === 'email.delivery_delayed') {
+    const status = type === 'email.delivered' ? 'delivered' : 'delayed';
+    try {
+      // The newest unused signup code for that address: the one the student is
+      // waiting on right now.
+      await pool.query(
+        `UPDATE otp_codes
+            SET delivery_status = $1,
+                delivered_at    = NOW()
+          WHERE id = (
+            SELECT id FROM otp_codes
+             WHERE email = $2 AND purpose = 'signup' AND used = FALSE
+             ORDER BY created_at DESC LIMIT 1
+          )`,
+        [status, emailLower],
+      );
+    } catch (err) {
+      console.error('[resend webhook] delivery record failed:', err.message);
+    }
+  }
+
+  // Hard bounce + complaint = flag user. Soft bounces are noise we don't act
+  // on (Resend retries them automatically).
   if (type === 'email.bounced' || type === 'email.complained') {
     const reason = type === 'email.complained'
       ? 'spam complaint'

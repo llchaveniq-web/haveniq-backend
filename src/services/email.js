@@ -659,7 +659,65 @@ async function sendListingAlertEmail({ toEmail, toName, perPerson, beds, address
   }
 }
 
+
+/**
+ * Tell the founder when a verification code went quiet.
+ *
+ * The existing founder alert fires on a COMPLETED signup, which is the moment
+ * nothing needs doing. The moment that costs a user is the other one: a
+ * student asked for a code and never came back with it. That happened at LBCC,
+ * to the first real signup this product had, and nobody knew until he
+ * mentioned it in passing.
+ *
+ * `delivery` is what Resend said happened to the message, which decides what
+ * the answer is. "delivered" and still unused means it is in a filter at the
+ * school and the student needs telling where to look. Nothing at all means it
+ * may never have left, and that is a different problem with a different fix.
+ */
+async function sendStalledSignupAlert({ email, school, minutesAgo, delivery, deliveredAt }) {
+  const adminEmail = process.env.ADMIN_ALERT_EMAIL || 'llchaveniq@gmail.com';
+  const domain = String(email || '').split('@')[1] || '(unknown)';
+  const verdict = delivery === 'delivered'
+    ? `Resend delivered it${deliveredAt ? ' at ' + new Date(deliveredAt).toISOString() : ''}. It is almost certainly in Junk or a quarantine digest at ${domain}.`
+    : delivery === 'delayed'
+      ? `Resend reports the school's mail server is DELAYING it. It may still arrive.`
+      : `No delivery event from Resend at all. It may not have left, or the webhook is not wired.`;
+
+  try {
+    await getResend().emails.send({
+      from:    'HavenIQ Signups <noreply@haveniq.org>',
+      to:      adminEmail,
+      subject: `Signup stalled: ${email} never used their code`,
+      text: `${email} (${school || 'no school picked'}) asked for a verification code ${minutesAgo} minutes ago and has not used it.
+
+${verdict}
+
+Reach out to them directly. A student who cannot find the code does not send a support ticket, they just leave.`,
+      html: `
+        <!DOCTYPE html>
+        <html><body style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#f4f0e8; margin:0; padding:32px 16px;">
+          <div style="max-width:560px; margin:0 auto; background:#fff; border-radius:16px; overflow:hidden;">
+            <div style="padding:24px 28px; border-bottom:1px solid #efe8dd;">
+              <p style="margin:0; font-size:13px; color:#625c52; letter-spacing:0.6px; text-transform:uppercase; font-weight:600;">Signup stalled</p>
+              <p style="margin:6px 0 0; font-size:22px; font-weight:700; color:#22201d;">${email}</p>
+              <p style="margin:6px 0 0; font-size:15px; color:#625c52;">${school || 'no school picked'} &middot; code sent ${minutesAgo} minutes ago, never used</p>
+            </div>
+            <div style="padding:24px 28px;">
+              <p style="margin:0 0 16px; color:#22201d; font-size:15px; line-height:1.6;">${verdict}</p>
+              <p style="margin:0; color:#625c52; font-size:14px; line-height:1.6;">
+                Reach out to them directly. A student who cannot find the code does not send a support ticket, they just leave.
+              </p>
+            </div>
+          </div>
+        </body></html>`,
+    });
+  } catch (err) {
+    console.error('[email] stalled signup alert failed:', err.message);
+  }
+}
+
 module.exports = {
+  sendStalledSignupAlert,
   generateOTP, sendOTPEmail, sendMatchEmail,
   sendListingAlertEmail,
   sendParentMatchEmail, sendParentInviteEmail,

@@ -1039,3 +1039,25 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS is_demo BOOLEAN NOT NULL DEFAULT FALS
 -- Partial: the column is false for essentially every row, so the index only
 -- needs to describe the handful that are not.
 CREATE INDEX IF NOT EXISTS idx_users_is_demo ON users(is_demo) WHERE is_demo;
+
+-- ── A verification code that was delivered and never found ──────────────────
+--
+-- A real student at LBCC asked for a code, could not find it, and did not sign
+-- up. Nobody knew until he said so, and nothing in this system could have told
+-- us: the Resend webhook handled bounces and complaints and dismissed delivery
+-- events as "just confirmation". A message that lands in a university Junk
+-- folder IS delivered. It never bounces. So the one failure mode that actually
+-- costs a first user was the one nothing recorded.
+--
+-- delivery_status / delivered_at: what Resend said happened to the code.
+-- stall_alerted_at: set when the founder has been told this one went quiet, so
+-- a student who asks for three codes does not produce three alerts.
+ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS delivery_status  TEXT;
+ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS delivered_at     TIMESTAMPTZ;
+ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS stall_alerted_at TIMESTAMPTZ;
+
+-- The stall sweep runs every few minutes and asks only about recent, unused,
+-- not-yet-alerted signup codes.
+CREATE INDEX IF NOT EXISTS idx_otp_codes_stall
+  ON otp_codes (created_at)
+  WHERE purpose = 'signup' AND used = FALSE AND stall_alerted_at IS NULL;

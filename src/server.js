@@ -710,6 +710,64 @@ server.listen(PORT, () => {
       console.error('[heal] could not start sweep:', err.message);
     }
   };
+  // ── Stalled-signup sweep ───────────────────────────────────────────────
+  //
+  // A student at LBCC asked for a verification code, could not find it, and did
+  // not sign up. Nothing in this system could have told anyone: the founder
+  // alert fires on a COMPLETED signup, which is the moment nothing needs doing,
+  // and a code that lands in a university Junk folder never bounces. The moment
+  // worth knowing about is the other one, and it has a shape: a code requested
+  // and never used.
+  //
+  // Fifteen minutes is long enough that a student who is simply reading their
+  // mail slowly has finished, and short enough that reaching out still lands
+  // while they are deciding. Two hours is the far edge: past that they are
+  // gone and the alert is archaeology.
+  let stallInFlight = false;
+  const runStallSweep = () => {
+    if (stallInFlight) return;
+    stallInFlight = true;
+    (async () => {
+      const { sendStalledSignupAlert } = require('./services/email');
+      // One row per ADDRESS, not per code: a student who asks three times is
+      // one stalled signup, not three.
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (o.email)
+                o.email, o.created_at, o.delivery_status, o.delivered_at,
+                u.school
+           FROM otp_codes o
+           LEFT JOIN users u ON LOWER(u.email) = o.email
+          WHERE o.purpose = 'signup'
+            AND o.used = FALSE
+            AND o.stall_alerted_at IS NULL
+            AND o.created_at < NOW() - INTERVAL '15 minutes'
+            AND o.created_at > NOW() - INTERVAL '2 hours'
+            AND COALESCE(u.is_verified, FALSE) = FALSE
+            AND COALESCE(u.is_demo, FALSE) = FALSE
+          ORDER BY o.email, o.created_at DESC`,
+      );
+      for (const r of rows) {
+        const minutesAgo = Math.round((Date.now() - new Date(r.created_at).getTime()) / 60000);
+        await sendStalledSignupAlert({
+          email: r.email, school: r.school, minutesAgo,
+          delivery: r.delivery_status, deliveredAt: r.delivered_at,
+        });
+        // Mark every outstanding code for that address, so a later one does not
+        // re-alert for the same stuck student.
+        await pool.query(
+          `UPDATE otp_codes SET stall_alerted_at = NOW()
+            WHERE email = $1 AND purpose = 'signup' AND used = FALSE AND stall_alerted_at IS NULL`,
+          [r.email],
+        );
+        console.warn(`[stall] signup went quiet: ${r.email} (${r.delivery_status || 'no delivery event'})`);
+      }
+    })()
+      .catch(err => console.error('[stall] sweep failed:', err.message))
+      .finally(() => { stallInFlight = false; });
+  };
+  setTimeout(runStallSweep, 2 * 60 * 1000);
+  setInterval(runStallSweep, 5 * 60 * 1000).unref?.();
+
   setTimeout(runPersonalityHeal, 90 * 1000);
   setInterval(runPersonalityHeal, 3 * 60 * 60 * 1000).unref?.();
 
