@@ -9,6 +9,7 @@ const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = requ
 const { checkPhotoSafety } = require('../services/photoSafety');
 const { applyPrimaryPhotoChange } = require('../lib/primaryPhoto');
 const { audit } = require('../services/auditLog');
+const webPush = require('../services/webPush');
 const { isFounder } = require('../utils/founders');
 const { notDemo } = require('../lib/demoFilter');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
@@ -1429,6 +1430,62 @@ router.post('/me/push-token', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('push-token error:', err);
     res.status(500).json({ error: 'Failed to save push token' });
+  }
+});
+
+// ── Web push (browser alerts) ───────────────────────────────────────────
+// The native push-token routes above only ever held Expo tokens, which reach
+// the phone app. Students arrive through the web app, so these hold the
+// browser side: see services/webPush.js for why this exists at all.
+//
+// GET returns the server's public VAPID key, or null when web push is not
+// configured, in which case the app hides the "turn on alerts" control
+// instead of asking the student for a permission nothing will use.
+router.get('/me/web-push/key', requireAuth, (req, res) => {
+  res.json({ publicKey: webPush.publicKey() });
+});
+
+// POST stores this browser's subscription for the signed in student. The
+// endpoint is unique per browser, so the same browser re-subscribing (every
+// app open does, to catch a rotated subscription) updates its row. A browser
+// that was signed in as someone else is MOVED to this account: the person
+// holding the browser now is the person who should get its alerts.
+router.post('/me/web-push', requireAuth, async (req, res) => {
+  try {
+    const sub = req.body && req.body.subscription;
+    if (!webPush.validSubscription(sub)) {
+      return res.status(400).json({ error: 'invalid subscription' });
+    }
+    const ua = String(req.get('user-agent') || '').slice(0, 300);
+    await pool.query(
+      `INSERT INTO web_push_subscriptions (user_id, endpoint, p256dh, auth, user_agent)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (endpoint) DO UPDATE
+         SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
+             user_agent = EXCLUDED.user_agent, failures = 0`,
+      [req.user.id, sub.endpoint, sub.keys.p256dh, sub.keys.auth, ua],
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('web-push subscribe error:', err);
+    res.status(500).json({ error: 'Failed to save subscription' });
+  }
+});
+
+// DELETE removes this browser's subscription, scoped to the caller so it
+// cannot strip anyone else's. The app calls it on sign out, for the same
+// shared-laptop reason the native DELETE below exists: otherwise the next
+// person to sign in on that browser gets the last one's message previews.
+router.delete('/me/web-push', requireAuth, async (req, res) => {
+  try {
+    const endpoint = req.body && req.body.endpoint;
+    const { rowCount } = typeof endpoint === 'string' && endpoint
+      ? await pool.query('DELETE FROM web_push_subscriptions WHERE endpoint = $1 AND user_id = $2', [endpoint, req.user.id])
+      : await pool.query('DELETE FROM web_push_subscriptions WHERE user_id = $1', [req.user.id]);
+    res.json({ success: true, removed: rowCount });
+  } catch (err) {
+    console.error('web-push unsubscribe error:', err);
+    res.status(500).json({ error: 'Failed to remove subscription' });
   }
 });
 

@@ -820,6 +820,7 @@ router.post('/logout-all', requireAuth, async (req, res) => {
     // handles ordinary sign-out; this covers "someone else might still
     // have my session" the same way tokens_valid_after does for API auth.
     await pool.query('DELETE FROM push_tokens WHERE user_id = $1', [req.user.id]).catch(() => {});
+    await pool.query('DELETE FROM web_push_subscriptions WHERE user_id = $1', [req.user.id]).catch(() => {});
     clearSessionCookie(res);
     res.json({ success: true });
   } catch (err) {

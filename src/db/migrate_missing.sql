@@ -1061,3 +1061,36 @@ ALTER TABLE otp_codes ADD COLUMN IF NOT EXISTS stall_alerted_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_otp_codes_stall
   ON otp_codes (created_at)
   WHERE purpose = 'signup' AND used = FALSE AND stall_alerted_at IS NULL;
+
+-- ── Web push: the only way to reach a student that is not their inbox ───────
+--
+-- The app is a web app, and until now web had no push at all: the app's
+-- pushNotifications.web.ts stubbed every call and reported permission denied.
+-- Every re-engagement message rode on email, and .edu mail at Microsoft
+-- schools (LBCC, CSULB) lands in Junk. One row per browser a student turned
+-- alerts on in; a student on a phone and a laptop has two.
+--
+-- endpoint is the push service URL the browser handed us, unique per browser
+-- subscription, so re-subscribing the same browser updates rather than piles
+-- up. p256dh/auth are the browser's encryption keys for the payload.
+-- failures counts consecutive send errors that were not a clean 404/410, so a
+-- subscription that has quietly died is dropped after a few tries.
+CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+  id               BIGSERIAL PRIMARY KEY,
+  user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  endpoint         TEXT NOT NULL UNIQUE,
+  p256dh           TEXT NOT NULL,
+  auth             TEXT NOT NULL,
+  user_agent       TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_success_at  TIMESTAMPTZ,
+  failures         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_web_push_user ON web_push_subscriptions(user_id);
+
+-- The "a compatible student just joined" alert, which did not exist in any
+-- form: scoring a new student wrote the rows and told nobody, while the
+-- Matches screen promised "we'll match you the second a compatible student
+-- joins". Stamped per recipient so a busy week sends one alert a day, not one
+-- per arrival.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_new_match_alert_at TIMESTAMPTZ;

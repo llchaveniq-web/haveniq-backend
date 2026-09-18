@@ -9,7 +9,7 @@ const { horizonFromMoveIn } = require('../services/trajectory');
 const textInsight = require('../services/textInsight');
 const { derivePersonality } = require('../services/personality');
 const { computePersonalityMatch, calibratePersonality } = require('../services/personalityPairing');
-const { notDemo } = require('../lib/demoFilter');
+const { notDemo, isDemoEmail } = require('../lib/demoFilter');
 const { MATCH_MIN_SCORE } = require('../lib/matchConfig');
 const { textToSpeech, transcribe } = require('../services/voice');
 const { analyzeVoiceEmotion } = require('../services/voiceEmotion');
@@ -442,7 +442,7 @@ router.post('/submit', requireAuth, aiLimiter, async (req, res) => {
     // clinical-quiz only — the submitting user's personality profile isn't
     // derived yet. A second pass below re-scores with the 60/40 MBTI/DISC/
     // OCEAN blend folded in once the profile exists.
-    scoreNewMatches(req.user.id, merged).catch(err =>
+    scoreNewMatches(req.user.id, merged, { notify: req.app.get('sendPushToUser') }).catch(err =>
       console.error('Async scoring error:', err)
     );
 
@@ -473,7 +473,7 @@ router.post('/submit', requireAuth, aiLimiter, async (req, res) => {
           profile.disc,
         ],
       ).catch(err => console.error('personality store failed:', err.message)))
-      .then(() => scoreNewMatches(req.user.id, merged))
+      .then(() => scoreNewMatches(req.user.id, merged, { notify: req.app.get('sendPushToUser') }))
       .catch(err => console.error('post-submit re-score failed:', err.message));
 
     res.json({ success: true, message: 'Quiz submitted. Calculating your matches...' });
@@ -484,7 +484,12 @@ router.post('/submit', requireAuth, aiLimiter, async (req, res) => {
 });
 
 // ── Async: score against all other completed users ────────────────────────
-async function scoreNewMatches(userId, newAnswers) {
+// opts.notify: pass sendPushToUser to tell existing students that a new,
+// compatible student has arrived. Only the moments a student actually JOINS
+// pass it (quiz submit, founder approve, bot approve). The rescore and repair
+// jobs call this for everyone and must not, or one maintenance run would ping
+// the whole school.
+async function scoreNewMatches(userId, newAnswers, opts = {}) {
   // Get school + the submitting user's dealbreakers (their "what matters
   // most" picks from profile setup). These get UNIONED with each candidate's
   // dealbreakers and passed into calculateCompatibility so flagged
@@ -656,6 +661,19 @@ async function scoreNewMatches(userId, newAnswers) {
     .join(', ');
   const params = rows.flat();
 
+  // Which pairs already existed BEFORE this write. A retake or a second
+  // scoring pass rewrites rows that are already there, and announcing those
+  // as "a new match just joined" would be false. Only asked for when the
+  // caller wants alerts, so the rescore jobs pay nothing for it.
+  const existingPairs = new Set();
+  if (opts.notify) {
+    const { rows: prior } = await pool.query(
+      'SELECT user_a, user_b FROM compatibility_scores WHERE user_a = $1 OR user_b = $1',
+      [userId],
+    ).catch(() => ({ rows: [] }));
+    for (const p of prior) existingPairs.add(`${p.user_a}|${p.user_b}`);
+  }
+
   await pool.query(
     `INSERT INTO compatibility_scores
        (user_a, user_b, score, is_hard_blocked, is_soft_blocked, shadow_penalty, breakdown, why_matched, pre_validation_pct, validation_multiplier, complementary_dims, converging_dims, confidence, under_pressure)
@@ -695,6 +713,66 @@ async function scoreNewMatches(userId, newAnswers) {
     const tier = tierFor(score);
     analytics.track(analytics.EVENTS.match_created, a, { other_user_id: b, score, tier });
     analytics.track(analytics.EVENTS.match_created, b, { other_user_id: a, score, tier });
+  }
+
+  if (opts.notify) {
+    const fresh = rows
+      .filter(([a, b, score, hardBlocked]) =>
+        !existingPairs.has(`${a}|${b}`) && !hardBlocked && Number(score) >= NEW_MATCH_ALERT_MIN)
+      .map(([a, b, score]) => ({ recipientId: String(a) === String(userId) ? b : a, score: Math.round(Number(score)) }));
+    await alertNewMatches(userId, fresh, opts.notify)
+      .catch(err => console.error('[new-match alert] failed:', err && err.message));
+  }
+}
+
+// ── "A new match just joined" ─────────────────────────────────────────────
+// The Matches screen has always told a student with an empty feed "we'll
+// match you the second a compatible student joins", and until this nothing
+// did: scoring wrote the rows, logged an analytics event, and told nobody.
+//
+// 65 is the bottom of the "surface" tier above: below it the pair is "low",
+// and pinging someone about a low fit would spend their trust on a match
+// they will open and dismiss.
+const NEW_MATCH_ALERT_MIN = 65;
+
+async function alertNewMatches(newcomerId, candidates, notify) {
+  if (!notify || !candidates.length) return;
+
+  // A seeded or test account arriving is not news to a real student.
+  const { rows: me } = await pool.query(
+    'SELECT email, is_demo FROM users WHERE id = $1', [newcomerId]);
+  if (!me[0] || me[0].is_demo || isDemoEmail(me[0].email)) return;
+
+  // One recipient can appear once per pair; keep their best score.
+  const best = new Map();
+  for (const c of candidates) {
+    const id = String(c.recipientId);
+    if (!best.has(id) || c.score > best.get(id)) best.set(id, c.score);
+  }
+
+  // Claim the recipients atomically. The stamp is the throttle (one alert a
+  // day each, so a busy week is not a stream of pings) and the claim is what
+  // stops two scoring passes of the same signup from alerting twice.
+  const { rows: claimed } = await pool.query(
+    `UPDATE users SET last_new_match_alert_at = NOW()
+      WHERE id = ANY($1::uuid[])
+        AND is_verified = TRUE
+        AND COALESCE(is_banned, FALSE) = FALSE
+        AND COALESCE(is_paused, FALSE) = FALSE
+        AND ${notDemo('email')}
+        AND (last_new_match_alert_at IS NULL
+             OR last_new_match_alert_at < NOW() - INTERVAL '20 hours')
+      RETURNING id`,
+    [[...best.keys()]],
+  );
+
+  for (const r of claimed) {
+    const score = best.get(String(r.id));
+    await Promise.resolve(notify(r.id, {
+      title: 'A new match just joined ✦',
+      body:  `Someone new fits how you live, ${score}% compatible. See why you match.`,
+      data:  { screen: 'matches' },
+    })).catch(err => console.error('[new-match alert] send failed:', err && err.message));
   }
 }
 
@@ -1143,5 +1221,7 @@ module.exports = router;
 // compatibility_scores). Attaching to the router export avoids moving the
 // live scoring code into a separate module.
 module.exports.scoreNewMatches    = scoreNewMatches;
+module.exports.alertNewMatches    = alertNewMatches;
+module.exports.NEW_MATCH_ALERT_MIN = NEW_MATCH_ALERT_MIN;
 module.exports.recomputeAllMatches = recomputeAllMatches;
 module.exports.healMissingPersonalities = healMissingPersonalities;

@@ -21,6 +21,7 @@ const helmet     = require('helmet');
 const rateLimit  = require('./lib/rateLimit');
 const pool       = require('./db/pool');
 const { requireAuth }  = require('./middleware/auth');
+const webPush = require('./services/webPush');
 const sentry            = require('./utils/sentry');
 const analytics         = require('./services/analytics');
 
@@ -553,7 +554,13 @@ app.use((err, req, res, next) => {
 });
 
 // ── Push notifications helper ─────────────────────────────────────────────
+// Every notification in the app goes through here, so this is where the web
+// joins in. Browsers first, in their own try, so a failing Expo call can never
+// cost a web student the alert, and the other way round.
 async function sendPushToUser(userId, { title, body, data }) {
+  await webPush.sendWebPushToUser(pool, userId, { title, body, data })
+    .catch(err => console.error('[webPush] fan-out failed:', err && err.message));
+
   const { rows } = await pool.query(
     'SELECT token FROM push_tokens WHERE user_id = $1',
     [userId]

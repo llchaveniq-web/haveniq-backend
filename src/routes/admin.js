@@ -115,7 +115,9 @@ router.post('/review/:userId/approve', requireAuth, requireFounder, async (req, 
       );
       if (qa[0]) {
         const { scoreNewMatches } = require('./quiz');
-        await scoreNewMatches(rows[0].id, qa[0].answers);
+        // Approval is when this student actually arrives for everyone else,
+        // so this is a join: tell compatible students (see alertNewMatches).
+        await scoreNewMatches(rows[0].id, qa[0].answers, { notify: req.app.get('sendPushToUser') });
       }
     } catch (err) {
       console.error('[admin/review/approve] post-approve scoring failed:', err.message);

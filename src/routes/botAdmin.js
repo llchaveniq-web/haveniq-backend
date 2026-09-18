@@ -151,7 +151,8 @@ router.post('/signup/:userId/approve', requireBotToken, async (req, res) => {
         );
         if (qa[0]) {
           const { scoreNewMatches } = require('./quiz');
-          await scoreNewMatches(userId, qa[0].answers);
+          // Approval is the join: tell compatible students (see alertNewMatches).
+          await scoreNewMatches(userId, qa[0].answers, { notify: req.app.get('sendPushToUser') });
         }
       } catch (err) {
         console.error('[botAdmin] post-approve scoring failed:', err.message);
