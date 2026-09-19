@@ -82,8 +82,8 @@ router.get('/activity-pulse', requireAuth, async (req, res) => {
       messages.push({
         icon: '⟳',
         text: n === 1
-          ? `1 of your top matches updated their answers this week — scores refreshing.`
-          : `${n} of your top matches updated their answers this week — scores refreshing.`,
+          ? `1 of your top matches updated their answers this week, so scores are refreshing.`
+          : `${n} of your top matches updated their answers this week, so scores are refreshing.`,
       });
     }
   } catch (e) { /* silent */ }

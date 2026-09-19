@@ -117,7 +117,7 @@ const DETECTORS = [
       id: 'friction_money', category: 'money', emoji: '💰',
       title: status ? 'You treat money differently' : 'One of you watches the money, the other tunes it out',
       mechanism: status
-        ? "One of you keeps a close eye on shared spending; the other spends more freely and aspirationally. The watchful one tends to feel the wasteful-spend sting first — it's the exact thing they said bothers them — and it compounds over rent, groceries, and utilities."
+        ? "One of you keeps a close eye on shared spending; the other spends more freely and aspirationally. The watchful one tends to feel the wasteful-spend sting first (it's the exact thing they said bothers them), and it compounds over rent, groceries, and utilities."
         : 'One of you tracks shared spending closely. The other tunes out money signals. The tracker will feel like the "responsible one" within a month. That resentment compounds fast.',
       mitigation: "Use Splitwise or HavenIQ's expense tracker from day one. Externalize the math so it's not one person mentally tallying. Auto-split bills so nobody has to ask.",
       severity: status ? 0.8 : 0.78,
@@ -137,11 +137,11 @@ const DETECTORS = [
       id: 'friction_contempt', category: 'communication', emoji: '💢',
       title: both ? "You'd both argue with an edge" : 'One of you argues with an edge',
       mechanism: both
-        ? 'You both said you can slip into eye-rolls, sighs, or mockery when frustrated. Contempt is the single strongest predictor of a relationship going bad, and here it could come from either side — so ordinary frustration can turn corrosive faster than you\'d expect.'
+        ? 'You both said you can slip into eye-rolls, sighs, or mockery when frustrated. Contempt is the single strongest predictor of a relationship going bad, and here it could come from either side, so ordinary frustration can turn corrosive faster than you\'d expect.'
         : (mine
-          ? "You said you can slip into eye-rolls, sighs, or mockery when frustrated with a roommate. That specific move — contempt — is the strongest known predictor of a relationship souring, so it's the one habit most worth catching early."
-          : "They said they can slip into eye-rolls, sighs, or mockery when frustrated with a roommate. That specific move — contempt — is the strongest known predictor of a relationship souring, so it's worth being ready to name it kindly if it shows up."),
-      mitigation: 'Set one rule together: no contempt in disagreements — no eye-rolls, no mocking tone, just the actual complaint said straight. When it slips, name it gently ("that felt sharp") and reset. Protecting this one habit matters more than winning any single argument.',
+          ? "You said you can slip into eye-rolls, sighs, or mockery when frustrated with a roommate. That specific move (contempt) is the strongest known predictor of a relationship souring, so it's the one habit most worth catching early."
+          : "They said they can slip into eye-rolls, sighs, or mockery when frustrated with a roommate. That specific move (contempt) is the strongest known predictor of a relationship souring, so it's worth being ready to name it kindly if it shows up."),
+      mitigation: 'Set one rule together: no contempt in disagreements: no eye-rolls, no mocking tone, just the actual complaint said straight. When it slips, name it gently ("that felt sharp") and reset. Protecting this one habit matters more than winning any single argument.',
       // Rests on one self-report each: real, but not near-certain.
       severity: both ? 0.9 : 0.8,
     };
@@ -173,8 +173,8 @@ const DETECTORS = [
       id: 'friction_drinking', category: 'substance', emoji: '🍷',
       title: 'You feel differently about drinking at home',
       mechanism: iAmLessOk
-        ? "You'd rather the home stay mostly dry; they're comfortable drinking here. It tends to surface around guests and weekends — and the discomfort is usually about the environment, not the person."
-        : "They'd rather the home stay mostly dry; you're comfortable drinking here. It tends to surface around guests and weekends — and the discomfort is usually about the environment, not the person.",
+        ? "You'd rather the home stay mostly dry; they're comfortable drinking here. It tends to surface around guests and weekends, and the discomfort is usually about the environment, not the person."
+        : "They'd rather the home stay mostly dry; you're comfortable drinking here. It tends to surface around guests and weekends, and the discomfort is usually about the environment, not the person.",
       mitigation: "Name what's okay before move-in: drinking alone vs with guests, how often, and whether the shared space stays clear. A clear line up front beats a tense comment in the moment.",
       severity: gapSev(Math.abs(a - b), 0.64, 0.78),
     };
@@ -196,9 +196,9 @@ const DETECTORS = [
       id: 'friction_mutual_avoidance', category: 'conflict', emoji: '🤐',
       title: "Neither of you is the one who'll bring things up",
       mechanism: bothBottle
-        ? "You both tend to say yes when you mean no, and you both tend to hold onto things rather than air them. With no one wired to raise the small stuff and no one quick to let it go, friction doesn't get resolved — it accumulates quietly on both sides until it spills over something minor."
+        ? "You both tend to say yes when you mean no, and you both tend to hold onto things rather than air them. With no one wired to raise the small stuff and no one quick to let it go, friction doesn't get resolved. It accumulates quietly on both sides until it spills over something minor."
         : "You both tend to say yes when you'd rather say no, so neither of you is the one who naturally brings a problem up early. Small things stay unspoken and build, because each of you is waiting for the other to raise it first.",
-      mitigation: 'Since neither of you defaults to speaking up, make it a ritual instead of a moment: a standing 10-minute weekly check-in with one question — "anything building up?" — and take turns going first. The structure does the job your instincts won\'t.',
+      mitigation: 'Since neither of you defaults to speaking up, make it a ritual instead of a moment: a standing 10-minute weekly check-in with one question ("anything building up?") and take turns going first. The structure does the job your instincts won\'t.',
       severity: bothBottle ? 0.82 : 0.7,
     };
   }},

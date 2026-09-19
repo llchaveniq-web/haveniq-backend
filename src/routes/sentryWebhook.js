@@ -165,7 +165,7 @@ Respond ONLY with JSON:
   "likely_line": <integer or null>,
   "root_cause":  "<2-3 sentences>",
   "bug_class":   "null_guard" | "missing_import" | "typo" | "web_platform_short_circuit" | "logic" | "config" | "other",
-  "fix_eligible": <boolean — is this in the safe auto-fix set (null_guard / missing_import / typo / web_platform_short_circuit)?>,
+  "fix_eligible": <boolean: is this in the safe auto-fix set (null_guard / missing_import / typo / web_platform_short_circuit)?>,
   "user_impact": "<one short sentence: what does the user see?>"
 }
 
@@ -201,10 +201,10 @@ async function postDiscordDiagnosis(issue, triage, fixDispatched) {
   };
   const color = colorMap[triage.severity] || 0x95A5A6;
   const fields = [
-    { name: 'Root cause', value: (triage.root_cause || '—').slice(0, 1000), inline: false },
+    { name: 'Root cause', value: (triage.root_cause || 'unknown').slice(0, 1000), inline: false },
     { name: 'Likely file', value: `\`${triage.likely_file || '?'}\`${triage.likely_line ? `:${triage.likely_line}` : ''}`, inline: true },
     { name: 'Bug class', value: triage.bug_class || '?', inline: true },
-    { name: 'User impact', value: (triage.user_impact || '—').slice(0, 300), inline: false },
+    { name: 'User impact', value: (triage.user_impact || 'unknown').slice(0, 300), inline: false },
     {
       name: fixDispatched ? '⚡ Auto-fix dispatched' : '👤 Manual review',
       value: fixDispatched
@@ -213,7 +213,7 @@ async function postDiscordDiagnosis(issue, triage, fixDispatched) {
           ? `File is in the hard-blocked list (payment/safety/schema). Fix manually.`
           : !triage.fix_eligible
             ? `Bug class "${triage.bug_class}" requires human judgement.`
-            : 'No clear file target — manual review.',
+            : 'No clear file target, needs manual review.',
       inline: false,
     },
   ];
@@ -223,7 +223,7 @@ async function postDiscordDiagnosis(issue, triage, fixDispatched) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       embeds: [{
-        title: `⚡ Tier 3 triage — ${triage.summary || issue.title || 'new Sentry issue'}`,
+        title: `⚡ Tier 3 triage: ${triage.summary || issue.title || 'new Sentry issue'}`,
         url: issue.permalink || undefined,
         description: `**Severity:** ${triage.severity?.toUpperCase() || '?'} · **Project:** ${issue.project?.slug || '?'} · **Issue:** ${issue.shortId || issue.id}`,
         color,
@@ -237,7 +237,7 @@ async function postDiscordDiagnosis(issue, triage, fixDispatched) {
 
 async function dispatchAutoFix(issueId) {
   if (!GH_FIX_TOKEN) {
-    console.warn('[sentry-webhook] GITHUB_FIX_TOKEN not set — skipping auto-fix dispatch');
+    console.warn('[sentry-webhook] GITHUB_FIX_TOKEN not set, skipping auto-fix dispatch');
     return false;
   }
   try {
@@ -333,7 +333,7 @@ router.post('/webhook', express.json({ limit: '1mb', verify: (req, res, buf) => 
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             embeds: [{
-              title: '⚠️ Sentry webhook — async processing failed',
+              title: '⚠️ Sentry webhook: async processing failed',
               description: '```' + String(err.message || err).slice(0, 1500) + '```',
               color: 0xD32F2F,
               fields: [{ name: 'Issue ID', value: String(issueId), inline: true }],

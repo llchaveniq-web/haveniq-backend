@@ -74,12 +74,12 @@ test('isSuccess: retention succeeds only on rating >= 4 (rating, not answer)', (
 
 // ── bandFor: correct boundaries ────────────────────────────────────────────
 test('bandFor: boundaries land in the right band', () => {
-  assert.equal(bandFor(100).band, '85–100');
-  assert.equal(bandFor(85).band, '85–100');
-  assert.equal(bandFor(84).band, '70–84');
-  assert.equal(bandFor(70).band, '70–84');
-  assert.equal(bandFor(69).band, '55–69');
-  assert.equal(bandFor(55).band, '55–69');
+  assert.equal(bandFor(100).band, '85 to 100');
+  assert.equal(bandFor(85).band, '85 to 100');
+  assert.equal(bandFor(84).band, '70 to 84');
+  assert.equal(bandFor(70).band, '70 to 84');
+  assert.equal(bandFor(69).band, '55 to 69');
+  assert.equal(bandFor(55).band, '55 to 69');
   assert.equal(bandFor(54).band, 'Below 55');
   assert.equal(bandFor(0).band, 'Below 55');
 });
@@ -126,9 +126,9 @@ test('computeCalibration: buckets, success rate, and shape are correct', () => {
   assert.equal(r.totalSample, 7);
   // Bands are emitted high→low, only non-empty ones.
   assert.deepEqual(r.bands, [
-    { band: '85–100',   min: 85, actualSuccess: 0.667, sampleSize: 3 },
-    { band: '70–84',    min: 70, actualSuccess: 0.5,   sampleSize: 2 },
-    { band: '55–69',    min: 55, actualSuccess: 0,     sampleSize: 1 },
+    { band: '85 to 100',   min: 85, actualSuccess: 0.667, sampleSize: 3 },
+    { band: '70 to 84',    min: 70, actualSuccess: 0.5,   sampleSize: 2 },
+    { band: '55 to 69',    min: 55, actualSuccess: 0,     sampleSize: 1 },
     { band: 'Below 55', min: 0,  actualSuccess: 1,     sampleSize: 1 },
   ]);
 });
@@ -138,7 +138,7 @@ test('computeCalibration: empty bands are omitted, not zero-padded', () => {
   assert.equal(r.ok, true);
   assert.equal(r.totalSample, 1);
   assert.equal(r.bands.length, 1);
-  assert.equal(r.bands[0].band, '85–100');
+  assert.equal(r.bands[0].band, '85 to 100');
 });
 
 test('computeCalibration: rating arrives as a string (from JSONB ->>)', () => {
@@ -148,7 +148,7 @@ test('computeCalibration: rating arrives as a string (from JSONB ->>)', () => {
   ]);
   assert.equal(r.totalSample, 2);
   assert.deepEqual(r.bands, [
-    { band: '85–100', min: 85, actualSuccess: 0.5, sampleSize: 2 },
+    { band: '85 to 100', min: 85, actualSuccess: 0.5, sampleSize: 2 },
   ]);
 });
 
@@ -171,8 +171,8 @@ test('GET /match-outcomes/calibration: populated → correct payload shape', asy
   assert.equal(res.body.ok, true);
   assert.equal(res.body.totalSample, 3);
   assert.deepEqual(res.body.bands, [
-    { band: '85–100', min: 85, actualSuccess: 0.5, sampleSize: 2 },
-    { band: '70–84',  min: 70, actualSuccess: 1,   sampleSize: 1 },
+    { band: '85 to 100', min: 85, actualSuccess: 0.5, sampleSize: 2 },
+    { band: '70 to 84',  min: 70, actualSuccess: 1,   sampleSize: 1 },
   ]);
   // Never leaks an individual: no user ids / answers in the response.
   const blob = JSON.stringify(res.body);

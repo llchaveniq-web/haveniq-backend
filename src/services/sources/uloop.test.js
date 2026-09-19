@@ -67,7 +67,7 @@ test('says in the notes that the price is a from-price on a building', () => {
   // The range must not vanish. A student who sees $2,882 and turns up to find
   // nothing under $5,000 has been misled by us, not by Uloop.
   const p = ul.parsePosting(REAL, 'u');
-  assert.match(p.notes, /\$2,882–\$7,744/);
+  assert.match(p.notes, /\$2,882 to \$7,744/);
   assert.match(p.notes, /lowest floorplan/i);
   assert.match(p.notes, /1BR, 2BR, 3BR/);
 });

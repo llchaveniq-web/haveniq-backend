@@ -100,7 +100,7 @@ async function pageCircuitBreaker(info, fetchImpl) {
     body: JSON.stringify({
       embeds: [{
         title: '🛑 signal:lifecycle_circuit_breaker',
-        description: `Lifecycle run PAUSED — it would have sent to **${info.plannedCount}** users but the cap is **${info.threshold}** `
+        description: `Lifecycle run PAUSED: it would have sent to **${info.plannedCount}** users but the cap is **${info.threshold}** `
           + `(${Math.round((info.maxFraction || 0) * 100)}% of ${info.activeCount} active). Nothing was sent. A human should check the segmentation before enabling this batch.`,
         color: 0xC0392B,
         timestamp: info.at || new Date().toISOString(),

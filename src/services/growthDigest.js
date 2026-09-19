@@ -74,7 +74,7 @@ const EXPERIMENTS_BY_STAGE = {
   quiz: [
     'Shorten the quiz gate: let users see a blurred match preview after the 10 core questions, unlocking full matches on completion.',
     'Add a progress/step counter + "≈10 min" up front so the length feels bounded.',
-    'A/B the first question — lead with the most engaging scenario item, not a demographic one.',
+    'A/B the first question: lead with the most engaging scenario item, not a demographic one.',
   ],
   match: [
     'Trigger the "your matches are ready" email the moment the matcher produces the first row, not on next login.',
@@ -98,7 +98,7 @@ function templateNarrative(metrics) {
   const w = metrics.weekly;
   const line = (label, d) => d.enoughData
     ? `${label}: ${d.this} this week vs ${d.last} last (${d.delta >= 0 ? '+' : ''}${d.delta}${d.pctChange != null ? `, ${d.pctChange >= 0 ? '+' : ''}${d.pctChange}%` : ''}).`
-    : `${label}: ${d.this} this week vs ${d.last} last — not enough data yet to call a trend.`;
+    : `${label}: ${d.this} this week vs ${d.last} last, not enough data yet to call a trend.`;
 
   const moves = [
     line('Signups', w.signups),
@@ -110,7 +110,7 @@ function templateNarrative(metrics) {
   const bd = metrics.biggestDrop;
   const dropLine = bd
     ? `Biggest activation drop-off: ${bd.from} → ${bd.to} (${bd.fromCount} → ${bd.toCount}, ${bd.dropPct}% fall).`
-    : 'No activation drop-off has enough data behind it yet to single out — keep gathering.';
+    : 'No activation drop-off has enough data behind it yet to single out. Keep gathering.';
 
   const experiments = (bd ? EXPERIMENTS_BY_STAGE[bd.to] : null) || EXPERIMENTS_BY_STAGE.quiz;
   const expText = experiments.slice(0, 3).map((e, i) => `${i + 1}. ${e}`).join('\n');
@@ -122,10 +122,10 @@ function templateNarrative(metrics) {
 function buildPrompt(metrics) {
   return [
     'You write a weekly growth digest for a roommate-matching startup founder.',
-    'You are given REAL metrics computed from the database below. Write 3–5 plain',
+    'You are given REAL metrics computed from the database below. Write 3 to 5 plain',
     'sentences on what moved this week, name the biggest activation drop-off, and',
-    'suggest 2–3 concrete experiments (you may draw from the provided experiment',
-    'menu). ABSOLUTE RULE: use ONLY the numbers in this JSON — never invent,',
+    'suggest 2 to 3 concrete experiments (you may draw from the provided experiment',
+    'menu). ABSOLUTE RULE: use ONLY the numbers in this JSON; never invent,',
     'estimate, round, or infer a metric. If a metric is marked enoughData:false,',
     'say "not enough data yet" instead of quoting a trend. No markdown headers.',
     '',
@@ -227,7 +227,7 @@ async function ensureTable(pool) {
 function digestHtml(metrics, narrative) {
   const w = metrics.weekly;
   const row = (label, d) => `<tr><td style="padding:4px 12px 4px 0;color:#625c52;">${label}</td><td style="padding:4px 0;font-weight:600;">${
-    d.enoughData ? `${d.this} vs ${d.last} (${d.delta >= 0 ? '+' : ''}${d.delta})` : `${d.this} vs ${d.last} — not enough data yet`}</td></tr>`;
+    d.enoughData ? `${d.this} vs ${d.last} (${d.delta >= 0 ? '+' : ''}${d.delta})` : `${d.this} vs ${d.last}, not enough data yet`}</td></tr>`;
   const funnelRows = metrics.funnel.map((s) => `<tr><td style="padding:2px 12px 2px 0;color:#625c52;">${s.stage}</td><td style="padding:2px 0;font-weight:600;">${s.count}</td></tr>`).join('');
   return `<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;background:#f4f0e8;padding:28px 16px;">
     <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
@@ -238,7 +238,7 @@ function digestHtml(metrics, narrative) {
         <table style="border-collapse:collapse;margin-bottom:18px;">${row('Signups', w.signups)}${row('Quiz completions', w.quizCompletions)}${row('Connect requests', w.connects)}${row('Referrals', w.referrals)}</table>
         <p style="margin:0 0 6px;font-weight:700;color:#625c52;text-transform:uppercase;font-size:12px;">Activation funnel (eligible users)</p>
         <table style="border-collapse:collapse;">${funnelRows}</table>
-        <p style="margin:18px 0 0;color:#625c52;font-size:12px;">Informational only — no action taken, nothing sent to users. Matches carry no timestamp, so that stage is a level, not a weekly delta.</p>
+        <p style="margin:18px 0 0;color:#625c52;font-size:12px;">Informational only: no action taken, nothing sent to users. Matches carry no timestamp, so that stage is a level, not a weekly delta.</p>
       </div>
     </div></body></html>`;
 }

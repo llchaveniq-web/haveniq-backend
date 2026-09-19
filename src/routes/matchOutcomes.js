@@ -76,9 +76,9 @@ const ALLOWED_OUTCOMES = new Set([
 // is 100 (scores never exceed it). Frontend sorts high→low by `min`. Kept in
 // lockstep with docs/BACKEND_OUTCOME_LEARNING.md §2a.
 const CALIBRATION_BANDS = [
-  { band: '85–100',   min: 85 },
-  { band: '70–84',    min: 70 },
-  { band: '55–69',    min: 55 },
+  { band: '85 to 100',   min: 85 },
+  { band: '70 to 84',    min: 70 },
+  { band: '55 to 69',    min: 55 },
   { band: 'Below 55', min: 0  },
 ];
 const RETENTION_STAGES = new Set(['day30', 'day60', 'day90', 'month6']);
@@ -703,7 +703,7 @@ router.get('/bot-admin/weight-learning', requireBotToken, async (req, res) => {
       method: 'per-question agreement lift (positive vs negative outcomes), shrunk toward current weights by lambda = min(1, N/300)',
       action: decided >= MIN_N
         ? 'HUMAN REVIEW before applying. If a proposal holds, edit QUESTION_POINTS in services/scoring.js AND app quizStore.ts in lockstep, then recompute.'
-        : `Illustrative only — need >= ${MIN_N} decided outcomes (have ${decided}).`,
+        : `Illustrative only: need >= ${MIN_N} decided outcomes (have ${decided}).`,
       proposals,
     });
   } catch (err) {
@@ -728,7 +728,7 @@ router.post('/bot-admin/train-dimension-models', requireBotToken, async (req, re
       trained: summary.length,
       certified: certified.length,
       note: certified.length === 0
-        ? 'No dimension cleared the gate — every dimension stays dist-only (today, bit-for-bit). Expected until real move-in/room-change outcomes accrue.'
+        ? 'No dimension cleared the gate, so every dimension stays dist-only (today, bit-for-bit). Expected until real move-in/room-change outcomes accrue.'
         : 'Certified shapes are live; recompute matches to apply to stored scores.',
       summary,
     });
@@ -778,7 +778,7 @@ router.post('/bot-admin/train-text-insights', requireBotToken, async (req, res) 
       trained: summary.length,
       certified: certified.length,
       note: certified.length === 0
-        ? 'No construct beat the no-feature model on held-out outcomes — every construct stays weight 0 (today). Expected until outcomes accrue.'
+        ? 'No construct beat the no-feature model on held-out outcomes, so every construct stays weight 0 (today). Expected until outcomes accrue.'
         : 'Certified constructs are live; recompute matches to apply.',
       summary,
     });

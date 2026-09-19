@@ -303,7 +303,7 @@ async function collect(adapter, { region, schoolNear, city = null, limit = 25, d
     stats.seen++;
     const res = await politeFetch(url);
     if (!res.ok) {
-      if (res.blocked) { stats.blocked++; log(`BLOCKED ${url.slice(0, 64)} — ${res.reason || res.status}`); }
+      if (res.blocked) { stats.blocked++; log(`BLOCKED ${url.slice(0, 64)}: ${res.reason || res.status}`); }
       else if (res.gone) { stats.gone++; if (!dryRun) await remember(adapter.NAME, url, 'expired'); }
       else { stats.failed++; if (!dryRun) await remember(adapter.NAME, url, 'failed'); }
       continue;

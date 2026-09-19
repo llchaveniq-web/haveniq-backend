@@ -335,7 +335,7 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
     const relaxDomain = stagingFlag('ALLOW_ANY_EMAIL_DOMAIN');
     if (!hasAcademicTld && !relaxDomain) {
       return res.status(400).json({
-        error: 'School email required (.edu, .ac.uk, .edu.au, …). HavenIQ is for verified students only — please use your school address.',
+        error: 'School email required (.edu, .ac.uk, .edu.au, …). HavenIQ is for verified students only, so please use your school address.',
       });
     }
 

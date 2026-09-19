@@ -221,7 +221,7 @@ router.post('/today/answer', requireAuth, async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'Nothing to answer' });
     if (rows[0].content_type !== 'question') {
-      return res.json({ ok: true, note: 'reflection — nothing to record' });
+      return res.json({ ok: true, note: 'reflection, nothing to record' });
     }
 
     await pool.query(

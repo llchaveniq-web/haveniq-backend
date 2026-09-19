@@ -34,7 +34,7 @@ function requireModerator(req, res, next) {
 
 const REVIEW_BLOCKED = {
   code:  'content_blocked',
-  error: "This review can't be posted — it looks like it breaks our community guidelines. A critical review is fine, but keep it respectful.",
+  error: "This review can't be posted. It looks like it breaks our community guidelines. A critical review is fine, but keep it respectful.",
 };
 
 // Self-healing columns (this repo's convention — see roommateSafety.js /

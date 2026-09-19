@@ -142,7 +142,7 @@ async function runAnalyst({ enqueue = true } = {}) {
     enqueued,
     note: candidates.length
       ? `${enqueued.length} new proposal(s) queued for human approval.`
-      : 'Not ready — no proposals queued. Scoring unchanged (today, bit-for-bit).',
+      : 'Not ready: no proposals queued. Scoring unchanged (today, bit-for-bit).',
   };
 }
 

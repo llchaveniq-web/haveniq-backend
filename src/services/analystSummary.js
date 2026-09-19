@@ -26,7 +26,7 @@ function templateSummary(proposal) {
   const scopeLabel = proposal.scope === 'global' ? 'global weights' : `the ${proposal.scope} layer`;
   const head = proposal.ready
     ? `Proposed recalibration of ${scopeLabel} from ${proposal.decided} decided outcomes.`
-    : `Illustrative only — ${scopeLabel} need ${proposal.minN} decided outcomes (have ${proposal.decided}); nothing is actionable yet.`;
+    : `Illustrative only: ${scopeLabel} need ${proposal.minN} decided outcomes (have ${proposal.decided}); nothing is actionable yet.`;
 
   const moverText = movers.length
     ? movers.map((s) => {
@@ -85,11 +85,11 @@ function buildPrompt(proposal) {
   };
   return [
     'You are a statistics analyst for a roommate-matching engine. The NUMBERS below',
-    'were computed by a regularized regression — you do NOT decide weights, you only',
-    'explain them for a human reviewer. In 2–4 plain-English sentences, say what is',
+    'were computed by a regularized regression. You do NOT decide weights, you only',
+    'explain them for a human reviewer. In 2 to 4 plain-English sentences, say what is',
     'changing and why (cite the correlation r and sample n), and call out any anomaly',
     'flags as cautions. Be honest: if it is not actionable yet, say so. No markdown,',
-    'no bullet lists, no invented numbers — use only the JSON facts.',
+    'no bullet lists, no invented numbers; use only the JSON facts.',
     '',
     JSON.stringify(facts, null, 2),
   ].join('\n');

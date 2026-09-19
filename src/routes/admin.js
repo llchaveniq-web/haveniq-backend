@@ -254,15 +254,15 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
           (ARRAY['Woman','Man','Woman','Man','Nonbinary','Woman','Man'])[1 + (n - 1) % 7] AS gender,
           (ARRAY[
             'Early riser, lots of coffee, library is my second home. Looking for someone tidy who respects quiet study time.',
-            'Night owl — I do my best work after 11pm. Promise to be quiet when youre sleeping. Big fan of meal-prep Sundays.',
+            'Night owl: I do my best work after 11pm. Promise to be quiet when youre sleeping. Big fan of meal-prep Sundays.',
             'Pre-med, so my schedules intense. Need someone who gets that and doesnt take it personally when Im buried in books.',
             'Love hosting small dinners, hate big parties at home. Looking for someone with a similar energy.',
-            'Im a chaos-good kind of clean — surfaces are tidy, my desk is a wreck. Honesty about how you actually live > pretending.',
+            'Im a chaos-good kind of clean: surfaces are tidy, my desk is a wreck. Honesty about how you actually live > pretending.',
             'Cross-country runner, so up at 6am most days. Bed by 10pm. If youre a night owl well need to negotiate.',
             'Art major, so my room often has supplies everywhere. Communal spaces stay clean though. Promise.',
-            'Quiet, low-maintenance, and I dont need to be best friends — just respectful roommates who get the basics right.',
+            'Quiet, low-maintenance, and I dont need to be best friends, just respectful roommates who get the basics right.',
             'Love cooking, hate cleaning dishes. If youre the opposite this is a match made in heaven.',
-            'Im a planner — Id rather over-communicate than guess. Looking for someone whos on the same page.',
+            'Im a planner. Id rather over-communicate than guess. Looking for someone whos on the same page.',
             'Music major, mostly headphones, occasionally need to practice out loud. Will warn you. Will not surprise you.',
             'Engineering, lots of group projects on Zoom. Decent at chores, terrible at remembering to take out the trash. Working on it.'
           ])[1 + (n - 1) % 12] AS bio,
@@ -357,7 +357,7 @@ router.post('/seed-demos', requireAuth, requireFounder, async (req, res) => {
       [req.user.id]
     );
     if (myQuizRows.length === 0) {
-      scoringMessage = 'Founder has not completed the quiz — take it in-app, then re-run this endpoint to populate compatibility scores against the demos.';
+      scoringMessage = 'Founder has not completed the quiz. Take it in-app, then re-run this endpoint to populate compatibility scores against the demos.';
     } else {
       // Mirror the scoreNewMatches flow from quiz.js: pull all candidates'
       // quiz answers + dealbreakers, compute compat, bulk-INSERT the

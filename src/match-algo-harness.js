@@ -33,10 +33,10 @@ const JUDGE_MODEL = process.env.LLM_JUDGE_MODEL || 'claude-haiku-4-5'; // cheap 
 // fail the run or touch scoring. No key / any error → a printable note, not a crash.
 async function judgePair(profA, profB, score) {
   const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return '(no ANTHROPIC_API_KEY — skipped)';
+  if (!key) return '(no ANTHROPIC_API_KEY, skipped)';
   const render = (p) => Object.entries(p.a).map(([q, idx]) => `Q${q}=${idx}`).join(' ');
   const prompt = [
-    'You are spot-checking a roommate-matching engine (NOT deciding anything — a human reads your note).',
+    'You are spot-checking a roommate-matching engine (NOT deciding anything; a human reads your note).',
     'Two students answered a lifestyle quiz. Option index 0 = low end, 3 = high end of each question; Q14 is 0/1.',
     `Student A (${profA.name}): ${render(profA)}`,
     `Student B (${profB.name}): ${render(profB)}`,
@@ -126,7 +126,7 @@ function scorePair(profA, profB) {
 // ── Report ───────────────────────────────────────────────────────────────────
 function pad(s, n) { s = String(s); return s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length); }
 
-console.log('\n=== HavenIQ matching engine — disparate-profile harness ===\n');
+console.log('\n=== HavenIQ matching engine: disparate-profile harness ===\n');
 console.log('Scored questions (v8):');
 for (const [qid, label] of Object.entries(Q)) console.log(`  Q${pad(qid, 3)} ${label}`);
 
@@ -175,7 +175,7 @@ console.log(`  identical twins score ~100        : ${twin}  (${twin >= 95 ? 'PAS
 console.log(`  monk vs party animal is low       : ${opp}  (${opp <= 40 ? 'PASS' : 'CHECK'})`);
 console.log(`  non-smoker × smoker capped (≤35)   : ${smoke.score} cap=${smoke._capReason}  (${smoke.score <= 35 ? 'PASS' : 'CHECK'})`);
 console.log(`  twins beat opposites              : ${twin > opp ? 'PASS' : 'CHECK'}`);
-console.log('\nNote: the matrix/detail above is COLD-START — no opts passed, so');
+console.log('\nNote: the matrix/detail above is COLD-START: no opts passed, so');
 console.log('complementaryDims / convergingDims are [] (the deep-matching layers');
 console.log('are inert without certified shapes). The probes below force them on.\n');
 
@@ -186,7 +186,7 @@ console.log('are inert without certified shapes). The probes below force them on
 // what the gate WOULD certify from real outcomes. In production these only exist
 // AFTER real move-in/room-change data certifies them; this just shows the wiring
 // fires end-to-end, it does not certify anything.
-console.log('=== PROBES (synthetic certified shapes — what the gate would emit) ===\n');
+console.log('=== PROBES (synthetic certified shapes, what the gate would emit) ===\n');
 
 const sc = (a, b, opts) => calculateCompatibility(toAnswers(a), toAnswers(b), opts);
 
@@ -208,7 +208,7 @@ const CHORE_COMPLEMENT = { 57: {
 } };
 const c0 = sc(choreLo, choreHi);
 const c1 = sc(choreLo, choreHi, { dimensionModels: CHORE_COMPLEMENT });
-console.log('(1) #2 complementarity — chore styles opposite (Q57: 0 vs 3):');
+console.log('(1) #2 complementarity: chore styles opposite (Q57: 0 vs 3):');
 console.log(`    cold-start         score=${pad(c0.finalPct, 3)} complementaryDims=${JSON.stringify(c0.complementaryDims)}`);
 console.log(`    + certified shape  score=${pad(c1.finalPct, 3)} complementaryDims=${JSON.stringify(c1.complementaryDims)}`);
 console.log(`    → difference is now REWARDED (${c0.finalPct} → ${c1.finalPct})\n`);
@@ -227,7 +227,7 @@ const PROJECT_49 = { 49: {
 } };
 const p0 = sc(bedLo, bedHi);
 const p1 = sc(bedLo, bedHi, { dimensionModels: PROJECT_49, driftA, driftB, horizonDays: 90 });
-console.log('(2) #6 trajectory/projection — bedtimes opposite (Q49: 0 vs 3) but converging:');
+console.log('(2) #6 trajectory/projection: bedtimes opposite (Q49: 0 vs 3) but converging:');
 console.log(`    cold-start (snapshot)  score=${pad(p0.finalPct, 3)} convergingDims=${JSON.stringify(p0.convergingDims)}`);
 console.log(`    + project shape+drift  score=${pad(p1.finalPct, 3)} convergingDims=${JSON.stringify(p1.convergingDims)}`);
 console.log(`    → scored on where they're HEADING (${p0.finalPct} → ${p1.finalPct})\n`);
@@ -239,7 +239,7 @@ const CONV_49 = { 49: {
   basis:    { intercept: 0, coef: { dist: -1, mean: 0, min: 0, max: 0, prod: 0, conv: 2 } },
 } };
 const v1 = sc(bedLo, bedHi, { dimensionModels: CONV_49, driftA, driftB });
-console.log('(2b) #6 convergence term — same drift, conv-weighted shape:');
+console.log('(2b) #6 convergence term: same drift, conv-weighted shape:');
 console.log(`     score=${pad(v1.finalPct, 3)} convergingDims=${JSON.stringify(v1.convergingDims)}\n`);
 
 // (3) DEALBREAKER amplification (×1.75) — a full sleep mismatch (Q49: 0 vs 3)
@@ -247,7 +247,7 @@ console.log(`     score=${pad(v1.finalPct, 3)} convergingDims=${JSON.stringify(v
 const slpLo = PX, slpHi = PY;
 const d0 = sc(slpLo, slpHi);
 const d1 = sc(slpLo, slpHi, { dealbreakers: ['sleep'] });
-console.log('(3) dealbreaker amplification — sleep mismatch (Q49: 0 vs 3):');
+console.log('(3) dealbreaker amplification: sleep mismatch (Q49: 0 vs 3):');
 console.log(`    no flag             score=${pad(d0.finalPct, 3)}`);
 console.log(`    + dealbreaker flag  score=${pad(d1.finalPct, 3)} (${d1.finalPct < d0.finalPct ? 'mismatch hits harder ✓' : 'no change'})\n`);
 
@@ -259,7 +259,7 @@ const mOne  = sc(PX, PY, { validationA: 0.9 });
 console.log('(4) behavioral validation multiplier (honesty-gated):');
 console.log(`    neutral             score=${pad(m0.finalPct, 3)} mult=${m0.validationMultiplier}`);
 console.log(`    both validated 0.9  score=${pad(mBoth.finalPct, 3)} mult=${mBoth.validationMultiplier} (lifts ✓)`);
-console.log(`    one-sided (A only)  score=${pad(mOne.finalPct, 3)} mult=${mOne.validationMultiplier} (no change — honesty gate ✓)\n`);
+console.log(`    one-sided (A only)  score=${pad(mOne.finalPct, 3)} mult=${mOne.validationMultiplier} (no change, honesty gate ✓)\n`);
 
 console.log('Probes are SYNTHETIC: hand-built certified shapes/drift show the wiring');
 console.log('fires. In production nothing here is certified until real outcomes earn it.\n');
@@ -269,9 +269,9 @@ console.log('fires. In production nothing here is certified until real outcomes 
 // printed beside the engine score. It changes nothing; it's a human-eyeball aid.
 if (LLM_JUDGE) {
   (async () => {
-    console.log('=== LLM JUDGE (DEV AID — never a gate; real outcomes decide, not the LLM) ===\n');
+    console.log('=== LLM JUDGE (DEV AID, never a gate; real outcomes decide, not the LLM) ===\n');
     if (!process.env.ANTHROPIC_API_KEY) {
-      console.log('ANTHROPIC_API_KEY not set — skipping. Normal runs cost nothing.\n');
+      console.log('ANTHROPIC_API_KEY not set, skipping. Normal runs cost nothing.\n');
       return;
     }
     console.log(`model: ${JUDGE_MODEL}  (one Claude call per pair; spot-check only)\n`);
@@ -284,7 +284,7 @@ if (LLM_JUDGE) {
       }
     }
     console.log('\nReminder: an LLM will confidently call a bad match good. This note never');
-    console.log('feeds back into scoring — real cohabitation outcomes are the only judge.\n');
+    console.log('feeds back into scoring; real cohabitation outcomes are the only judge.\n');
   })().catch(err => {
     // Belt-and-suspenders: the judge must NEVER fail the run.
     console.log(`\n[llm-judge] skipped after an unexpected error (non-fatal): ${err.message}\n`);

@@ -34,7 +34,7 @@ function tryInit() {
     // eslint-disable-next-line global-require
     Sentry = require('@sentry/node');
   } catch {
-    console.warn('[sentry] @sentry/node not installed — skipping. Add the package to enable error monitoring.');
+    console.warn('[sentry] @sentry/node not installed, skipping. Add the package to enable error monitoring.');
     return null;
   }
 

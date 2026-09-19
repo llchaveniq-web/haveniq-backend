@@ -69,10 +69,10 @@ test('real answered outcomes ⇒ 200 with the measured bands', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.ok, true);
   assert.equal(res.body.totalSample, 3);
-  const top = res.body.bands.find(b => b.band === '85–100');
+  const top = res.body.bands.find(b => b.band === '85 to 100');
   assert.equal(top.sampleSize, 2);
   assert.equal(top.actualSuccess, 1, 'both rated 5 ⇒ 100%');
-  const low = res.body.bands.find(b => b.band === '55–69');
+  const low = res.body.bands.find(b => b.band === '55 to 69');
   assert.equal(low.actualSuccess, 0, 'rated 2 ⇒ not a success; never rounded up');
 });
 

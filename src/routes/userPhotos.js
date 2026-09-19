@@ -43,7 +43,7 @@ function photoUpload(req, res, next) {
   uploadMiddleware.single('photo')(req, res, (err) => {
     if (!err) return next();
     const msg = err.code === 'LIMIT_FILE_SIZE'
-      ? 'That photo is too large — please pick one under 10 MB.'
+      ? 'That photo is too large. Please pick one under 10 MB.'
       : (err.message || 'That photo could not be uploaded.');
     res.status(400).json({ error: msg });
   });
@@ -86,7 +86,7 @@ function notifyReverification(req, userId) {
   if (!sendPush) return;
   sendPush(userId, {
     title: 'Your profile is being re-reviewed',
-    body: 'Your photo changed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+    body: 'Your photo changed, so HavenIQ is re-checking your account, usually within about an hour. No action needed.',
     data: { screen: 'verify-edu' },
   }).catch(() => {});
 }
@@ -139,7 +139,7 @@ router.post('/me/photos', requireAuth, refuseBanned, photoUpload, async (req, re
       audit(req, 'photo.gallery.rejected.unsafe', { reason: verdict.safety_reason }).catch(() => {});
       return res.status(422).json({
         error: verdict.safety_reason
-          || "This photo isn't appropriate for a school roommate platform — please pick a different one.",
+          || "This photo isn't appropriate for a school roommate platform. Please pick a different one.",
       });
     }
 

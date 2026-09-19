@@ -204,9 +204,9 @@ async function seedDemoMatchable() {
       )).rows[0];
       if (conv) {
         const msgs = [
-          [partner.id, "hey! saw we matched — your place sounds like my vibe. still looking?", true,  '26 hours'],
+          [partner.id, "hey! saw we matched, your place sounds like my vibe. still looking?", true,  '26 hours'],
           [f.user_id,  "yeah! when are you hoping to move in?",                                 true,  '25 hours'],
-          [partner.id, "aiming for fall. clean kitchen, quiet weeknights — that work for you?", false, '35 minutes'],
+          [partner.id, "aiming for fall. clean kitchen, quiet weeknights. that work for you?", false, '35 minutes'],
         ];
         for (const [sender, body, read, ago] of msgs) {
           await pool.query(

@@ -41,9 +41,9 @@ module.exports = [
     "text": "What's your typical weekday bedtime?",
     "options": [
       "Before 10 PM",
-      "10 PM – midnight",
-      "Midnight – 2 AM",
-      "After 2 AM — I'm a night owl"
+      "10 PM to midnight",
+      "Midnight to 2 AM",
+      "After 2 AM, I'm a night owl"
     ]
   },
   {
@@ -51,7 +51,7 @@ module.exports = [
     "category": "lifestyle",
     "text": "How clean do you keep shared spaces?",
     "options": [
-      "Spotless — I clean constantly",
+      "Spotless, I clean constantly",
       "Clean most of the time",
       "I clean when it gets noticeable",
       "Honestly not a priority for me"
@@ -65,7 +65,7 @@ module.exports = [
       "Never",
       "Cannabis occasionally",
       "Vape or smoke occasionally",
-      "Regularly — it's part of my routine"
+      "Regularly, it's part of my routine"
     ]
   },
   {
@@ -117,10 +117,10 @@ module.exports = [
     "category": "lifestyle / money",
     "text": "If a roommate constantly spent on things you'd consider wasteful, you'd feel...",
     "options": [
-      "Honestly bothered — our shared rent is at stake",
+      "Honestly bothered: our shared rent is at stake",
       "Quietly judgmental but I wouldn't say anything",
-      "Indifferent — their money, their choice",
-      "Curious — I'd probably learn from them"
+      "Indifferent: their money, their choice",
+      "Curious, I'd probably learn from them"
     ]
   },
   {
@@ -131,7 +131,7 @@ module.exports = [
       "Already folded and put away",
       "I'll move it to the dryer when I notice",
       "Still in the washer the next morning",
-      "This happens to me weekly — I forget regularly"
+      "This happens to me weekly, I forget regularly"
     ]
   },
   {
@@ -150,10 +150,10 @@ module.exports = [
     "category": "communication / boundaries",
     "text": "A roommate asks for a favor you'd rather not do. You usually…",
     "options": [
-      "Say yes anyway — I don't want to disappoint them",
-      "Half-yes — do it, but reluctantly",
+      "Say yes anyway, I don't want to disappoint them",
+      "Half-yes: do it, but reluctantly",
       "Politely decline and explain why",
-      "Straightforward no — they can ask someone else"
+      "Straightforward no, they can ask someone else"
     ]
   },
   {
@@ -162,9 +162,9 @@ module.exports = [
     "text": "After a fight with someone you live with, who usually makes the first move to fix it?",
     "options": [
       "Me, almost always",
-      "Me — but only after some space",
+      "Me, but only after some space",
       "Whoever cools down first",
-      "Usually them — being the first is hard for me"
+      "Usually them, being the first is hard for me"
     ]
   },
   {

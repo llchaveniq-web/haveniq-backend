@@ -49,7 +49,7 @@ function photoUpload(req, res, next) {
   uploadMiddleware.single('photo')(req, res, (err) => {
     if (!err) return next();
     const msg = err.code === 'LIMIT_FILE_SIZE'
-      ? 'That photo is too large — please pick one under 10 MB.'
+      ? 'That photo is too large. Please pick one under 10 MB.'
       : (err.message || 'That photo could not be uploaded.');
     res.status(400).json({ error: msg });
   });
@@ -504,7 +504,7 @@ router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
       const sendPush = req.app.get('sendPushToUser');
       sendPush?.(req.user.id, {
         title: 'Your profile is being re-reviewed',
-        body: 'Your photo changed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+        body: 'Your photo changed, so HavenIQ is re-checking your account, usually within about an hour. No action needed.',
         data: { screen: 'verify-edu' },
       }).catch(() => {});
     }
@@ -835,7 +835,7 @@ router.post('/me/photo/quality-check', requireAuth, refuseBanned, aiLimiter, asy
           const sendPush = req.app.get('sendPushToUser');
           sendPush?.(req.user.id, {
             title: 'Your profile is being re-reviewed',
-            body: 'Your photo was removed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+            body: 'Your photo was removed, so HavenIQ is re-checking your account, usually within about an hour. No action needed.',
             data: { screen: 'verify-edu' },
           }).catch(() => {});
         }
@@ -870,7 +870,7 @@ router.post('/me/photo', requireAuth, refuseBanned, photoUpload, async (req, res
       const sendPush = req.app.get('sendPushToUser');
       sendPush?.(req.user.id, {
         title: 'Your profile is being re-reviewed',
-        body: 'Your photo changed, so HavenIQ is re-checking your account — usually within about an hour. No action needed.',
+        body: 'Your photo changed, so HavenIQ is re-checking your account, usually within about an hour. No action needed.',
         data: { screen: 'verify-edu' },
       }).catch(() => {});
     }
@@ -911,7 +911,7 @@ router.post('/me/photo', requireAuth, refuseBanned, photoUpload, async (req, res
     // gets a clean, generic message. (Was echoing err.message to the client.)
     console.error('[photo-upload] failed:', err && err.message);
     res.status(500).json({
-      error: 'Upload failed. Please try again in a moment — the team has been notified.',
+      error: 'Upload failed. Please try again in a moment. The team has been notified.',
     });
   }
 });
@@ -1009,7 +1009,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
       } else if (daysSince === 0) {
         noticings.push({
           icon: '✦',
-          line: `welcome. take the quiz when you have ten minutes — that's when haveniq starts working.`,
+          line: `welcome. take the quiz when you have ten minutes, that's when haveniq starts working.`,
         });
       } else if (daysSince <= 3) {
         noticings.push({
@@ -1028,7 +1028,7 @@ router.get('/me/noticings', requireAuth, async (req, res) => {
     } else if (!me.has_photo) {
       noticings.push({
         icon: '◯',
-        line: 'your profile is missing a photo. it\'s the first thing matches read about you — even a candid one counts.',
+        line: 'your profile is missing a photo. it\'s the first thing matches read about you, and even a candid one counts.',
       });
     } else if (!me.has_bio) {
       noticings.push({
@@ -1206,7 +1206,7 @@ router.get('/me/about-you', requireAuth, aiLimiter, async (req, res) => {
     if (!ANTHROPIC_KEY) {
       return res.json({
         ready: false,
-        reason: 'Reveal engine offline — try again in a few minutes.',
+        reason: 'Reveal engine offline. Try again in a few minutes.',
         sections: [],
       });
     }
@@ -1249,40 +1249,40 @@ router.get('/me/about-you', requireAuth, aiLimiter, async (req, res) => {
 
     const prompt = `You are writing the "About You" editorial reveal for HavenIQ, a college roommate-matching app. ${firstName} just finished the roommate-fit quiz.
 
-This is the "wow, this app actually gets how I live" moment — the single most important brand surface in HavenIQ. Before they see their matches, they see THEMSELVES reflected back with editorial honesty and warmth.
+This is the "wow, this app actually gets how I live" moment, the single most important brand surface in HavenIQ. Before they see their matches, they see THEMSELVES reflected back with editorial honesty and warmth.
 
-Write a LIFESTYLE PORTRAIT: how they keep their space, run their day, handle friction with the people they live with, and what they need from a home. This is about how they LIVE, not who they "are" — ground everything in their actual answers below.
+Write a LIFESTYLE PORTRAIT: how they keep their space, run their day, handle friction with the people they live with, and what they need from a home. This is about how they LIVE, not who they "are". Ground everything in their actual answers below.
 
 USER: ${firstName}
 
-THEIR ACTUAL ANSWERS — each item is the FULL question text + the option they chose. Treat these as ground truth. Never invent answers or claim they said something they didn't say. The category tag in [brackets] is just for your reference.
+THEIR ACTUAL ANSWERS: each item is the FULL question text + the option they chose. Treat these as ground truth. Never invent answers or claim they said something they didn't say. The category tag in [brackets] is just for your reference.
 
 ${answerLines}
 
 WRITE 4 EDITORIAL SECTIONS. Each:
-- 40-70 words — tight and specific, NO filler. A quick satisfying read, not an essay. Every sentence earns its place.
+- 40-70 words, tight and specific, NO filler. A quick satisfying read, not an essay. Every sentence earns its place.
 - Second-person ("you", not "the user"), lowercase except proper nouns.
 - Reference at least ONE concrete behavior from their answers, PARAPHRASED into plain everyday language. GOOD = "you clean as you go, and a sink full of dishes genuinely gets to you" / BAD = "your cleanliness score is high" or "your Q50 answer means...".
-- Specific and observational, never horoscope-vague. Warm but honest — like a perceptive friend, not a marketing voice. Pure observation, NO advice, no clichés.
+- Specific and observational, never horoscope-vague. Warm but honest, like a perceptive friend, not a marketing voice. Pure observation, NO advice, no clichés.
 - ${NO_DASH_RULE}
 
-HARD RULES — do not break these:
+HARD RULES (do not break these):
 - This is a roommate app, NOT a personality test or therapy. NEVER use trait labels, personality types, or psychology framework names (no "attachment", "Big Five", "OCEAN", "introvert/extravert", "conscientious", "secure/anxious/avoidant", "nervous system", MBTI, "shadow", etc.). Describe the observable everyday behavior in plain words.
 - NEVER diagnose, pathologize, or imply something is wrong with them. No clinical or disorder language.
-- NEVER mention question numbers or Q-ids — the user has no idea what those are. Paraphrase the theme.
+- NEVER mention question numbers or Q-ids. The user has no idea what those are. Paraphrase the theme.
 - Never invent answers. If the answer list doesn't cover a topic, don't write about it.
 
 SECTION KICKERS (exactly these four, in this order):
 1. HOW YOU KEEP SPACE
-   — cleanliness, clutter, the shared-space standard they hold
+   (cleanliness, clutter, the shared-space standard they hold)
 2. HOW YOU RUN YOUR DAY
-   — their rhythm: when they sleep, how they host, what they need in order to focus
+   (their rhythm: when they sleep, how they host, what they need in order to focus)
 3. HOW YOU HANDLE FRICTION
-   — what they do when something bugs them: raise it or sit on it, who repairs first, whether they follow through on their share of the work
+   (what they do when something bugs them: raise it or sit on it, who repairs first, whether they follow through on their share of the work)
 4. WHAT YOU NEED FROM A HOME
-   — the non-negotiables: kitchen + food, drinking / smoking / overnight comfort, money
+   (the non-negotiables: kitchen + food, drinking / smoking / overnight comfort, money)
 
-Each section ALSO needs a one-line "pull quote" — a short italic excerpt that could be lifted out as a Pinterest-style image quote. 8-14 words. Punchy.
+Each section ALSO needs a one-line "pull quote": a short italic excerpt that could be lifted out as a Pinterest-style image quote. 8-14 words. Punchy.
 
 Output ONLY valid JSON, no markdown:
 {
@@ -1317,7 +1317,7 @@ Output ONLY valid JSON, no markdown:
       console.error('[about-you] Anthropic', r.status, text.slice(0, 200));
       return res.json({
         ready: false,
-        reason: 'Reveal engine hiccup — try again in a minute.',
+        reason: 'Reveal engine hiccup. Try again in a minute.',
         sections: [],
       });
     }

@@ -203,7 +203,7 @@ Produce ONLY a JSON object matching this exact schema. No markdown, no commentar
   "roommate_archetype": "<2-4 word evocative label, e.g. 'the quiet anchor' or 'the late-night studio'>",
   "user_facing_summary": "<2-3 sentences that the user will read about themselves. Warm, specific, true. Make them feel seen, not analyzed.>",
   "growth_edges": ["<constructive phrase>", "<constructive phrase>"],
-  "vector": [<16 floats between -1 and 1 — used by the matching algorithm; capture personality/lifestyle dimensions>],
+  "vector": [<16 floats between -1 and 1, used by the matching algorithm; capture personality/lifestyle dimensions>],
   "confidence_notes": "<one sentence on what data was thin or missing>"
 }
 
@@ -277,7 +277,7 @@ router.post('/me/profile/synthesize', requireAuth, async (req, res) => {
   const last = recentSynth.get(userId) || 0;
   if (Date.now() - last < 6 * 60 * 60 * 1000) {
     return res.status(429).json({
-      error: 'profile already synthesized recently — try again later',
+      error: 'profile already synthesized recently, try again later',
       retry_after_hours: Math.ceil((6 * 60 * 60 * 1000 - (Date.now() - last)) / 3600000),
     });
   }
@@ -327,7 +327,7 @@ router.patch('/me/profile', requireAuth, async (req, res) => {
        WHERE user_id = $1`,
       [req.user.id, JSON.stringify(clean)]
     );
-    if (rowCount === 0) return res.status(404).json({ error: 'no profile to edit — synthesize one first' });
+    if (rowCount === 0) return res.status(404).json({ error: 'no profile to edit, synthesize one first' });
     res.json({ updated: true, applied: Object.keys(clean) });
   } catch (err) {
     console.error('[profile] patch failed:', err);

@@ -84,7 +84,7 @@ function logStagingBypasses(log = console) {
 
   if (isProdEnvironment()) {
     log.error('[staging-guard] REFUSING auth bypasses configured on PRODUCTION:',
-      configured.join(', '), '— these are ignored. Remove them from the prod environment.');
+      configured.join(', '), '(these are ignored). Remove them from the prod environment.');
     return;
   }
   log.warn('[staging-guard] auth bypasses ACTIVE (non-production):', configured.join(', '));

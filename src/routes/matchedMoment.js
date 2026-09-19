@@ -147,11 +147,11 @@ async function generatePayload(meRow, otherRow, sharedAnswers, answersMe, answer
 
   const prompt = `You are writing the "Matched Moment" reveal page for HavenIQ, a college roommate-matching app. ${meName} just matched with ${otherName} at ${school}.
 
-Both took an 18-question compatibility quiz about how they actually live — sleep schedule, cleanliness, noise, guests, substances, money independence, how they handle disagreements and follow through, and how they respond under stress. Here are the SPECIFIC questions they exactly agreed on — each item is the full question text + the option they both chose. Treat these as ground truth. Never invent answers.
+Both took an 18-question compatibility quiz about how they actually live: sleep schedule, cleanliness, noise, guests, substances, money independence, how they handle disagreements and follow through, and how they respond under stress. Here are the SPECIFIC questions they exactly agreed on. Each item is the full question text + the option they both chose. Treat these as ground truth. Never invent answers.
 
 ${sharedContext}
 
-Write THREE pieces of content, all in second-person plural ("you two", "you both"), all in the HavenIQ editorial voice — warm, lowercase-friendly, literary, never marketing-speak. Never generic. Each sentence should be specific enough that ${meName} reading it goes "wait, that's actually us."
+Write THREE pieces of content, all in second-person plural ("you two", "you both"), all in the HavenIQ editorial voice: warm, lowercase-friendly, literary, never marketing-speak. Never generic. Each sentence should be specific enough that ${meName} reading it goes "wait, that's actually us."
 
 CRITICAL RULES:
 - NEVER mention question numbers ("Q14", "question 9", etc.). The users have no idea what those refer to. They only know they answered 18 questions.
@@ -159,11 +159,11 @@ CRITICAL RULES:
 - Don't fabricate. If the shared list above doesn't include a topic (e.g. sleep schedule), don't write about it.
 - ${NO_DASH_RULE}
 
-1. WHY_YOU_TWO_WORK — one paragraph, 100-140 words. Reference the shared answers thematically. Be honest about what the pairing predicts: low-conflict cohabitation, fast-repair patterns, shared sensory tolerance, etc. End on a single forward-looking sentence.
+1. WHY_YOU_TWO_WORK: one paragraph, 100-140 words. Reference the shared answers thematically. Be honest about what the pairing predicts: low-conflict cohabitation, fast-repair patterns, shared sensory tolerance, etc. End on a single forward-looking sentence.
 
-2. SHARED_PATTERNS — three short observations (one sentence each, 12-20 words). Each grounded in one of the shared answers above. Format: "you both [verb] [behavior]." Examples: "you both go quiet before you confront." "you both repair conflicts by morning, not by talking it out that night."
+2. SHARED_PATTERNS: three short observations (one sentence each, 12-20 words). Each grounded in one of the shared answers above. Format: "you both [verb] [behavior]." Examples: "you both go quiet before you confront." "you both repair conflicts by morning, not by talking it out that night."
 
-3. CONVERSATION_STARTERS — three first-message drafts. NOT generic ("hey!") — first messages that reference a specific shared behavior and ask a follow-up question. Each 1-2 sentences. Should sound like a thoughtful college student texting another, not like an AI-generated icebreaker.
+3. CONVERSATION_STARTERS: three first-message drafts. NOT generic ("hey!") but first messages that reference a specific shared behavior and ask a follow-up question. Each 1-2 sentences. Should sound like a thoughtful college student texting another, not like an AI-generated icebreaker.
 
 Output ONLY JSON:
 {

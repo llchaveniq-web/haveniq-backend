@@ -18,7 +18,7 @@ const POLL_TIMEOUT_MS = 4000;
 // failure must never throw into the scheduler. Fires ONLY on the transition.
 async function pageOutage(record, meta) {
   const reasons = (record.reasons || []).join(', ') || 'unknown';
-  const line = `🔴 **signal:backend_outage** — backend went UNHEALTHY after ${meta.consecutiveFail} consecutive failed checks.`;
+  const line = `🔴 **signal:backend_outage**: backend went UNHEALTHY after ${meta.consecutiveFail} consecutive failed checks.`;
   try { sentry.captureError(new Error('signal:backend_outage'), { reasons, sha: record.sha, httpStatus: record.httpStatus }); } catch { /* best-effort */ }
   if (!DISCORD_HOOK) return;
   await fetch(DISCORD_HOOK, {
@@ -51,7 +51,7 @@ async function clearOutage(record, meta) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       embeds: [{
-        title: '🟢 signal:backend_outage — RECOVERED',
+        title: '🟢 signal:backend_outage: RECOVERED',
         description: `Backend healthy again after ${meta.consecutiveOk} consecutive good checks.`,
         color: 0x2ECC71,
         fields: [{ name: 'Live SHA', value: `\`${record.sha || '?'}\``, inline: true }],

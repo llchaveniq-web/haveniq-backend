@@ -840,7 +840,7 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
   // make it actionable. This is the one place the "why" MUST match the score.
   if (capReason) {
     const topic = FRICTION_CAP_LABEL[capReason] || frictionTopic || 'a core living habit';
-    return `The real gap here is ${topic} — a common roommate dealbreaker. You do line up on `
+    return `The real gap here is ${topic}, a common roommate dealbreaker. You do line up on `
       + `${a}, but that's something you'd need to work out before signing a lease together.`;
   }
 
@@ -849,17 +849,17 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
   // actually see yet — say we don't know enough, and point at the fix. Strong
   // pairs that earned 80+ despite reduced confidence keep their positive read.
   if (confidence < 1 && score < 80) {
-    return `We don't have enough answers yet to call this pairing with confidence — `
-      + `it gets sharper as you both finish more of the quiz.`;
+    return `We don't have enough answers yet to call this pairing with confidence. `
+      + `It gets sharper as you both finish more of the quiz.`;
   }
 
   let base;
   if (score >= 95) {
     // Reserve the system-wide superlative for the genuinely rare top — the
     // calibration crowds 90+, so "strongest in our system" must mean 95+.
-    base = `Exceptional alignment — your ${a} and ${b} are remarkably similar. About as compatible as our matching gets.`;
+    base = `Exceptional alignment: your ${a} and ${b} are remarkably similar. About as compatible as our matching gets.`;
   } else if (score >= 90) {
-    base = `Exceptional alignment — your ${a} and ${b} line up unusually well.`;
+    base = `Exceptional alignment: your ${a} and ${b} line up unusually well.`;
   } else if (score >= 80) {
     // Even a strong pair has a top thing to compare notes on — name it when we
     // know it, so the "why" is specific, not a generic reassurance.
@@ -869,7 +869,7 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
   } else {
     // Name the single biggest gap instead of a vague "some differences".
     base = frictionTopic
-      ? `Meaningful overlap in ${a}, but ${frictionTopic} is where you differ most — worth sorting out before you commit.`
+      ? `Meaningful overlap in ${a}, but ${frictionTopic} is where you differ most, worth sorting out before you commit.`
       : `Meaningful overlap in ${a}. Some lifestyle differences worth talking through before committing.`;
   }
 
@@ -907,7 +907,7 @@ function generateWhyMatched(breakdown, score, complementaryDims = [], converging
       : labels.length === 2
         ? `${labels[0]} and ${labels[1]}`
         : `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
-    return `Your ${list} styles balance each other — opposites that tend to work. ${trajectory}${insight}${base}`;
+    return `Your ${list} styles balance each other: opposites that tend to work. ${trajectory}${insight}${base}`;
   }
   return (trajectory || insight) ? `${trajectory}${insight}${base}` : base;
 }

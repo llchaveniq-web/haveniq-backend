@@ -166,14 +166,14 @@ async function pageAnomaly(report, fetchImpl) {
   const hook = process.env.DISCORD_WEBHOOK_URL || '';
   try { sentry.captureError(new Error('signal:data_coverage_anomaly'), { count: report.anomalies.length }); } catch { /* best-effort */ }
   if (!hook) return;
-  const top = report.anomalies.slice(0, 8).map((a) => `• [${a.severity}] ${a.kind} — ${a.domain || ''} ${a.detail}`).join('\n');
+  const top = report.anomalies.slice(0, 8).map((a) => `• [${a.severity}] ${a.kind}: ${a.domain || ''} ${a.detail}`).join('\n');
   const f = fetchImpl || fetch;
   await f(hook, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       embeds: [{
         title: '🟠 signal:data_coverage_anomaly',
-        description: `A data refresh flagged **${report.anomalies.length}** anomaly(ies) for review — nothing was auto-published as good.\n${top}`.slice(0, 1900),
+        description: `A data refresh flagged **${report.anomalies.length}** anomaly(ies) for review. Nothing was auto-published as good.\n${top}`.slice(0, 1900),
         color: 0xE67E22,
         timestamp: report.at || new Date().toISOString(),
         footer: { text: 'Watch loop • housing coverage diff • review GET /ops/data-diff' },

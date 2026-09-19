@@ -344,7 +344,7 @@ router.post('/:conversationId', requireAuth, refuseBanned, async (req, res) => {
           .catch(() => {});
       }
       return res.status(422).json({
-        error: "This message can't be sent — it looks like it breaks our community guidelines. Keep messages respectful and safe.",
+        error: "This message can't be sent. It looks like it breaks our community guidelines. Keep messages respectful and safe.",
         code: 'content_blocked',
         ...(screen.crisis ? { support: CRISIS_SUPPORT } : {}),
       });

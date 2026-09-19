@@ -42,7 +42,7 @@ const allowedOrigins = rawAllowed
   : ['*'];
 if (!isProd && allowedOrigins.includes('*')) {
   // eslint-disable-next-line no-console
-  console.warn('[cors] CLIENT_URL not set — defaulting to "*" for dev. Set it for production.');
+  console.warn('[cors] CLIENT_URL not set, defaulting to "*" for dev. Set it for production.');
 }
 // Cloudflare Pages always serves the same app at THREE shapes of URL:
 //   • haveniq-app.pages.dev          (production alias)
@@ -618,7 +618,7 @@ async function bootstrapSchemaAsync() {
   const path = require('path');
   const sqlPath = path.resolve(__dirname, 'db', 'migrate_missing.sql');
   if (!fs.existsSync(sqlPath)) {
-    console.warn('[bootstrap] migrate_missing.sql not found at', sqlPath, '— skipping');
+    console.warn('[bootstrap] migrate_missing.sql not found at', sqlPath, '(skipping)');
     return;
   }
   const sql = fs.readFileSync(sqlPath, 'utf8');
@@ -658,7 +658,7 @@ async function bootstrapSchemaAsync() {
       console.error(`[bootstrap] statement ${idx + 1} FAILED: ${err.message} (preview: ${preview}…)`);
     }
   }
-  console.log(`[bootstrap] done — ${ok} ok, ${failed} failed`);
+  console.log(`[bootstrap] done: ${ok} ok, ${failed} failed`);
   if (failed > 0) {
     sentry.captureMessage?.(`bootstrap had ${failed} failing statement(s)`, 'warning');
   }
@@ -922,7 +922,7 @@ server.listen(PORT, () => {
           log: () => {},              // per-listing chatter stays out of the logs
         });
         if (seen.checked) console.log('[recheck]', JSON.stringify(seen));
-        if (seen.blocked > 0) console.error('[recheck] BLOCKED on', seen.blocked, 'check(s) — listings left live, not retired');
+        if (seen.blocked > 0) console.error('[recheck] BLOCKED on', seen.blocked, 'check(s); listings left live, not retired');
       } catch (err) {
         console.error('[recheck] failed:', err.message);
       }

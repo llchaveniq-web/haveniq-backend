@@ -133,7 +133,7 @@ router.post('/nominate', requireAuth, submitNomination, async (req, res) => {
     if (screenMessage(screenText).action === 'block') {
       return res.status(422).json({
         code: 'content_blocked',
-        error: "This nomination can't be saved — it looks like it breaks our community guidelines.",
+        error: "This nomination can't be saved. It looks like it breaks our community guidelines.",
       });
     }
 

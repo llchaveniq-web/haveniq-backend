@@ -160,9 +160,9 @@ function parsePosting(html, url) {
   const isRange = range.highCents > range.lowCents;
   const money = (c) => '$' + Math.round(c / 100).toLocaleString('en-US');
   const summary = [
-    isRange ? `Rent ${money(range.lowCents)}–${money(range.highCents)}/mo across floorplans.` : null,
+    isRange ? `Rent ${money(range.lowCents)} to ${money(range.highCents)}/mo across floorplans.` : null,
     beds.length > 1 ? `Floorplans: ${beds.map(b => (b === 0 ? 'studio' : `${b}BR`)).join(', ')}.` : null,
-    'Building listing — the price shown is the lowest floorplan.',
+    'Building listing: the price shown is the lowest floorplan.',
   ].filter(Boolean).join(' ');
 
   return {

@@ -256,7 +256,7 @@ function fitDimensionGated(records, opts = {}) {
       auc: auc(fullFit.intercept, fullFit.coef, rows, y),
       aucBaseline: auc(prior.intercept, prior.coef, rows, y),
       reason: !allowedTypes.includes(type)
-        ? `learned shape '${type}' not allowed for this dimension — keeping dist-only`
+        ? `learned shape '${type}' not allowed for this dimension, keeping dist-only`
         : `basis did not clear the gate (held-out gain ${improvement.toFixed(4)} < ${minImprovement})`,
     };
   }

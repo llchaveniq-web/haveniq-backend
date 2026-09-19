@@ -28,7 +28,7 @@ if (rateLimitingDisabled()) {
   console.warn(
     '\n' +
     '  ╔══════════════════════════════════════════════════════════════╗\n' +
-    '  ║  RATE_LIMIT_DISABLED=true — ALL rate limiters are OFF.        ║\n' +
+    '  ║  RATE_LIMIT_DISABLED=true: ALL rate limiters are OFF.         ║\n' +
     '  ║  This must ONLY be set on the staging load-test environment.  ║\n' +
     '  ║  If you see this in production, unset it immediately.         ║\n' +
     '  ╚══════════════════════════════════════════════════════════════╝\n'

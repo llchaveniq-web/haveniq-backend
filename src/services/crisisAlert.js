@@ -57,8 +57,8 @@ async function maybeAlertCrisis(user, conversationId, deps = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         embeds: [{
-          title: '⚠️ Possible crisis signal — a student may need support',
-          description: `A message from **${name}** (${email}) tripped the self-harm/crisis detector. A short human check-in can matter. Heuristic detector — use judgment; 911 / campus safety for immediate danger.`,
+          title: '⚠️ Possible crisis signal: a student may need support',
+          description: `A message from **${name}** (${email}) tripped the self-harm/crisis detector. A short human check-in can matter. Heuristic detector, so use judgment; 911 / campus safety for immediate danger.`,
           color: 0xC0392B,
           footer: { text: 'Crisis escalation • debounced 6h/user • not a diagnosis' },
         }],

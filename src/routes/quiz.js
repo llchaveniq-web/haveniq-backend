@@ -28,7 +28,7 @@ function voiceAudioUpload(req, res, next) {
   voiceUpload.single('audio')(req, res, (err) => {
     if (!err) return next();
     const msg = err.code === 'LIMIT_FILE_SIZE'
-      ? 'That recording is too long — keep each answer shorter.'
+      ? 'That recording is too long. Keep each answer shorter.'
       : (err.message || 'Audio upload was rejected.');
     res.status(400).json({ error: msg });
   });

@@ -102,17 +102,17 @@ function copyFor(tone) {
     case 'aligned':
       return {
         headline: 'Same wavelength',
-        detail:   'You share most of your personality profile — an easy, low-friction pairing where you tend to read situations the same way.',
+        detail:   'You share most of your personality profile: an easy, low-friction pairing where you tend to read situations the same way.',
       };
     case 'complementary':
       return {
         headline: 'Complementary pair',
-        detail:   "You're a complementary pair — different enough to balance each other out, with each of you covering the other's blind spots.",
+        detail:   "You're a complementary pair: different enough to balance each other out, with each of you covering the other's blind spots.",
       };
     default:
       return {
         headline: 'Balanced pairing',
-        detail:   'A balanced pairing — enough in common to click quickly, enough difference to keep daily life interesting.',
+        detail:   'A balanced pairing: enough in common to click quickly, enough difference to keep daily life interesting.',
       };
   }
 }

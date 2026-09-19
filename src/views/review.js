@@ -22,7 +22,7 @@ const api = (path, opts = {}) => fetch(path, {
   headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) },
 });
 
-const money = (n) => (n == null ? '—' : '$' + Math.round(n).toLocaleString('en-US'));
+const money = (n) => (n == null ? 'unknown' : '$' + Math.round(n).toLocaleString('en-US'));
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const isFlagged = (r) => (r.risk_score ?? 0) >= 50;
 
@@ -71,8 +71,8 @@ function render() {
   const flagged = rows.filter(isFlagged);
   const clean = rows.filter((r) => !isFlagged(r));
   $('out').innerHTML =
-    (flagged.length ? `<div class="sechead">Flagged — ${flagged.length}, read these</div><div class="grid">${flagged.map(card).join('')}</div>` : '') +
-    (clean.length ? `<div class="sechead">Clean — ${clean.length}</div><div class="grid">${clean.map(card).join('')}</div>` : '');
+    (flagged.length ? `<div class="sechead">Flagged: ${flagged.length}, read these</div><div class="grid">${flagged.map(card).join('')}</div>` : '') +
+    (clean.length ? `<div class="sechead">Clean: ${clean.length}</div><div class="grid">${clean.map(card).join('')}</div>` : '');
   sync();
 }
 
@@ -91,7 +91,7 @@ function card(r) {
       <div class="price">${money(r.perPerson)} <small>/person${r.total && r.total !== r.perPerson ? ' · ' + money(r.total) + ' total' : ''}</small></div>
       <div class="tags">
         <span class="tag src">${esc(r.source || 'manual')}</span>
-        <span class="tag${flagged ? ' risk' : ''}">risk ${r.risk_score ?? '—'}</span>
+        <span class="tag${flagged ? ' risk' : ''}">risk ${r.risk_score ?? 'unknown'}</span>
         ${sig.slice(0, 3).map((s) => `<span class="tag risk">${esc(s)}</span>`).join('')}
       </div>
       <div class="notes">${esc((r.notes || '').slice(0, 180))}</div>

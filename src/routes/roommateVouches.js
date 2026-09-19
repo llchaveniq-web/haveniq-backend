@@ -187,7 +187,7 @@ router.post('/:aboutUserId/request', requireAuth, refuseBanned, async (req, res)
     }
 
     if (!(await everMovedInTogether(fromUserId, aboutUserId))) {
-      return res.status(403).json({ error: "HavenIQ doesn't have a moved-in record for you two — mark that you moved in together first." });
+      return res.status(403).json({ error: "HavenIQ doesn't have a moved-in record for you two. Mark that you moved in together first." });
     }
 
     const notifyAboutUser = () => {
@@ -196,7 +196,7 @@ router.post('/:aboutUserId/request', requireAuth, refuseBanned, async (req, res)
       const senderName = req.user.first_name || 'A past roommate';
       sendPushToUser(aboutUserId, {
         title: 'You have a roommate vouch waiting ⭐',
-        body: `${senderName} wants to vouch for living with you — confirm it to add it to your track record.`,
+        body: `${senderName} wants to vouch for living with you. Confirm it to add it to your track record.`,
         data: { screen: 'circle' },
       }).catch(err => console.error('[push] roommate vouch request send failed:', err));
     };

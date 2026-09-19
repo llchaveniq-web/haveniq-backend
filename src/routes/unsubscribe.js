@@ -17,7 +17,7 @@ const { verify } = require('../lib/unsubscribeToken');
 
 function page(message, ok) {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>HavenIQ — ${ok ? 'Unsubscribed' : 'Unsubscribe'}</title></head>
+<title>HavenIQ: ${ok ? 'Unsubscribed' : 'Unsubscribe'}</title></head>
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f0e8;margin:0;padding:48px 20px;color:#22201d;">
   <div style="max-width:460px;margin:0 auto;background:#fff;border-radius:20px;padding:36px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
     <p style="font-size:24px;font-weight:800;color:#3f6a57;margin:0 0 16px;">HavenIQ ✦</p>

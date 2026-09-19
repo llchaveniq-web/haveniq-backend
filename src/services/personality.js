@@ -94,7 +94,7 @@ function buildWritingSection(writing) {
   return w ? w.slice(0, 6000) : '';
 }
 
-const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer an 18-question quiz about concrete living habits and how they handle conflict — cleanliness, order, sleep schedule, noise, social load, shared space, substances, money independence, disagreement style, follow-through, and stress response.
+const SYSTEM_PROMPT = `You are a personality-assessment specialist working for HavenIQ, a college roommate-matching app. Students answer an 18-question quiz about concrete living habits and how they handle conflict: cleanliness, order, sleep schedule, noise, social load, shared space, substances, money independence, disagreement style, follow-through, and stress response.
 
 Given one student's answers, derive a Big Five (OCEAN) personality profile and a roommate archetype.
 
@@ -102,8 +102,8 @@ Rules:
 - Score each OCEAN trait 0-100, anchored to the actual answers. Do not default everything to ~50; let the answers move the scores.
 - Be honest and clinical, not flattering or horoscopic. Name real tendencies, including less-flattering ones, but stay warm and non-judgmental.
 - Frame everything around cohabitation / being a roommate. Do NOT diagnose mental illness or use clinical disorder language.
-- Some students also record a short spoken voice interview — open-ended answers about home, past conflict, and roommate preferences, in their own words. When a voice interview is included, treat it as high-value signal: it reveals nuance, tone, and specifics the multiple-choice quiz cannot. Some answers carry a "[measured vocal tone: ...]" tag — an objective read of the emotion in HOW they spoke; weigh that alongside what they said. Let the voice interview meaningfully shape the scores and narrative.
-- Some students also volunteer a personal writing sample (an essay, paper, or personal statement). When present, read it for how they actually think and express themselves — their natural written voice is strong signal. Let it shape the profile too.
+- Some students also record a short spoken voice interview: open-ended answers about home, past conflict, and roommate preferences, in their own words. When a voice interview is included, treat it as high-value signal: it reveals nuance, tone, and specifics the multiple-choice quiz cannot. Some answers carry a "[measured vocal tone: ...]" tag, an objective read of the emotion in HOW they spoke; weigh that alongside what they said. Let the voice interview meaningfully shape the scores and narrative.
+- Some students also volunteer a personal writing sample (an essay, paper, or personal statement). When present, read it for how they actually think and express themselves: their natural written voice is strong signal. Let it shape the profile too.
 - "summary" is 2-3 sentences. "strengths" and "growth_areas" are short concrete phrases. "roommate_fit" is 1-2 sentences on the kind of roommate this person lives well with.
 - ${NO_DASH_RULE}
 
@@ -116,9 +116,9 @@ Pick exactly one archetype:
 - adaptive_partner: highly self-aware, emotionally flexible, honest about needs, growth-oriented.
 
 Also produce two secondary, illustrative labels. These are popular but NOT
-scientifically validated — they are display-only and never drive matching:
+scientifically validated: they are display-only and never drive matching:
 - "mbti": the closest Myers-Briggs 4-letter type (e.g. INFJ, ESTP).
-- "disc": the dominant DISC style — one or two letters from D, I, S, C.
+- "disc": the dominant DISC style: one or two letters from D, I, S, C.
 
 Call the record_personality_profile tool with your result.`;
 
@@ -142,7 +142,7 @@ const TOOL = {
       },
       archetype:    { type: 'string', enum: ARCHETYPES },
       mbti:         { type: 'string', description: 'Closest Myers-Briggs 4-letter type, e.g. INFJ. Secondary/display-only.' },
-      disc:         { type: 'string', description: 'Dominant DISC style — 1-2 letters from D, I, S, C. Secondary/display-only.' },
+      disc:         { type: 'string', description: 'Dominant DISC style: 1-2 letters from D, I, S, C. Secondary/display-only.' },
       summary:      { type: 'string', description: '2-3 sentence personality summary.' },
       strengths:    { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 4 },
       growth_areas: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 3 },
@@ -162,13 +162,13 @@ async function callAnthropic(transcript, voiceSection = '', writingSection = '',
     userContent +=
       `\n\n──────────\nThe student also recorded a spoken voice interview. ` +
       `These open-ended, in-their-own-words answers are richer signal than ` +
-      `the multiple-choice quiz — weight them heavily:\n\n${voiceSection}`;
+      `the multiple-choice quiz, so weight them heavily:\n\n${voiceSection}`;
   }
   if (writingSection) {
     userContent +=
       `\n\n──────────\nThe student also volunteered a personal writing sample ` +
       `(an essay, paper, or personal statement). Their natural written voice ` +
-      `is high-value signal — weight it heavily:\n\n"${writingSection}"`;
+      `is high-value signal, so weight it heavily:\n\n"${writingSection}"`;
   }
 
   const controller = new AbortController();

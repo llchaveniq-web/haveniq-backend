@@ -53,7 +53,7 @@ async function runSafetyDigest({ db = realPool, fetchFn = fetch, now = Date.now 
       embeds: [{
         title: '🚩 open safety reports awaiting review',
         description: `**${openTotal}** report${openTotal === 1 ? '' : 's'} still open`
-          + (highTotal > 0 ? ` — **${highTotal} HIGH**` : '')
+          + (highTotal > 0 ? ` (**${highTotal} HIGH**)` : '')
           + `. Oldest: ${oldestDays}d ago. Triage at /admin/safety.`,
         color,
         footer: { text: 'Safety digest • daily • pings only when the queue is non-empty' },

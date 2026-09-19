@@ -1749,15 +1749,15 @@ TARGET ("them"):
 QUIZ OVERLAP:
 ${hasQuizData ? `  Both agreed on ${agreements.length} question(s).
   Diverged on ${divergences.length} question(s).
-  Sample agreements: ${agreements.slice(0, 4).map(a => `[${a.category}] "${a.text}" — both chose "${a.both}"`).join(' | ') || 'none'}
-  Sample divergences: ${divergences.slice(0, 3).map(d => `[${d.category}] "${d.text}" — you said "${d.you}", they said "${d.them}"`).join(' | ') || 'none'}` : `  Not available — one or both users haven't completed enough of the quiz yet. Do NOT invent, imply, or guess at any quiz-based agreement or tension. "agreements" and "tension_points" must be empty arrays; base "story" only on the compatibility score and the profile fields above.`}
+  Sample agreements: ${agreements.slice(0, 4).map(a => `[${a.category}] "${a.text}": both chose "${a.both}"`).join(' | ') || 'none'}
+  Sample divergences: ${divergences.slice(0, 3).map(d => `[${d.category}] "${d.text}": you said "${d.you}", they said "${d.them}"`).join(' | ') || 'none'}` : `  Not available: one or both users haven't completed enough of the quiz yet. Do NOT invent, imply, or guess at any quiz-based agreement or tension. "agreements" and "tension_points" must be empty arrays; base "story" only on the compatibility score and the profile fields above.`}
 
 VOICE RULES:
 - Sound like a college friend pointing something out, not a marketing email.
 - Use first names. Use specific details. NO emojis. NO exclamation points.
-- Honesty over flattery — if there's a real difference, name it.
+- Honesty over flattery: if there's a real difference, name it.
 - "Talk about it" framing for divergences, not "this is a red flag" framing.
-- NEVER mention question numbers or Q-ids — the user has no idea what those refer to. Use the topic/category instead.
+- NEVER mention question numbers or Q-ids. The user has no idea what those refer to. Use the topic/category instead.
 - Every claim in "agreements" and "tension_points" must trace back to something listed in QUIZ OVERLAP above or a profile field above. Never state a specific shared opinion or difference that wasn't actually given to you.
 - 50-90 words total in 'story'. Brevity matters.
 - ${NO_DASH_RULE}

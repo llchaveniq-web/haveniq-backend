@@ -46,17 +46,17 @@ async function pageCheckinSafetyFlag({ reporterId, stage, kind, noteExcerpt, sou
     body: JSON.stringify({
       embeds: [{
         title: crisis
-          ? '\u{1F6A8} signal:checkin_safety_flag — CRISIS'
-          : '\u{1F6A8} signal:checkin_safety_flag — THREAT',
+          ? '\u{1F6A8} signal:checkin_safety_flag: CRISIS'
+          : '\u{1F6A8} signal:checkin_safety_flag: THREAT',
         description: crisis
-          ? 'A student’s check-in note tripped the self-harm / crisis filter. Reach out — they may need support (988).'
+          ? 'A student’s check-in note tripped the self-harm / crisis filter. Reach out, they may need support (988).'
           : 'A student’s check-in note tripped the threat filter. Review and follow up.',
         color: 0xC0392B,
         fields: [
           { name: 'Reporter (user id)', value: `\`${reporterId || '?'}\``, inline: true },
           { name: 'Stage', value: `\`${stage || '?'}\``, inline: true },
           { name: 'Source', value: `\`${source || 'checkin'}\``, inline: true },
-          { name: 'Note (PII-redacted)', value: (noteExcerpt || '—').slice(0, 900), inline: false },
+          { name: 'Note (PII-redacted)', value: (noteExcerpt || 'none').slice(0, 900), inline: false },
         ],
         footer: { text: 'Check-in safety • paged on crisis/threat filter hit' },
       }],

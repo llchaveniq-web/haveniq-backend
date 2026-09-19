@@ -37,7 +37,7 @@ function tryInit() {
     console.log('[stripe] initialized for', process.env.NODE_ENV || 'development');
     return stripe;
   } catch (err) {
-    console.warn('[stripe] init failed — package not installed?', err?.message);
+    console.warn('[stripe] init failed (package not installed?)', err?.message);
     return null;
   }
 }

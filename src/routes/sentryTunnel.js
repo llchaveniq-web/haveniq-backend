@@ -146,8 +146,8 @@ async function trackBurstAndMaybeRollback(report, clientIp) {
     if (DISCORD_HOOK) {
       const color = result.success ? 0xE67E22 : 0xC0392B;
       const title = result.success
-        ? `🔁 AUTO-ROLLBACK fired — bundle ${bundleHash.slice(0, 8)}`
-        : `🚨 ERROR BURST — bundle ${bundleHash.slice(0, 8)} (rollback ${result.attempted ? 'FAILED' : 'SKIPPED'})`;
+        ? `🔁 AUTO-ROLLBACK fired: bundle ${bundleHash.slice(0, 8)}`
+        : `🚨 ERROR BURST: bundle ${bundleHash.slice(0, 8)} (rollback ${result.attempted ? 'FAILED' : 'SKIPPED'})`;
       fetch(DISCORD_HOOK, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -160,9 +160,9 @@ async function trackBurstAndMaybeRollback(report, clientIp) {
             color,
             fields: [
               { name: 'Bundle hash', value: '`' + bundleHash + '`', inline: false },
-              { name: 'Rollback target', value: result.rolledBackTo ? '`' + result.rolledBackTo + '`' : '—', inline: true },
+              { name: 'Rollback target', value: result.rolledBackTo ? '`' + result.rolledBackTo + '`' : 'none', inline: true },
               { name: 'Action needed', value: result.success
-                ? 'NONE — auto-recovery in motion. Verify Cloudflare dashboard shows the previous deployment as production.'
+                ? 'NONE. Auto-recovery in motion. Verify Cloudflare dashboard shows the previous deployment as production.'
                 : 'Manually roll back at: https://dash.cloudflare.com/?to=/:account/pages/view/' + CF_PROJECT, inline: false },
             ],
             timestamp: new Date().toISOString(),
@@ -217,24 +217,24 @@ URL WHEN ERROR FIRED: ${report.url || '(unknown)'}
 USER AGENT: ${(report.userAgent || '').slice(0, 200)}
 ADDITIONAL CONTEXT: ${JSON.stringify(report.context || {}).slice(0, 1000)}
 
-SELF-HEAL SIGNALS (set by the client ErrorBoundary — trust these):
+SELF-HEAL SIGNALS (set by the client ErrorBoundary; trust these):
   likelyStaleBundle:    ${report.likelyStaleBundle === true}
   selfHealing:          ${report.selfHealing === true}    (a tab running OLD cached JS hit this; the client auto-reloaded to a fresh bundle, which resolves it)
-  persistedAfterReload: ${report.persistedAfterReload === true}    (the error happened AGAIN on a fresh bundle — this is a REAL live bug)
+  persistedAfterReload: ${report.persistedAfterReload === true}    (the error happened AGAIN on a fresh bundle, so this is a REAL live bug)
 
 CRITICAL TRIAGE RULE: a stale-bundle self-heal is NOT a live bug. The shipped code is fine; an old open tab simply ran pre-deploy JS and auto-reloaded. So:
   - If selfHealing is true → severity "low", bug_class "stale_bundle_self_heal", fix_eligible false. Do NOT propose a code fix; there is nothing to fix in the current bundle. Note it is a self-healing stale-bundle event.
   - ONLY if persistedAfterReload is true should a hooks/#310/#300/chunk error be treated as real and actionable (severity high). That means it crashed on the freshly-loaded bundle too.
 
 The HavenIQ codebase is a React Native / Expo Web app. Files are in:
-  app/(auth)/*       — sign-in, OTP, email screens
-  app/(setup)/*      — profile setup, quiz intro, quiz screens
-  app/(tabs)/*       — main tab screens (discover, matches, journal, profile)
-  app/match/*        — match detail
-  components/*       — shared UI
-  stores/*           — zustand stores (authStore, matchStore, quizStore)
-  services/*         — api.ts, analytics.ts
-  utils/*            — helpers
+  app/(auth)/*:      sign-in, OTP, email screens
+  app/(setup)/*:     profile setup, quiz intro, quiz screens
+  app/(tabs)/*:      main tab screens (discover, matches, journal, profile)
+  app/match/*:       match detail
+  components/*:      shared UI
+  stores/*:          zustand stores (authStore, matchStore, quizStore)
+  services/*:        api.ts, analytics.ts
+  utils/*:           helpers
 
 The stack trace might be MINIFIED. Common React errors:
   Minified React error #310 = "Rendered fewer hooks than expected" (early return between hooks)
@@ -249,7 +249,7 @@ Respond ONLY with JSON:
   "likely_line":   <integer or null>,
   "root_cause":    "<2-3 sentences>",
   "bug_class":     "null_guard" | "missing_import" | "typo" | "web_platform_short_circuit" | "hooks_violation" | "stale_bundle_self_heal" | "logic" | "config" | "other",
-  "fix_eligible":  <boolean — true if this is a clear, low-risk one-liner fix>,
+  "fix_eligible":  <boolean: true if this is a clear, low-risk one-liner fix>,
   "user_impact":   "<one short sentence: what does the user see?>",
   "proposed_fix":  "<plain-English description of what to change to fix it>"
 }
@@ -290,20 +290,20 @@ async function postDiscord(report, triage, fixDispatched) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       embeds: [{
-        title: `⚡ Direct triage — ${triage.summary || report.message || 'frontend error'}`,
+        title: `⚡ Direct triage: ${triage.summary || report.message || 'frontend error'}`,
         description: `**Severity:** ${triage.severity?.toUpperCase() || '?'} · From: ${report.url || '?'}`,
         color,
         fields: [
-          { name: 'Root cause', value: (triage.root_cause || '—').slice(0, 1000), inline: false },
+          { name: 'Root cause', value: (triage.root_cause || 'unknown').slice(0, 1000), inline: false },
           { name: 'Likely file', value: `\`${triage.likely_file || '?'}\`${triage.likely_line ? `:${triage.likely_line}` : ''}`, inline: true },
           { name: 'Bug class', value: triage.bug_class || '?', inline: true },
-          { name: 'Proposed fix', value: (triage.proposed_fix || '—').slice(0, 1000), inline: false },
-          { name: 'User impact', value: (triage.user_impact || '—').slice(0, 400), inline: false },
+          { name: 'Proposed fix', value: (triage.proposed_fix || 'unknown').slice(0, 1000), inline: false },
+          { name: 'User impact', value: (triage.user_impact || 'unknown').slice(0, 400), inline: false },
           {
             name: fixDispatched ? '⚡ Auto-fix dispatched' : '👤 Manual review',
             value: fixDispatched
               ? 'Triggered GitHub Actions sentry-auto-fix. Expect a PR within ~5 min.'
-              : 'No auto-fix dispatched — file is hard-blocked or bug class needs human review.',
+              : 'No auto-fix dispatched: file is hard-blocked or bug class needs human review.',
             inline: false,
           },
           {
@@ -434,7 +434,7 @@ router.post('/__report', reportLimiter, express.json({ limit: '512kb' }), async 
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             embeds: [{
-              title: '⚠️ Direct error report — triage failed',
+              title: '⚠️ Direct error report: triage failed',
               description: 'Frontend reported an error but Claude triage failed. Raw report below.',
               color: 0xD32F2F,
               fields: [
@@ -516,7 +516,7 @@ async function reportServerError(input = {}) {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             embeds: [{
-              title: '⚠️ Server error report — triage failed',
+              title: '⚠️ Server error report: triage failed',
               description: 'Backend reported an error but Claude triage failed. Raw report below.',
               color: 0xD32F2F,
               fields: [

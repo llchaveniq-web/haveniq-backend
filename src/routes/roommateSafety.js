@@ -161,10 +161,10 @@ async function maybeAlertSeverity(reporterId, reportedId, category) {
     const { rows: u } = await pool.query('SELECT first_name FROM users WHERE id = $1', [reportedId]);
     const name = u[0]?.first_name || 'a student';
     await postSafetyAlert({
-      title: '🚨 Roommate safety report — HIGH SEVERITY',
+      title: '🚨 Roommate safety report: HIGH SEVERITY',
       description:
         `**${name}** was just reported for **${category}**. This is a single-report ` +
-        `alert — high-severity categories page immediately, not just on a forming ` +
+        `alert: high-severity categories page immediately, not just on a forming ` +
         `pattern. Review now: GET /roommate-safety-reports/admin`,
       fields: [
         { name: 'Reported user', value: String(reportedId), inline: false },

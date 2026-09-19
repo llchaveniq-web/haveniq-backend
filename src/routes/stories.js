@@ -118,7 +118,7 @@ router.post('/', requireAuth, async (req, res) => {
           .catch(() => {});
       }
       return res.status(422).json({
-        error: "This story can't be posted — it looks like it breaks our community guidelines. Keep posts respectful and safe.",
+        error: "This story can't be posted. It looks like it breaks our community guidelines. Keep posts respectful and safe.",
         code: 'content_blocked',
         ...(screen.crisis ? { support: CRISIS_SUPPORT } : {}),
       });
