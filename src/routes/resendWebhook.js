@@ -36,8 +36,15 @@ function verify(req) {
   const payload = req.rawBody?.toString('utf8') ?? JSON.stringify(req.body);
   const toSign = `${idHeader || ''}.${ts}.${payload}`;
 
-  // The header may include multiple v1=… entries separated by spaces.
-  const signatures = sigHeader.split(/\s+/).filter(s => s.startsWith('v1='));
+  // The header may carry several entries separated by spaces. Resend signs
+  // with Svix / Standard Webhooks, whose entries are "v1,<base64>", with a
+  // COMMA. This used to accept only "v1=<base64>", so every genuine event
+  // Resend ever sent failed here with a 401: bounces and complaints were
+  // never recorded, and Resend disabled the webhook after enough failures.
+  // Found 2026-09-19 by signing an event with the standardwebhooks library
+  // (what Resend's own SDK verifies with) and posting it here. "v1=" is
+  // still accepted so nothing that relied on it breaks.
+  const signatures = sigHeader.split(/\s+/).filter(s => s.startsWith('v1,') || s.startsWith('v1='));
   const decodedSecret = Buffer.from(
     secret.replace(/^whsec_/, ''),
     'base64',
