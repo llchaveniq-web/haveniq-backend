@@ -25,7 +25,7 @@ const FROM       = 'HavenIQ <noreply@haveniq.org>';
 const UNSUB_MAILTO = 'mailto:support@haveniq.org?subject=unsubscribe';
 // {{unsubUrl}} is filled per-recipient at render time with a signed one-click
 // unsubscribe link (falls back to the mailto if a caller omits it).
-const FOOTER_TEXT  = "\n\n—\nYou're receiving this as a verified HavenIQ member. "
+const FOOTER_TEXT  = "\n\nYou're receiving this as a verified HavenIQ member. "
   + 'To stop these occasional nudges, unsubscribe here: {{unsubUrl}}';
 
 function shell(bodyHtml) {
@@ -44,29 +44,41 @@ function shell(bodyHtml) {
 
 // Templates keyed by segment id. Bodies use {{firstName}} — the recipient's own
 // name — and NOTHING else. No counts, no fabricated stats.
+//
+// No dashes anywhere in this copy (house style). Each button opens the screen
+// the email is about, not the app root: a signed in student lands right there,
+// a signed out one goes to sign in exactly as the root link would. The invite
+// link lives on /circle ("bring your people" on the Profile tab); an earlier
+// version said "it's in your Settings", where it has never been.
 const TEMPLATES = {
   quiz_incomplete: {
     id: 'quiz_incomplete_v1',
     segment: 'quiz_incomplete',
     subject: 'Your HavenIQ matches are one quiz away',
-    text: `Hi {{firstName}},\n\nYou signed up for HavenIQ but haven't finished the compatibility quiz yet — and it's the one thing standing between you and your roommate matches. It takes about ten minutes.\n\nPick it back up: ${APP_URL}\n\n— HavenIQ${FOOTER_TEXT}`,
-    html: shell(`<p>Hi {{firstName}},</p><p>You signed up for HavenIQ but haven't finished the compatibility quiz yet — and it's the one thing standing between you and your roommate matches. It takes about ten minutes.</p><p><a href="${APP_URL}" style="color:#3f6a57;font-weight:600;">Pick up your quiz →</a></p><p style="color:#625c52;">— HavenIQ</p>`),
+    text: `Hi {{firstName}},\n\nYou signed up for HavenIQ but haven't finished the compatibility quiz yet. It's the one thing standing between you and your roommate matches, and it only takes a few minutes.\n\nPick it back up: ${APP_URL}\n\nHavenIQ${FOOTER_TEXT}`,
+    html: shell(`<p>Hi {{firstName}},</p><p>You signed up for HavenIQ but haven't finished the compatibility quiz yet. It's the one thing standing between you and your roommate matches, and it only takes a few minutes.</p><p><a href="${APP_URL}" style="color:#3f6a57;font-weight:600;">Pick up your quiz →</a></p><p style="color:#625c52;">HavenIQ</p>`),
   },
   matches_waiting: {
     id: 'matches_waiting_v1',
     segment: 'matches_waiting',
     subject: 'Your roommate matches are ready ✦',
-    text: `Hi {{firstName}},\n\nYour compatibility quiz is done and your matches are ready to browse. Open HavenIQ to see who you lined up with and send your first connect request.\n\n${APP_URL}\n\n— HavenIQ${FOOTER_TEXT}`,
-    html: shell(`<p>Hi {{firstName}},</p><p>Your compatibility quiz is done and your matches are ready to browse. Open HavenIQ to see who you lined up with and send your first connect request.</p><p><a href="${APP_URL}" style="color:#3f6a57;font-weight:600;">See your matches →</a></p><p style="color:#625c52;">— HavenIQ</p>`),
+    text: `Hi {{firstName}},\n\nYour compatibility quiz is done and your matches are ready to browse. Open HavenIQ to see who you lined up with and send your first connect request.\n\n${APP_URL}/matches\n\nHavenIQ${FOOTER_TEXT}`,
+    html: shell(`<p>Hi {{firstName}},</p><p>Your compatibility quiz is done and your matches are ready to browse. Open HavenIQ to see who you lined up with and send your first connect request.</p><p><a href="${APP_URL}/matches" style="color:#3f6a57;font-weight:600;">See your matches →</a></p><p style="color:#625c52;">HavenIQ</p>`),
   },
   invited_nobody: {
     id: 'invited_nobody_v1',
     segment: 'invited_nobody',
     subject: 'Know someone still looking for a roommate?',
-    text: `Hi {{firstName}},\n\nThe more good people on HavenIQ, the better everyone's matches. If a friend is still figuring out their housing, send them your referral link — it's in your Settings.\n\n${APP_URL}\n\n— HavenIQ${FOOTER_TEXT}`,
-    html: shell(`<p>Hi {{firstName}},</p><p>The more good people on HavenIQ, the better everyone's matches. If a friend is still figuring out their housing, send them your referral link — it's in your Settings.</p><p><a href="${APP_URL}" style="color:#3f6a57;font-weight:600;">Grab your referral link →</a></p><p style="color:#625c52;">— HavenIQ</p>`),
+    text: `Hi {{firstName}},\n\nThe more good people on HavenIQ, the better everyone's matches. If a friend is still figuring out their housing, send them your invite link. It's under "bring your people" on your Profile tab.\n\n${APP_URL}/circle\n\nHavenIQ${FOOTER_TEXT}`,
+    html: shell(`<p>Hi {{firstName}},</p><p>The more good people on HavenIQ, the better everyone's matches. If a friend is still figuring out their housing, send them your invite link. It's under "bring your people" on your Profile tab.</p><p><a href="${APP_URL}/circle" style="color:#3f6a57;font-weight:600;">Get your invite link →</a></p><p style="color:#625c52;">HavenIQ</p>`),
   },
 };
+
+// The first name is whatever the student typed into their profile, so it is
+// escaped before it goes into the HTML part. The text part needs no escaping.
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
+}
 
 // List-Unsubscribe header value the sender attaches to every lifecycle email.
 const LIST_UNSUBSCRIBE = `<${UNSUB_MAILTO}>`;
@@ -77,8 +89,13 @@ const LIST_UNSUBSCRIBE = `<${UNSUB_MAILTO}>`;
 function render(template, { firstName, unsubUrl } = {}) {
   const name = (firstName && String(firstName).trim()) || 'there';
   const url = (unsubUrl && String(unsubUrl).trim()) || UNSUB_MAILTO;
-  const sub = (s) => String(s).replace(/\{\{firstName\}\}/g, name).replace(/\{\{unsubUrl\}\}/g, url);
-  return { subject: sub(template.subject), text: sub(template.text), html: sub(template.html) };
+  // Function replacers, so a "$&" or "$1" typed into a name is kept literally.
+  const sub = (s, n, u) => String(s).replace(/\{\{firstName\}\}/g, () => n).replace(/\{\{unsubUrl\}\}/g, () => u);
+  return {
+    subject: sub(template.subject, name, url),
+    text:    sub(template.text, name, url),
+    html:    sub(template.html, escapeHtml(name), escapeHtml(url)),
+  };
 }
 
 module.exports = { TEMPLATES, render, LIST_UNSUBSCRIBE, UNSUB_MAILTO, FROM, APP_URL };

@@ -37,3 +37,27 @@ test('render: missing name → neutral greeting, never an empty/blank name', () 
   assert.ok(r.text.includes('Hi there,'));
   assert.equal(/\{\{/.test(r.subject + r.text + r.html), false);
 });
+
+test('house style: no dashes anywhere a student reads', () => {
+  for (const key of Object.keys(TEMPLATES)) {
+    const r = render(TEMPLATES[key], { firstName: 'Sam', unsubUrl: 'https://x.test/u?token=a' });
+    for (const part of ['subject', 'text', 'html']) {
+      const visible = part === 'html' ? r.html.replace(/<[^>]*>/g, ' ') : r[part];
+      assert.equal(/[‒-―]| - /.test(visible), false, `${key}.${part} has a dash`);
+    }
+  }
+});
+
+test('the invite email points where the invite link really is', () => {
+  const r = render(TEMPLATES.invited_nobody, { firstName: 'Sam' });
+  assert.equal(/settings/i.test(r.text), false, 'the invite link has never been in Settings');
+  assert.ok(r.text.includes('/circle') && r.html.includes('/circle"'));
+  assert.ok(render(TEMPLATES.matches_waiting, {}).html.includes('/matches"'));
+});
+
+test('a first name is escaped in the HTML part and kept literally', () => {
+  const r = render(TEMPLATES.matches_waiting, { firstName: '<b>Al</b> $& Co' });
+  assert.ok(r.html.includes('Hi &lt;b&gt;Al&lt;/b&gt; $&amp; Co,'));
+  assert.equal(r.html.includes('<b>Al'), false);
+  assert.ok(r.text.includes('Hi <b>Al</b> $& Co,'));
+});
