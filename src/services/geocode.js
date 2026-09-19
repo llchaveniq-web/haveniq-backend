@@ -64,7 +64,11 @@ async function geocodeListing({ address, city, schoolNear }) {
 
 /** The shared lookup. Every caller gets the same throttle and the same
  *  rejection rules, so a new call site can't quietly skip either. */
-async function geocodeOne(q, { limit = 1, prefer = null } = {}) {
+// `strict` separates "the service answered: no such place" (null) from "the
+// service did not answer" (throws). Most callers cannot act on the difference
+// and keep the old null for both. A caller that CACHES the answer must not:
+// see getSchoolCoords in routes/housing.js.
+async function geocodeOne(q, { limit = 1, prefer = null, strict = false } = {}) {
   const url = `${NOMINATIM}?format=jsonv2&limit=${limit}&q=${encodeURIComponent(q)}`;
 
   try {
@@ -73,7 +77,10 @@ async function geocodeOne(q, { limit = 1, prefer = null } = {}) {
       headers: { 'User-Agent': UA, 'Accept': 'application/json' },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (strict) throw new GeocodeUnavailable(`geocoder answered ${res.status}`);
+      return null;
+    }
 
     const body = await res.json();
     if (!Array.isArray(body) || !body.length) return null;
@@ -91,10 +98,13 @@ async function geocodeOne(q, { limit = 1, prefer = null } = {}) {
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
 
     return { lat, lon };
-  } catch {
+  } catch (err) {
+    if (strict) throw err instanceof GeocodeUnavailable ? err : new GeocodeUnavailable(err && err.message);
     return null;
   }
 }
+
+class GeocodeUnavailable extends Error {}
 
 // A campus is a university, a college or a school. Nominatim's `type` for the
 // real thing is one of these; a bus stop named after it, or an apartment block
@@ -178,7 +188,9 @@ function expandColloquial(q) {
 async function geocodeSchool(school) {
   if (!school || typeof school !== 'string' || !school.trim()) return null;
   const q = normalizeSchool(school);
-  const hit = await geocodeOne(q, { limit: 8, prefer: CAMPUS_TYPE });
+  // strict: a timeout or a rate limit must reach the caller as a failure, not
+  // pose as "this campus does not exist". The caller caches the answer.
+  const hit = await geocodeOne(q, { limit: 8, prefer: CAMPUS_TYPE, strict: true });
   if (hit) return hit;
 
   // Nothing matched the name as typed. Try the official form once before
@@ -186,7 +198,7 @@ async function geocodeSchool(school) {
   // not just a longer one.
   const formal = expandColloquial(q);
   if (formal === q) return null;
-  return geocodeOne(formal, { limit: 8, prefer: CAMPUS_TYPE });
+  return geocodeOne(formal, { limit: 8, prefer: CAMPUS_TYPE, strict: true });
 }
 
 /**
@@ -253,4 +265,4 @@ async function reverseGeocode(lat, lon) {
   }
 }
 
-module.exports = { geocodeListing, geocodeSchool, reverseGeocode, buildQuery, haversineMiles };
+module.exports = { GeocodeUnavailable, geocodeListing, geocodeSchool, reverseGeocode, buildQuery, haversineMiles };

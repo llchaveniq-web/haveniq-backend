@@ -18,25 +18,51 @@ const ht = require('../services/housingTiming');
  * Returns null on any failure. Distance is an enhancement; the listings must
  * still come back without it.
  */
+// A miss was cached forever, and a FAILURE counted as a miss. The geocoder
+// is a free public service that rate limits at one request a second, so a
+// timeout or a 429 on the first request from a new school stored "no such
+// campus" for good. Every student there then fell back to school_near, a
+// label almost no collected listing carries, and saw an empty Housing tab
+// while thousands of places sat within 15 miles. Measured before this change:
+// neither CSULB nor LBCC had ever been looked up, and 1,998 listings sit near
+// them.
+//
+// Now: a failure is not cached at all (the next request tries again), and a
+// genuine "not found" is retried after a day, since names get fixed and the
+// service's data changes.
+const MISS_RETRY_MS = 24 * 60 * 60 * 1000;
+
 async function getSchoolCoords(school) {
   if (!school) return null;
   try {
     const { rows } = await pool.query(
-      'SELECT latitude, longitude FROM school_coords WHERE school = $1',
+      'SELECT latitude, longitude, attempted_at FROM school_coords WHERE school = $1',
       [school],
     );
-    if (rows.length) {
-      const r = rows[0];
-      return r.latitude == null ? null : { lat: Number(r.latitude), lon: Number(r.longitude) };
+    const cached = rows[0];
+    if (cached && cached.latitude != null) {
+      return { lat: Number(cached.latitude), lon: Number(cached.longitude) };
+    }
+    if (cached && Date.now() - new Date(cached.attempted_at).getTime() < MISS_RETRY_MS) {
+      return null;
     }
 
-    const coords = await geocodeSchool(school);
-    // Write the row either way. A miss cached as a row is the difference
-    // between one failed lookup and one per request forever.
+    let coords;
+    try {
+      coords = await geocodeSchool(school);
+    } catch (err) {
+      // The service did not answer. Say nothing about the school and store
+      // nothing; the next request asks again.
+      console.warn('[schoolCoords] geocoder unavailable, not caching:', err && err.message);
+      return null;
+    }
+    // An answer, found or not, is cached, so a real miss costs one lookup a
+    // day rather than one per request. A later hit replaces an old miss.
     await pool.query(
-      `INSERT INTO school_coords (school, latitude, longitude)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (school) DO NOTHING`,
+      `INSERT INTO school_coords (school, latitude, longitude, attempted_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (school) DO UPDATE
+         SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude, attempted_at = now()`,
       [school, coords?.lat ?? null, coords?.lon ?? null],
     );
     return coords ? { lat: coords.lat, lon: coords.lon } : null;
@@ -725,3 +751,4 @@ module.exports = router;
 // route response.
 module.exports.serveNotes = serveNotes;
 module.exports.servePhoto = servePhoto;
+module.exports.getSchoolCoords = getSchoolCoords;
