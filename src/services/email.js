@@ -333,14 +333,14 @@ async function sendSafetyAlertEmail({ reportId, category, severity, reason, deta
     await getResend().emails.send({
       from:    'HavenIQ Safety <noreply@haveniq.org>',
       to,
-      subject: `[${severity.toUpperCase()}] New report — ${category}${reportedId ? ` against user ${reportedId.slice(0, 8)}` : ''}`,
+      subject: `[${severity.toUpperCase()}] New report: ${category}${reportedId ? ` against user ${reportedId.slice(0, 8)}` : ''}`,
     html: `
       <!DOCTYPE html>
       <html>
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#FAFAFA; margin:0; padding:24px 16px;">
           <div style="max-width:560px; margin:0 auto; background:#fff; border-radius:12px; overflow:hidden; border:1px solid #E5E7EB;">
             <div style="background:#DC2626; padding:18px 24px;">
-              <p style="font-size:14px; font-weight:700; color:#fff; margin:0; letter-spacing:0.5px; text-transform:uppercase;">⚠ Safety alert — ${severity}</p>
+              <p style="font-size:14px; font-weight:700; color:#fff; margin:0; letter-spacing:0.5px; text-transform:uppercase;">⚠ Safety alert: ${severity}</p>
             </div>
             <div style="padding:24px;">
               <table style="width:100%; font-size:14px; color:#111827; border-collapse:collapse;">
@@ -409,7 +409,7 @@ async function sendFounderSignupAlert({
               <table style="width:100%; border-collapse:collapse; margin-bottom:24px;">
                 <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">Email</td><td style="padding:6px 0; color:#22201d; font-size:14px; font-weight:600;">${email}</td></tr>
                 <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">School</td><td style="padding:6px 0; color:#22201d; font-size:14px;">${safeSchool}</td></tr>
-                <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">Domain</td><td style="padding:6px 0; color:#22201d; font-size:14px;">${schoolDomain || '—'}</td></tr>
+                <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">Domain</td><td style="padding:6px 0; color:#22201d; font-size:14px;">${schoolDomain || 'none'}</td></tr>
                 <tr><td style="padding:6px 0; color:#625c52; font-size:13px;">User ID</td><td style="padding:6px 0; color:#625c52; font-size:12px; font-family:monospace;">${newUserId}</td></tr>
               </table>
 
@@ -507,7 +507,7 @@ async function sendParentDigestEmail({
               </p>
 
               <p style="margin:24px 0 8px; color:#22201d; font-size:14px; line-height:1.6;">
-                Want a deeper look or have questions? ${safeStudent} can show you the full app anytime — they have direct control over what's shared.
+                Want a deeper look or have questions? ${safeStudent} can show you the full app anytime, and they decide what's shared.
               </p>
             </div>
 
@@ -538,10 +538,10 @@ async function sendConnectRequestEmail(toEmail, toName, fromName, score, userId 
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `${fromName} wants to connect on HavenIQ ✦`,
-      text: `Hi ${toName} — ${fromName}${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ. Open HavenIQ to see their profile and accept or pass.\n\n— HavenIQ`,
+      text: `Hi ${toName}, ${fromName}${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ. Open HavenIQ to see their profile and accept or pass.\n\nHavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#3f6a57;">Hi ${toName} — someone wants to connect ✦</h2>
+          <h2 style="color:#3f6a57;">Hi ${toName}, someone wants to connect ✦</h2>
           <p style="color:#625c52;"><strong>${fromName}</strong>${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ.</p>
           <p style="color:#625c52;">Open HavenIQ to see their profile and accept or pass.</p>
         </div>
@@ -563,10 +563,10 @@ async function sendNewMessageEmail(toEmail, toName, fromName, userId = null) {
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `${fromName} sent you a message on HavenIQ`,
-      text: `Hi ${toName} — ${fromName} just messaged you on HavenIQ. Open HavenIQ to read it and reply.\n\n— HavenIQ`,
+      text: `Hi ${toName}, ${fromName} just messaged you on HavenIQ. Open HavenIQ to read it and reply.\n\nHavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#3f6a57;">Hi ${toName} — you have a new message</h2>
+          <h2 style="color:#3f6a57;">Hi ${toName}, you have a new message</h2>
           <p style="color:#625c52;"><strong>${fromName}</strong> just messaged you on HavenIQ.</p>
           <p style="color:#625c52;">Open HavenIQ to read it and reply.</p>
         </div>
@@ -604,7 +604,7 @@ async function sendSupportReplyEmail({ toEmail, toName, replyBody, originalMessa
                 <p style="font-size:12px; color:#625c52; margin:0 0 6px; text-transform:uppercase; letter-spacing:0.5px;">You wrote:</p>
                 <p style="font-size:14px; color:#625c52; line-height:1.6; margin:0; white-space:pre-wrap;">${safe(originalMessage).slice(0, 1000)}</p>
               </div>` : ''}
-              <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0;">Just reply to this email if you need anything else — it comes straight to us.</p>
+              <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0;">Just reply to this email if you need anything else. It comes straight to us.</p>
             </div>
           </div>
         </body>
@@ -627,7 +627,7 @@ async function sendSupportAckEmail(toEmail, toName) {
           <div style="background:#3f6a57;padding:28px;text-align:center;"><p style="font-size:26px;font-weight:800;color:#fff;margin:0;">HavenIQ ✦</p></div>
           <div style="padding:32px;">
             <p style="color:#22201d;font-size:16px;margin:0 0 16px;">Hi ${escapeHtml(toName || 'there')},</p>
-            <p style="color:#22201d;font-size:15px;line-height:1.7;margin:0 0 18px;">Thanks for reaching out — we've got your message and a real person will get back to you. You can just reply to this email if you need to add anything.</p>
+            <p style="color:#22201d;font-size:15px;line-height:1.7;margin:0 0 18px;">Thanks for reaching out. We've got your message and a real person will get back to you. You can just reply to this email if you need to add anything.</p>
             <p style="color:#625c52;font-size:13px;line-height:1.6;margin:0;">If it's urgent or you feel unsafe, contact your campus safety office or call 911.</p>
           </div>
         </div>
@@ -640,18 +640,18 @@ async function sendSupportAckEmail(toEmail, toName) {
 // detector is a heuristic (false positives happen), so the copy says "may need
 // support" and "use your judgment," not a diagnosis.
 async function sendCrisisAlertEmail({ to, studentName, studentEmail, studentId, conversationId }) {
-  const safe = (s) => escapeHtml(s) || '—';
+  const safe = (s) => escapeHtml(s) || 'unknown';
   await getResend().emails.send({
     from:    'HavenIQ Safety <noreply@haveniq.org>',
     to,
-    subject: '⚠️ Possible crisis signal — a student may need support',
+    subject: '⚠️ Possible crisis signal: a student may need support',
     html: `
       <!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#1a1a1a;margin:0;padding:32px 20px;">
         <div style="max-width:520px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;">
           <div style="background:#C0392B;padding:24px;"><p style="font-size:18px;font-weight:800;color:#fff;margin:0;">⚠️ Possible crisis signal</p></div>
           <div style="padding:28px;">
-            <p style="color:#22201d;font-size:15px;line-height:1.7;margin:0 0 16px;">A message from <strong>${safe(studentName)}</strong> (${safe(studentEmail)}) tripped the self-harm / crisis detector. Consider checking in — a short, human "hey, are you okay?" can matter.</p>
-            <p style="color:#625c52;font-size:13px;line-height:1.6;margin:0 0 12px;">This is a heuristic detector, not a diagnosis — use your judgment. If you believe someone is in immediate danger, contact 911 or their campus safety office. The 988 Suicide &amp; Crisis Lifeline is available to share.</p>
+            <p style="color:#22201d;font-size:15px;line-height:1.7;margin:0 0 16px;">A message from <strong>${safe(studentName)}</strong> (${safe(studentEmail)}) tripped the self-harm / crisis detector. Consider checking in. A short, human "hey, are you okay?" can matter.</p>
+            <p style="color:#625c52;font-size:13px;line-height:1.6;margin:0 0 12px;">This is a heuristic detector, not a diagnosis, so use your judgment. If you believe someone is in immediate danger, contact 911 or their campus safety office. The 988 Suicide &amp; Crisis Lifeline is available to share.</p>
             <p style="color:#625c52;font-size:12px;margin:0;">Student ID: ${safe(studentId)}${conversationId ? ` · Conversation: ${safe(conversationId)}` : ''}</p>
           </div>
         </div>
@@ -674,12 +674,12 @@ async function sendListingAlertEmail({ toEmail, toName, perPerson, beds, address
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `A new place near you: $${perPerson}/mo per person`,
-      text: `Hi ${toName},\n\nA new place just went up near your school.\n\n${where}\n$${perPerson}/mo per person — ${bedLabel}\n\nOpen HavenIQ to see it.\n\nYou're getting this because you asked to hear about new places. You can turn it off any time in the Housing tab.\n\nHavenIQ`,
+      text: `Hi ${toName},\n\nA new place just went up near your school.\n\n${where}\n$${perPerson}/mo per person, ${bedLabel}\n\nOpen HavenIQ to see it.\n\nYou're getting this because you asked to hear about new places. You can turn it off any time in the Housing tab.\n\nHavenIQ`,
       html: `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
           <h2 style="color:#3f6a57;">A new place near you</h2>
           <p style="color:#22201d;font-size:18px;margin:0 0 4px;"><strong>${escapeHtml(where)}</strong></p>
-          <p style="color:#625c52;margin:0 0 24px;">$${perPerson}/mo per person — ${bedLabel}</p>
+          <p style="color:#625c52;margin:0 0 24px;">$${perPerson}/mo per person, ${bedLabel}</p>
           <p style="color:#625c52;">Open HavenIQ to see it.</p>
           <p style="color:#625c52;font-size:13px;margin-top:32px;">You're getting this because you asked to hear about new places near your school. You can turn it off any time in the Housing tab.</p>
         </div>
