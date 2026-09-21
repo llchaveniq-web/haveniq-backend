@@ -1258,9 +1258,18 @@ router.get('/requests', requireAuth, async (req, res) => {
     const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
     const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
+    // The initial, not the name, and no photo. This is someone the student has
+    // NOT accepted yet, and the app promises both stay hidden until they do:
+    // the safety sheet says "Your last name and contact info stay hidden
+    // (others see only your first name and initial) until you both choose to
+    // connect", and photos unlock on a match. This returned u.last_name and
+    // u.photo_url raw, the one endpoint that did: /feed and match of the day
+    // already send only the initial. The client reads last_initial first and
+    // renders initials without a photo, so nothing on screen changes except
+    // the notifications list, which had been showing the requester's face.
     const { rows } = await pool.query(
       `SELECT cr.id, cr.from_user, cr.created_at,
-              u.first_name, u.last_name, u.school, u.photo_url,
+              u.first_name, UPPER(LEFT(COALESCE(u.last_name, ''), 1)) AS last_initial, u.school,
               cs.score
        FROM connect_requests cr
        JOIN users u ON u.id = cr.from_user
