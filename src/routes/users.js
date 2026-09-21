@@ -2,6 +2,7 @@ const router  = require('express').Router();
 const multer  = require('multer');
 const pool    = require('../db/pool');
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
+const { connectedSet } = require('../lib/photoGate');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
 const suspicious = require('../middleware/suspiciousActivity');
 const { aiLimiter } = require('../middleware/rateLimits');
@@ -714,7 +715,13 @@ router.get('/:id', requireAuth, suspicious.track('profile.lookup', 50), async (r
     // Ordered gallery (up to 4). Shaped into `photos`, and the raw aggregate
     // column dropped so the payload carries one documented field rather than an
     // internal name. photo_url stays as the single-photo fallback.
-    rows[0].photos = photosFor(rows[0]);
+    // Faces only for the student themselves or someone connected to them
+    // (lib/photoGate.js). Any signed in student could read any other
+    // student's photos here by id, whatever the app chose to paint.
+    const revealed = req.params.id === req.user.id
+      || (await connectedSet(req.user.id, [rows[0].id])).has(String(rows[0].id));
+    rows[0].photos = revealed ? photosFor(rows[0]) : [];
+    if (!revealed) rows[0].photo_url = null;
     delete rows[0].photo_urls;
 
     res.json(rows[0]);
@@ -749,10 +756,13 @@ router.get('/me/viewers', requireAuth, async (req, res) => {
       [req.user.id]
     );
 
-    // Peer list → last INITIAL only (policy §3), same as everywhere else.
+    // Peer list → last INITIAL only (policy §3), same as everywhere else, and
+    // a face only for viewers this student is connected to (lib/photoGate.js).
+    const revealTo = await connectedSet(req.user.id, rows.map(r => r.id));
     res.json(rows.map(r => ({
       ...r,
       last_name: (r.last_name || '').trim().charAt(0).toUpperCase(),
+      photo_url: revealTo.has(String(r.id)) ? r.photo_url : null,
     })));
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch viewers' });

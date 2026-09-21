@@ -155,7 +155,10 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
             userId:      r.user_id,
             firstName:   r.first_name,
             lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
-            photoUrl:    r.photo_url,
+            // A preview is pre match by definition: no face (lib/photoGate.js).
+            // The app's checkpoint keeps the face locked anyway ("94%, but
+            // who?"); the URL was still reaching the phone.
+            photoUrl:    null,
             school:      r.school,
             score:       Math.round(r.score),
           })),
@@ -229,7 +232,7 @@ router.post('/preview-matches', optionalAuth, async (req, res) => {
         userId:    c.user_id,
         firstName: c.first_name,
         lastInitial: (c.last_name || '').slice(0, 1).toUpperCase(),
-        photoUrl:  c.photo_url,
+        photoUrl:  null,   // pre match: no face (see the stored branch above)
         school:    c.school,
         score:     Math.round(result.finalPct),
       });

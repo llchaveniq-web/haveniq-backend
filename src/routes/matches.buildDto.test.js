@@ -64,12 +64,26 @@ test('buildMatchDTO maps the core identity + score fields the app reads', () => 
   assert.ok(!('lastName' in dto), 'raw last name must never be in the DTO');
   assert.equal(dto.compatScore, 87.5);            // numeric, not the '87.5' string
   assert.equal(dto.school, 'UCLA');
-  assert.equal(dto.photoUrl, 'https://example.test/maya.jpg');
-  assert.deepEqual(dto.photos, ['https://example.test/maya.jpg']); // gallery falls back to photo_url
+  // Not connected (connect_status null): no face leaves the server.
+  assert.equal(dto.photoUrl, null);
+  assert.deepEqual(dto.photos, []);
   assert.equal(dto.profileComplete, true);
   assert.equal(dto.confidence, 1);
   assert.equal(dto.isProvisional, false);
   assert.equal(dto.crossSchool, false);           // same school as viewer
+});
+
+// Faces only after a mutual match (lib/photoGate.js). A pending request in
+// either direction is not a match; an accepted one is.
+test('buildMatchDTO sends photos only once the connect request is accepted', () => {
+  for (const status of [null, 'pending', 'declined']) {
+    const dto = buildMatchDTO(fullRow({ connect_status: status }), { myAnswers: null, mySchool: 'UCLA' });
+    assert.equal(dto.photoUrl, null, `photo leaked at connect_status ${status}`);
+    assert.deepEqual(dto.photos, [], `gallery leaked at connect_status ${status}`);
+  }
+  const matched = buildMatchDTO(fullRow({ connect_status: 'accepted' }), { myAnswers: null, mySchool: 'UCLA' });
+  assert.equal(matched.photoUrl, 'https://example.test/maya.jpg');
+  assert.deepEqual(matched.photos, ['https://example.test/maya.jpg']); // gallery falls back to photo_url
 });
 
 test('buildMatchDTO flags a cross-school pair against the viewer campus', () => {

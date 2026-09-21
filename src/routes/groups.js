@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const { calculateGroupCompatibility, flatten } = require('../services/scoring');
 const { isFounder } = require('../utils/founders');
 const { isDemo } = require('../lib/demoFilter');
+const { connectedSet } = require('../lib/photoGate');
 
 // Normalize the wire shape of quiz answers into the flat
 // { questionId: number } map the scoring engine expects.
@@ -221,12 +222,17 @@ router.get('/feed', requireAuth, async (req, res) => {
         budgetMin:      cand.budget_per_person_min,
         budgetMax:      cand.budget_per_person_max,
         score:          score.finalPct,
-        members: candMembers.map(m => ({
-          id:          m.id,
-          firstName:   m.first_name,
-          lastInitial: (m.last_name || '').slice(0, 1).toUpperCase(),
-          photoUrl:    m.photo_url,
-        })),
+        // Another group's members are strangers to this student: a face only
+        // for the ones they are already connected to (lib/photoGate.js).
+        members: await (async () => {
+          const revealTo = await connectedSet(req.user.id, candMembers.map(m => m.id));
+          return candMembers.map(m => ({
+            id:          m.id,
+            firstName:   m.first_name,
+            lastInitial: (m.last_name || '').slice(0, 1).toUpperCase(),
+            photoUrl:    revealTo.has(String(m.id)) ? m.photo_url : null,
+          }));
+        })(),
       });
     }
 
@@ -394,7 +400,13 @@ router.get('/:id', requireAuth, async (req, res) => {
     );
     if (!groupRows[0]) return res.status(404).json({ error: 'Group not found' });
 
-    res.json({ group: groupRows[0], members: memberRows });
+    // Fellow members chose to form this group, so their faces stay. Their
+    // surnames do not: this returned last_name raw, where policy §3 (see
+    // users.js) is that no student ever receives more than another's initial.
+    res.json({
+      group: groupRows[0],
+      members: memberRows.map(r => ({ ...r, last_name: (r.last_name || '').trim().charAt(0).toUpperCase() })),
+    });
   } catch (err) {
     console.error('group fetch failed:', err);
     res.status(500).json({ error: 'Failed to load group' });

@@ -26,6 +26,7 @@
 
 const router = require('express').Router();
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
+const { connectedSet } = require('../lib/photoGate');
 const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 
@@ -155,6 +156,10 @@ async function hydrateMatch(userId, matchUserId, action) {
   );
   const r = rows[0];
   if (!r) return null;
+  // The daily pick is a pre match surface: faces only once connected
+  // (lib/photoGate.js). It sent the photo and the whole gallery, which the
+  // app then hid behind "photos when you match".
+  const revealed = (await connectedSet(userId, [r.id])).has(String(r.id));
   return {
     userId:       r.id,
     firstName:    r.first_name,
@@ -163,8 +168,8 @@ async function hydrateMatch(userId, matchUserId, action) {
     schoolYear:   r.school_year,
     major:        r.major,
     bio:          r.bio,
-    photoUrl:     r.photo_url,
-    photos:       photosFor(r),
+    photoUrl:     revealed ? r.photo_url : null,
+    photos:       revealed ? photosFor(r) : [],
     isVerified:   !!r.is_verified,
     // Trust signals the client's TrustChips renders. It proves the strongest
     // tier it can from what it is given: identityVerifiedAt -> "ID verified",

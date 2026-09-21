@@ -18,6 +18,7 @@ const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = requir
 const { spendConnect, refundConnect } = require('../lib/connectQuota');
 // Pre-match photo gallery (owner decision 2026-07-22: faces visible while choosing).
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
+const { connectedSet } = require('../lib/photoGate');
 const { loadDrift } = require('../services/pulseDrift');
 const { calculateCompatibility, topFrictionTopic, matchingV11Enabled, flatten } = require('../services/scoring');
 const QUIZ_QUESTIONS = require('../data/quizQuestions');
@@ -290,11 +291,14 @@ function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
     bio:           r.bio,
     gender:        r.gender,
     lookingFor:    r.looking_for || [],
-    photoUrl:      r.photo_url,
-    // Ordered gallery (up to 4) — faces are now shown while CHOOSING a match,
-    // not only after one. Falls back to [photo_url] for anyone who never used
-    // the multi-photo manager, and [] when they have no photo at all.
-    photos:        photosFor(r),
+    // Faces only after a mutual match (see lib/photoGate.js). This comment
+    // used to say faces were shown while CHOOSING a match; the app stopped
+    // doing that (every pre match surface paints a monogram), but the URLs
+    // kept shipping to the phone. connect_status comes from the connect
+    // request join, both directions. Ordered gallery (up to 4) once revealed,
+    // falling back to [photo_url], and [] with no photo at all.
+    photoUrl:      r.connect_status === 'accepted' ? r.photo_url : null,
+    photos:        r.connect_status === 'accepted' ? photosFor(r) : [],
     budgetMin:     r.budget_min,
     budgetMax:     r.budget_max,
     moveInTimeline:r.move_in_timeline,
@@ -900,11 +904,14 @@ router.get('/suites', requireAuth, suspicious.track('matches.suites', 30), async
     const dimensionModels = await loadCertifiedModels();
     const driftMap = await loadDrift(ids);
 
+    // Faces only for the student themselves and people they are connected to
+    // (lib/photoGate.js). A suite is a suggestion of strangers to live with.
+    const revealTo = await connectedSet(userId, ids);
     const members = poolRows.map(r => ({
       userId: r.id,
       firstName: r.first_name || '',
       lastInitial: (r.last_name || '').slice(0, 1).toUpperCase(),
-      photoUrl: r.photo_url || undefined,
+      photoUrl: (r.id === userId || revealTo.has(String(r.id))) ? (r.photo_url || undefined) : undefined,
       schoolYear: r.school_year || undefined,
     }));
 

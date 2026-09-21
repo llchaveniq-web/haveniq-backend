@@ -4,6 +4,7 @@ const { requireAuth } = require('../middleware/auth');
 const { screenMessage, CRISIS_SUPPORT } = require('../lib/contentFilter');
 const { isModeratorUser } = require('../utils/founders');
 const { audit } = require('../services/auditLog');
+const { connectedSet } = require('../lib/photoGate');
 
 // ═══════════════════════════════════════════════════════════════════════
 // Stories — cross-user post feed (HavenIQ Stories, Roommate Stories
@@ -61,7 +62,7 @@ router.get('/', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query(
       `SELECT s.id, s.title, s.body, s.category, s.is_anonymous, s.created_at,
-              u.first_name, u.last_name, u.photo_url
+              s.author_id, u.first_name, u.last_name, u.photo_url
        FROM stories s
        LEFT JOIN users u ON u.id = s.author_id
        ${where}
@@ -70,6 +71,11 @@ router.get('/', requireAuth, async (req, res) => {
       params,
     );
 
+    // Faces only on the reader's own stories and from people they are
+    // connected to (lib/photoGate.js): a school wide feed is a pre match
+    // surface. author_id is read for this check and never serialized, so an
+    // anonymous post stays anonymous.
+    const revealTo = await connectedSet(req.user.id, rows.filter(r => !r.is_anonymous).map(r => r.author_id));
     res.json(rows.map(r => ({
       id:          r.id,
       title:       r.title,
@@ -83,7 +89,7 @@ router.get('/', requireAuth, async (req, res) => {
         : {
             firstName:   r.first_name ?? 'Student',
             lastInitial: (r.last_name || '').charAt(0),
-            photoUrl:    r.photo_url,
+            photoUrl:    (r.author_id === req.user.id || revealTo.has(String(r.author_id))) ? r.photo_url : null,
           },
     })));
   } catch (err) {

@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool   = require('../db/pool');
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
+const { connectedSet } = require('../lib/photoGate');
 const { requireAuth } = require('../middleware/auth');
 const { isFounder }   = require('../utils/founders');
 const { notDemo }     = require('../lib/demoFilter');
@@ -35,10 +36,14 @@ router.get('/', requireAuth, searchLimiter, async (req, res) => {
     // ILIKE wins on prefix matches ("Jac" → "Jackson") and pg_trgm
     // covers fat-finger typos. We OR them and rank by trigram similarity
     // so prefix matches still float to the top.
+    // First name only. Last names stay private until two students connect
+    // ("others see only your first name and initial"), and matching on them
+    // gave that away: searching "Kim" listed everyone whose SURNAME starts
+    // with Kim, so a search box confirmed exactly what the app hides.
     const { rows: users } = await pool.query(
       `SELECT u.id, u.first_name, u.last_name, u.school, u.photo_url,
               ph.urls AS photo_urls,
-              GREATEST(similarity(u.first_name, $1), similarity(COALESCE(u.last_name,''), $1)) AS sim
+              similarity(u.first_name, $1) AS sim
        FROM users u
        ${galleryJoin('u.id', 'ph')}
        WHERE u.id != $2
@@ -46,15 +51,17 @@ router.get('/', requireAuth, searchLimiter, async (req, res) => {
          AND COALESCE(u.is_banned, FALSE) = FALSE
          AND ($3::text IS NULL OR u.school = $3)
          AND (
-           u.first_name ILIKE $4 OR u.last_name ILIKE $4
+           u.first_name ILIKE $4
            OR similarity(u.first_name, $1) > 0.3
-           OR similarity(COALESCE(u.last_name,''), $1) > 0.3
          )
          ${demoFilter}
        ORDER BY sim DESC NULLS LAST
        LIMIT 8`,
       [q, req.user.id, callerSchool, `${q}%`],
     );
+    // Faces only for people this student is connected to (lib/photoGate.js).
+    // Search is a pre match surface.
+    const revealTo = await connectedSet(req.user.id, users.map(u => u.id));
 
     const { rows: groups } = await pool.query(
       `SELECT g.id, g.name, g.size_target, g.status,
@@ -75,8 +82,8 @@ router.get('/', requireAuth, searchLimiter, async (req, res) => {
         firstName:   u.first_name,
         lastInitial: (u.last_name || '').slice(0, 1).toUpperCase(),
         school:      u.school,
-        photoUrl:    u.photo_url,
-        photos:      photosFor(u),
+        photoUrl:    revealTo.has(String(u.id)) ? u.photo_url : null,
+        photos:      revealTo.has(String(u.id)) ? photosFor(u) : [],
       })),
       groups,
     });

@@ -3,6 +3,7 @@ const pool   = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { submitNomination, quickAction } = require('../middleware/rateLimits');
 const { screenMessage } = require('../lib/contentFilter');
+const { connectedSet } = require('../lib/photoGate');
 
 // ═══════════════════════════════════════════════════════════════════════
 // Best Roommate Award — vote tallies for the /best-roommate screen.
@@ -54,12 +55,15 @@ router.get('/nominees', requireAuth, async (req, res) => {
       [req.user.id, req.user.school],
     );
 
+    // A school wide leaderboard is a pre match surface: faces only for the
+    // student themselves and people they are connected to (lib/photoGate.js).
+    const revealTo = await connectedSet(req.user.id, rows.map(r => r.id));
     res.json(rows.map(r => ({
       id:          r.id,
       firstName:   r.first_name ?? '',
       lastInitial: (r.last_name || '').charAt(0),
       school:      r.school,
-      photoUrl:    r.photo_url,
+      photoUrl:    (r.id === req.user.id || revealTo.has(String(r.id))) ? r.photo_url : null,
       voteCount:   r.vote_count,
       iVoted:      r.i_voted,
     })));
