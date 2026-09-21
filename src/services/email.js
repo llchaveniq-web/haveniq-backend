@@ -17,6 +17,42 @@ function escapeHtml(s) {
   ));
 }
 
+// Where the buttons in student email go. The app, not the apex marketing site:
+// haveniq.org has no way into the app.
+const APP_URL = (process.env.APP_PUBLIC_URL || 'https://app.haveniq.org').replace(/\/$/, '');
+
+// The branded card the sign-in code email already used, shared by the notice
+// emails below. Those were a bare heading and two sentences ending in "Open
+// HavenIQ", with NO link anywhere: a student told that someone wanted to room
+// with them had to go and find the app on their own. Found 2026-09-21 by
+// rendering every student email with a stubbed Resend client and listing its
+// links. Each now carries one button to the screen it is about, and the same
+// link in its plain text part.
+function noticeHtml({ heading, bodyHtml, cta }) {
+  return `<!DOCTYPE html>
+<html>
+  <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#f4f0e8; margin:0; padding:40px 20px;">
+    <div style="max-width:480px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+      <div style="background:#3f6a57; padding:28px; text-align:center;">
+        <p style="font-size:26px; font-weight:800; color:#fff; margin:0; letter-spacing:-0.5px;">HavenIQ ✦</p>
+      </div>
+      <div style="padding:32px;">
+        <p style="color:#22201d; font-size:18px; font-weight:600; line-height:1.4; margin:0 0 14px;">${heading}</p>
+        ${bodyHtml}
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:26px 0 4px;">
+          <tr><td style="border-radius:12px; background:#3f6a57;">
+            <a href="${cta.href}" style="display:inline-block; padding:14px 24px; font-size:15px; font-weight:600; color:#ffffff; text-decoration:none; border-radius:12px;">${cta.label} →</a>
+          </td></tr>
+        </table>
+      </div>
+      <div style="background:#f4f0e8; padding:18px 32px; text-align:center; border-top:1px solid #efe8dd;">
+        <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students</p>
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
 // Generate a 6-digit OTP. Uses crypto.randomInt (CSPRNG), not Math.random
 // — Math.random isn't suitable for security-relevant tokens because its
 // stream is predictable from a small observed run. randomInt's upper
@@ -113,19 +149,18 @@ HavenIQ`,
 
 // Send new match notification email
 async function sendMatchEmail(toEmail, toName, matchName, score, userId = null) {
+  const url = `${APP_URL}/matches`;
   try {
     await getResend().emails.send({
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `You have a new ${score}% match on HavenIQ ✦`,
-      text: `Hi ${toName}! You have a new match on HavenIQ.\n\n${matchName} is ${score}% compatible with you. Open HavenIQ to see their full profile and connect.\n\nHavenIQ`,
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#3f6a57;">Hi ${toName}! You have a new match ✦</h2>
-          <p style="color:#625c52;"><strong>${matchName}</strong> is <strong>${score}% compatible</strong> with you.</p>
-          <p style="color:#625c52;">Open HavenIQ to see their full profile and connect.</p>
-        </div>
-      `,
+      text: `Hi ${toName}! You have a new match on HavenIQ.\n\n${matchName} is ${score}% compatible with you. See their profile and connect:\n${url}\n\nHavenIQ`,
+      html: noticeHtml({
+        heading: `Hi ${escapeHtml(toName)}, you have a new match ✦`,
+        bodyHtml: `<p style="color:#625c52; font-size:15px; line-height:1.6; margin:0;"><strong style="color:#22201d;">${escapeHtml(matchName)}</strong> is <strong style="color:#22201d;">${escapeHtml(score)}% compatible</strong> with you. See their profile and send a connect request.</p>`,
+        cta: { href: url, label: 'See your match' },
+      }),
     });
     analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'match' });
   } catch (err) {
@@ -245,7 +280,7 @@ async function sendParentInviteEmail({ parentEmail, studentName, userId = null }
               </p>
             </div>
             <div style="background:#f4f0e8; padding:18px 32px; text-align:center; border-top:1px solid #efe8dd;">
-              <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
+              <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · app.haveniq.org</p>
             </div>
           </div>
         </body>
@@ -270,7 +305,27 @@ async function sendWelcomeEmail(email, userId = null) {
     await getResend().emails.send({
       from:    'HavenIQ <noreply@haveniq.org>',
       to:      email,
-      subject: `Welcome to HavenIQ ✦ Your first match is one quiz away`,
+      // Was "Your first match is one quiz away", but the quiz now comes BEFORE
+      // signup, so most students reading this have already taken it. The
+      // steps below are worded to be true either way, and the email finally
+      // has a way into the app: it had one link, to support.
+      subject: `Welcome to HavenIQ ✦ You're verified`,
+      // Plain text part. This was the one student email without one, and an
+      // HTML only message is what .edu filters penalise (see sendOTPEmail).
+      text: `You're in. Welcome to HavenIQ.
+
+Every account on HavenIQ has a verified academic email, including yours now. No catfishing, no scammers, no marketing bots. Just real students looking for the right person to live with.
+
+3 things to do this week:
+1. Finish the quiz if you haven't. 10 questions get you matched, and eight more sharpen it.
+2. Add a photo and a few real sentences on how you actually live. Specific beats generic.
+3. Browse your matches and send your first connect request.
+
+Open HavenIQ: ${APP_URL}
+
+Questions? Email support@haveniq.org.
+
+HavenIQ`,
     html: `
       <!DOCTYPE html>
       <html>
@@ -289,7 +344,7 @@ async function sendWelcomeEmail(email, userId = null) {
               <div style="background:#f4f0e8; border-left:4px solid #3f6a57; padding:20px 24px; border-radius:8px; margin:0 0 24px;">
                 <p style="font-size:15px; color:#22201d; margin:0 0 12px; font-weight:600;">3 things to do this week:</p>
                 <p style="font-size:14px; color:#625c52; line-height:1.8; margin:0;">
-                  <strong>1.</strong> Take the quiz. 10 questions to get matched, about two minutes. Eight more sharpen it.<br/>
+                  <strong>1.</strong> Finish the quiz if you haven't. 10 questions get you matched, and eight more sharpen it.<br/>
                   <strong>2.</strong> Add a photo + a few real sentences on how you actually live. Specific beats generic.<br/>
                   <strong>3.</strong> Browse your matches and send your first connect request.
                 </p>
@@ -299,6 +354,12 @@ async function sendWelcomeEmail(email, userId = null) {
                 <strong>One thing to know:</strong> the quiz isn't a personality test for fun. It's how we predict roommate compatibility from things like attachment style, conflict patterns, and sleep schedule. The more honestly you answer, the better the matches.
               </p>
 
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:4px 0 26px;">
+                <tr><td style="border-radius:12px; background:#3f6a57;">
+                  <a href="${APP_URL}" style="display:inline-block; padding:14px 24px; font-size:15px; font-weight:600; color:#ffffff; text-decoration:none; border-radius:12px;">Open HavenIQ →</a>
+                </td></tr>
+              </table>
+
               <p style="color:#625c52; font-size:13px; line-height:1.7; margin:0 0 8px;">
                 Questions? Hit us at <a href="mailto:support@haveniq.org" style="color:#3f6a57; text-decoration:none;">support@haveniq.org</a>.
               </p>
@@ -307,7 +368,7 @@ async function sendWelcomeEmail(email, userId = null) {
               </p>
             </div>
             <div style="background:#f4f0e8; padding:18px 32px; text-align:center; border-top:1px solid #efe8dd;">
-              <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · haveniq.org</p>
+              <p style="color:#625c52; font-size:12px; margin:0;">HavenIQ · roommate matching for verified college students · app.haveniq.org</p>
             </div>
           </div>
         </body>
@@ -533,19 +594,19 @@ async function sendParentDigestEmail({
 // request is RECEIVED. On web (the whole production app) push tokens are never
 // registered, so without this the recipient never learns someone reached out.
 async function sendConnectRequestEmail(toEmail, toName, fromName, score, userId = null) {
+  // Incoming requests sit at the top of the Matches tab.
+  const url = `${APP_URL}/matches`;
   try {
     await getResend().emails.send({
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `${fromName} wants to connect on HavenIQ ✦`,
-      text: `Hi ${toName}, ${fromName}${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ. Open HavenIQ to see their profile and accept or pass.\n\nHavenIQ`,
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#3f6a57;">Hi ${toName}, someone wants to connect ✦</h2>
-          <p style="color:#625c52;"><strong>${fromName}</strong>${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ.</p>
-          <p style="color:#625c52;">Open HavenIQ to see their profile and accept or pass.</p>
-        </div>
-      `,
+      text: `Hi ${toName}, ${fromName}${score ? ` (${score}% compatible)` : ''} wants to be your roommate on HavenIQ. See their profile and accept or pass:\n${url}\n\nHavenIQ`,
+      html: noticeHtml({
+        heading: `Hi ${escapeHtml(toName)}, someone wants to connect ✦`,
+        bodyHtml: `<p style="color:#625c52; font-size:15px; line-height:1.6; margin:0;"><strong style="color:#22201d;">${escapeHtml(fromName)}</strong>${score ? ` (${escapeHtml(score)}% compatible)` : ''} wants to be your roommate. See their profile, then accept or pass.</p>`,
+        cta: { href: url, label: 'See the request' },
+      }),
     });
     analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'connect_request' });
   } catch (err) {
@@ -558,19 +619,18 @@ async function sendConnectRequestEmail(toEmail, toName, fromName, score, userId 
 // to the FIRST unread message in a conversation (not per-message). Never
 // includes the message body — a notification, not the content.
 async function sendNewMessageEmail(toEmail, toName, fromName, userId = null) {
+  const url = `${APP_URL}/messages`;
   try {
     await getResend().emails.send({
       from: 'HavenIQ <noreply@haveniq.org>',
       to:      toEmail,
       subject: `${fromName} sent you a message on HavenIQ`,
-      text: `Hi ${toName}, ${fromName} just messaged you on HavenIQ. Open HavenIQ to read it and reply.\n\nHavenIQ`,
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:40px 20px;">
-          <h2 style="color:#3f6a57;">Hi ${toName}, you have a new message</h2>
-          <p style="color:#625c52;"><strong>${fromName}</strong> just messaged you on HavenIQ.</p>
-          <p style="color:#625c52;">Open HavenIQ to read it and reply.</p>
-        </div>
-      `,
+      text: `Hi ${toName}, ${fromName} just messaged you on HavenIQ. Read it and reply:\n${url}\n\nHavenIQ`,
+      html: noticeHtml({
+        heading: `Hi ${escapeHtml(toName)}, you have a new message`,
+        bodyHtml: `<p style="color:#625c52; font-size:15px; line-height:1.6; margin:0;"><strong style="color:#22201d;">${escapeHtml(fromName)}</strong> just messaged you on HavenIQ.</p>`,
+        cta: { href: url, label: 'Read and reply' },
+      }),
     });
     analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'new_message' });
   } catch (err) {
