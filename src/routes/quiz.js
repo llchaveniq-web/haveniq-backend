@@ -738,13 +738,18 @@ async function scoreNewMatches(userId, newAnswers, opts = {}) {
 // they will open and dismiss.
 const NEW_MATCH_ALERT_MIN = 65;
 
-async function alertNewMatches(newcomerId, candidates, notify) {
+// Email for a student with no way to receive a push. Lazy so the module does
+// not pull the mail client in for callers that never alert.
+const defaultMatchEmail = (...args) => require('../services/email').sendMatchEmail(...args);
+
+async function alertNewMatches(newcomerId, candidates, notify, sendEmail = defaultMatchEmail) {
   if (!notify || !candidates.length) return;
 
   // A seeded or test account arriving is not news to a real student.
   const { rows: me } = await pool.query(
-    'SELECT email, is_demo FROM users WHERE id = $1', [newcomerId]);
+    'SELECT email, is_demo, first_name FROM users WHERE id = $1', [newcomerId]);
   if (!me[0] || me[0].is_demo || isDemoEmail(me[0].email)) return;
+  const newcomerName = (me[0].first_name || '').trim() || 'Someone new';
 
   // One recipient can appear once per pair; keep their best score.
   const best = new Map();
@@ -765,9 +770,31 @@ async function alertNewMatches(newcomerId, candidates, notify) {
         AND ${notDemo('email')}
         AND (last_new_match_alert_at IS NULL
              OR last_new_match_alert_at < NOW() - INTERVAL '20 hours')
-      RETURNING id`,
+      RETURNING id, email, first_name, COALESCE(email_undeliverable, FALSE) AS undeliverable`,
     [[...best.keys()]],
   );
+  if (!claimed.length) return;
+
+  // Who can actually receive a push. Push is the ONLY channel this alert had,
+  // and on an iPhone push exists only once HavenIQ is on the Home Screen with
+  // alerts on. A student using it in Safari, which is where every new signup
+  // starts, got nothing when their first match arrived: the one event the
+  // empty Matches screen tells them to wait for. They get the match email now
+  // (services/email.js, a button straight to Matches). Same claim, same 20h
+  // throttle, so it is never both a push AND an email for one student.
+  // Soft-fails to "nobody has push", which errs toward one email.
+  const pushable = new Set();
+  try {
+    const { rows } = await pool.query(
+      `SELECT user_id FROM web_push_subscriptions WHERE user_id = ANY($1::uuid[])
+       UNION
+       SELECT user_id FROM push_tokens WHERE user_id = ANY($1::uuid[])`,
+      [claimed.map(r => r.id)],
+    );
+    for (const r of rows) pushable.add(String(r.user_id));
+  } catch (err) {
+    console.warn('[new-match alert] push lookup failed, emailing instead:', err && err.message);
+  }
 
   for (const r of claimed) {
     const score = best.get(String(r.id));
@@ -776,6 +803,10 @@ async function alertNewMatches(newcomerId, candidates, notify) {
       body:  `Someone new fits how you live, ${score}% compatible. See why you match.`,
       data:  { screen: 'matches' },
     })).catch(err => console.error('[new-match alert] send failed:', err && err.message));
+    if (!pushable.has(String(r.id)) && r.email && !r.undeliverable) {
+      await Promise.resolve(sendEmail(r.email, (r.first_name || '').trim() || 'there', newcomerName, score, r.id))
+        .catch(err => console.error('[new-match alert] email failed:', err && err.message));
+    }
   }
 }
 

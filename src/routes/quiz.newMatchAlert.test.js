@@ -8,17 +8,20 @@ function inject(relPath, exportsObj) {
   require.cache[resolved] = { id: resolved, filename: resolved, loaded: true, exports: exportsObj };
 }
 
-let newcomer = { email: 'new@csulb.edu', is_demo: false };
+let newcomer = { email: 'new@csulb.edu', is_demo: false, first_name: 'Jordan' };
 let claimable = null; // ids the throttle lets through; null = all asked for
 let claimSql = '';
+let recipients = {};  // id -> { email, first_name, undeliverable } for the email path
+let pushUsers = [];   // ids with a push subscription
 inject('../db/pool', {
   query: async (sql, params) => {
-    if (/SELECT email, is_demo FROM users WHERE id = \$1/.test(sql)) return { rows: [newcomer] };
+    if (/SELECT email, is_demo, first_name FROM users WHERE id = \$1/.test(sql)) return { rows: [newcomer] };
     if (/UPDATE users SET last_new_match_alert_at = NOW\(\)/.test(sql)) {
       claimSql = sql;
       const asked = params[0];
-      return { rows: asked.filter(id => !claimable || claimable.includes(id)).map(id => ({ id })) };
+      return { rows: asked.filter(id => !claimable || claimable.includes(id)).map(id => ({ id, ...(recipients[id] || {}) })) };
     }
+    if (/FROM web_push_subscriptions/.test(sql)) return { rows: pushUsers.map(user_id => ({ user_id })) };
     return { rows: [], rowCount: 0 };
   },
 });
@@ -33,7 +36,7 @@ inject('../middleware/auth', {
 
 const { alertNewMatches, NEW_MATCH_ALERT_MIN } = require('./quiz');
 
-test.beforeEach(() => { newcomer = { email: 'new@csulb.edu', is_demo: false }; claimable = null; claimSql = ''; });
+test.beforeEach(() => { newcomer = { email: 'new@csulb.edu', is_demo: false, first_name: 'Jordan' }; claimable = null; claimSql = ''; recipients = {}; pushUsers = []; });
 
 test('tells each compatible student once, with their own score, and opens Matches', async () => {
   const sent = [];
@@ -75,4 +78,36 @@ test('one failed send does not stop the rest', async () => {
 
 test('the bar is the bottom of the "surface" tier, not the feed floor', () => {
   assert.equal(NEW_MATCH_ALERT_MIN, 65);
+});
+
+// Push was the only channel, and on an iPhone push exists only once HavenIQ is
+// on the Home Screen with alerts on. A student in Safari heard nothing when
+// their first match arrived.
+test('a student with no push subscription gets the match email instead', async () => {
+  recipients = {
+    a: { email: 'a@csulb.edu', first_name: 'Sam' },
+    b: { email: 'b@csulb.edu', first_name: 'Ana' },
+  };
+  pushUsers = ['b'];
+  const pushed = [], mailed = [];
+  await alertNewMatches('n1', [{ recipientId: 'a', score: 82 }, { recipientId: 'b', score: 71 }],
+    (id) => pushed.push(id), (...args) => mailed.push(args));
+  assert.deepEqual(pushed.sort(), ['a', 'b']);            // the push still goes to everyone
+  assert.equal(mailed.length, 1);                        // but only "a" had no way to get it
+  assert.deepEqual(mailed[0].slice(0, 4), ['a@csulb.edu', 'Sam', 'Jordan', 82]);
+});
+
+test('no email to an address that bounced or complained', async () => {
+  recipients = { a: { email: 'a@csulb.edu', first_name: 'Sam', undeliverable: true } };
+  const mailed = [];
+  await alertNewMatches('n1', [{ recipientId: 'a', score: 90 }], () => {}, (...args) => mailed.push(args));
+  assert.equal(mailed.length, 0);
+});
+
+test('the throttle covers the email too: an already alerted student gets nothing', async () => {
+  recipients = { a: { email: 'a@csulb.edu', first_name: 'Sam' } };
+  claimable = [];                                        // the 20h stamp let nobody through
+  const mailed = [];
+  await alertNewMatches('n1', [{ recipientId: 'a', score: 90 }], () => {}, (...args) => mailed.push(args));
+  assert.equal(mailed.length, 0);
 });
