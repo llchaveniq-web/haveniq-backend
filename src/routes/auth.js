@@ -148,7 +148,7 @@ function buildAuthProfile(user) {
     budgetMin:   user.budget_min ?? null,
     budgetMax:   user.budget_max ?? null,
     neighborhoods: user.neighborhoods ?? [],
-    moveInDate:  user.move_in_date ?? null,
+    moveInDate:  user.move_in_date ?? null, moveInTimeline: user.move_in_timeline ?? null, moveInSetAt: user.move_in_set_at ?? null,
     isVerified:  user.is_verified,
     trustScore:  user.trust_score,
     quizCompleted: user.quiz_completed,
@@ -556,7 +556,8 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
     let { rows: userRows } = await pool.query(
       `SELECT id, email, school, first_name, last_name,
               is_verified, trust_score, quiz_completed,
-              identity_verified_at, totp_enabled
+              identity_verified_at, totp_enabled,
+              move_in_timeline, move_in_set_at
        FROM users WHERE email = $1`,
       [emailLower]
     );
@@ -593,7 +594,8 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
          VALUES ($1, $2, $3, 20, FALSE)
          RETURNING id, email, school, first_name, last_name,
                    is_verified, trust_score, quiz_completed,
-                   identity_verified_at, totp_enabled`,
+                   identity_verified_at, totp_enabled,
+                   move_in_timeline, move_in_set_at`,
         [emailLower, school || '', verifiedDomain]
       );
       user      = ins.rows[0];
@@ -708,7 +710,7 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
         budgetMin:   user.budget_min ?? null,
         budgetMax:   user.budget_max ?? null,
         neighborhoods: user.neighborhoods ?? [],
-        moveInDate:  user.move_in_date ?? null,
+        moveInDate:  user.move_in_date ?? null, moveInTimeline: user.move_in_timeline ?? null, moveInSetAt: user.move_in_set_at ?? null,
         isVerified:  user.is_verified,
         trustScore:  user.trust_score,
         quizCompleted: user.quiz_completed,
@@ -1053,7 +1055,7 @@ router.post('/demo-session', async (req, res) => {
       age: user.age ?? null, gender: user.gender ?? '', lookingFor: user.looking_for ?? [],
       photoUrl: user.photo_url ?? null,
       budgetMin: user.budget_min ?? null, budgetMax: user.budget_max ?? null,
-      neighborhoods: user.neighborhoods ?? [], moveInDate: user.move_in_date ?? null,
+      neighborhoods: user.neighborhoods ?? [], moveInDate: user.move_in_date ?? null, moveInTimeline: user.move_in_timeline ?? null, moveInSetAt: user.move_in_set_at ?? null,
       isVerified: user.is_verified, trustScore: user.trust_score,
       quizCompleted: user.quiz_completed,
       identityVerifiedAt: user.identity_verified_at,

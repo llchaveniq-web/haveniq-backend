@@ -126,3 +126,13 @@ test('buildMatchDTO passes a blank score through as a number (app owns the NaNâ†
   assert.equal(typeof dto.compatScore, 'number');
   assert.ok(Number.isNaN(dto.compatScore));
 });
+
+// Move-in only as an answer the student actually gave. Before move_in_set_at,
+// the profile's lease picker stored 'flexible' for everyone; that must never
+// reach another student as if they had said it.
+test('buildMatchDTO sends move-in only once the student has answered it', () => {
+  const legacy = buildMatchDTO(fullRow({ move_in_timeline: 'flexible', move_in_set_at: null }), { myAnswers: null, mySchool: 'UCLA' });
+  assert.equal(legacy.moveInTimeline, null);
+  const real = buildMatchDTO(fullRow({ move_in_timeline: 'fall_semester', move_in_set_at: new Date() }), { myAnswers: null, mySchool: 'UCLA' });
+  assert.equal(real.moveInTimeline, 'fall_semester');
+});

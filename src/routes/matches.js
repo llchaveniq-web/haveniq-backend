@@ -305,7 +305,11 @@ function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
     photos:        r.connect_status === 'accepted' ? photosFor(r) : [],
     budgetMin:     r.budget_min,
     budgetMax:     r.budget_max,
-    moveInTimeline:r.move_in_timeline,
+    // Only an answer the student actually gave. move_in_set_at is stamped when
+    // they pick a move-in in the profile (users.js PATCH). Every value from
+    // before that is what the old lease picker wrote for them ('flexible' for
+    // a 9/12/24 month lease), so it never leaves the server as a fact.
+    moveInTimeline: r.move_in_set_at ? r.move_in_timeline : null,
     isVerified:    r.is_verified,
     trustScore:    r.trust_score,
     // ID-verified timestamp from Stripe Identity. Null when the user
@@ -470,6 +474,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          u.budget_min,
          u.budget_max,
          u.move_in_timeline,
+         u.move_in_set_at,
          u.is_verified,
          u.trust_score,
          u.identity_verified_at,
@@ -728,6 +733,7 @@ router.get('/pool-composition', requireAuth, suspicious.track('matches.poolCompo
          u.budget_min,
          u.budget_max,
          u.move_in_timeline,
+         u.move_in_set_at,
          (
            $2::text[] IS NULL OR array_length($2::text[], 1) IS NULL
            OR u.gender IS NULL OR u.gender = 'Prefer not to say'
@@ -1941,6 +1947,7 @@ router.get('/:userId', (req, res, next) => {
          u.budget_min,
          u.budget_max,
          u.move_in_timeline,
+         u.move_in_set_at,
          u.is_verified,
          u.trust_score,
          u.identity_verified_at,

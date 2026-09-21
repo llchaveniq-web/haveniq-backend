@@ -164,6 +164,7 @@ test('the skip profile shape matches verify-code\'s profile keys exactly (no dri
   const VERIFY_CODE_KEYS = [
     'id','email','school','firstName','lastName','lastInitial','bio','major','schoolYear',
     'age','gender','lookingFor','photoUrl','budgetMin','budgetMax','neighborhoods','moveInDate',
+    'moveInTimeline','moveInSetAt',
     'isVerified','trustScore','quizCompleted','identityVerifiedAt','totpEnabled',
   ].sort();
   await withFlag('true', async () => {

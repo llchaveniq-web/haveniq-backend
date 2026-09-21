@@ -229,6 +229,9 @@ router.get('/me', requireAuth, async (req, res) => {
       budgetMin:       u.budget_min,
       budgetMax:       u.budget_max,
       moveInTimeline:  u.move_in_timeline,
+      // When they actually answered it (null: never did, whatever the column
+      // above says). The app treats move-in as set only when this is.
+      moveInSetAt:     u.move_in_set_at ?? null,
       neighborhoods:   u.neighborhoods || [],
       roommateStatus:  u.roommate_status,
       isVerified:      u.is_verified,
@@ -424,6 +427,10 @@ router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
     }
+
+    // A move-in the student actually chose (see move_in_set_at in
+    // migrate_missing.sql). Match payloads only carry move-in once this is set.
+    if (changed.includes('moveInTimeline')) updates.push('move_in_set_at = NOW()');
 
     // Same rule as lib/primaryPhoto.js's applyPrimaryPhotoChange (used by the
     // dedicated upload routes): if the primary photo is actually changing

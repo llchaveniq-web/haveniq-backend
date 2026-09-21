@@ -1094,3 +1094,10 @@ CREATE INDEX IF NOT EXISTS idx_web_push_user ON web_push_subscriptions(user_id);
 -- joins". Stamped per recipient so a busy week sends one alert a day, not one
 -- per arrival.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_new_match_alert_at TIMESTAMPTZ;
+
+-- When the student actually answered "when do you want to move in?". The old
+-- profile picker asked lease LENGTH, stored 'flexible' for every choice and
+-- backfilled it untouched, so move_in_timeline cannot tell a real answer from
+-- a leftover. Stamped by PATCH /users/me only when moveInTimeline is sent;
+-- NULL means "never really answered", and match payloads send no move-in then.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS move_in_set_at TIMESTAMPTZ;
