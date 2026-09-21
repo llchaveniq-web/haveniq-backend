@@ -20,6 +20,7 @@ const CASES = [
   ['connect request', () => email.sendConnectRequestEmail('s@csulb.edu', 'Sam', 'Jordan', 87),  `${APP}/matches`],
   ['new message',     () => email.sendNewMessageEmail('s@csulb.edu', 'Sam', 'Jordan'),          `${APP}/messages`],
   ['new match',       () => email.sendMatchEmail('s@csulb.edu', 'Sam', 'Jordan', 87),           `${APP}/matches`],
+  ['request accepted', () => email.sendConnectAcceptedEmail('s@csulb.edu', 'Sam', 'Jordan', 87), `${APP}/messages`],
 ];
 
 for (const [name, send, url] of CASES) {
@@ -39,4 +40,10 @@ test('a name a student typed is escaped in the HTML', async () => {
 test('the welcome no longer promises a quiz the student already took', async () => {
   const m = await last(() => email.sendWelcomeEmail('s@csulb.edu'));
   assert.equal(/one quiz away/i.test(m.subject), false);
+});
+
+test('the accepted email says what happened, not to go and send a request', async () => {
+  const m = await last(() => email.sendConnectAcceptedEmail('s@csulb.edu', 'Sam', 'Jordan K.', 87));
+  assert.match(m.subject, /accepted your request/);
+  assert.equal(/send (a|your first) connect request/i.test(m.text + m.html), false);
 });

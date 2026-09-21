@@ -3,7 +3,7 @@ const pool   = require('../db/pool');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const suspicious = require('../middleware/suspiciousActivity');
-const { sendParentMatchEmail, sendSafetyAlertEmail, sendMatchEmail, sendConnectRequestEmail } = require('../services/email');
+const { sendParentMatchEmail, sendSafetyAlertEmail, sendConnectAcceptedEmail, sendConnectRequestEmail } = require('../services/email');
 const { isFounder, isFounderUser } = require('../utils/founders');
 const { computePairing } = require('../services/personalityPairing');
 const { notDemo, isDemoEmail } = require('../lib/demoFilter');
@@ -190,6 +190,7 @@ async function maybeEmailMatch(studentId, matchUserId) {
   try {
     const { rows } = await pool.query(
       `SELECT u.email AS to_email, u.first_name AS to_name,
+              COALESCE(u.email_undeliverable, FALSE) AS undeliverable,
               m.first_name AS match_first, m.last_name AS match_last,
               cs.score AS compatibility
        FROM users u
@@ -200,9 +201,12 @@ async function maybeEmailMatch(studentId, matchUserId) {
       [studentId, matchUserId],
     );
     const row = rows[0];
-    if (!row || !row.to_email) return;
+    if (!row || !row.to_email || row.undeliverable) return;
     if (isDemoEmail(row.to_email)) return; // demo/test accounts — never app-email
-    await sendMatchEmail(
+    // The requester's own request was just accepted: "you're connected, say
+    // hello", opening Messages. This was sendMatchEmail, which told them to go
+    // and send the request they had already sent.
+    await sendConnectAcceptedEmail(
       row.to_email,
       row.to_name || 'there',
       `${row.match_first || ''} ${(row.match_last || '').charAt(0)}.`.trim(),

@@ -615,6 +615,32 @@ async function sendConnectRequestEmail(toEmail, toName, fromName, score, userId 
   }
 }
 
+// "Your request was accepted" to the student who SENT it. This moment used to
+// reuse sendMatchEmail, so the person who had already reached out read "You
+// have a new match... See their profile and send a connect request", with a
+// button to Matches, when the request was done and they could talk. Now it
+// says what happened and opens Messages, where the new conversation is.
+async function sendConnectAcceptedEmail(toEmail, toName, acceptorName, score, userId = null) {
+  const url = `${APP_URL}/messages`;
+  try {
+    await getResend().emails.send({
+      from: 'HavenIQ <noreply@haveniq.org>',
+      to:      toEmail,
+      subject: `${acceptorName} accepted your request on HavenIQ ✦`,
+      text: `Hi ${toName}, ${acceptorName}${score ? ` (${score}% compatible)` : ''} accepted your connect request, so you can talk now. Say hello:\n${url}\n\nHavenIQ`,
+      html: noticeHtml({
+        heading: `Hi ${escapeHtml(toName)}, you're connected ✦`,
+        bodyHtml: `<p style="color:#625c52; font-size:15px; line-height:1.6; margin:0;"><strong style="color:#22201d;">${escapeHtml(acceptorName)}</strong>${score ? ` (${escapeHtml(score)}% compatible)` : ''} accepted your connect request. You can message each other now.</p>`,
+        cta: { href: url, label: 'Say hello' },
+      }),
+    });
+    analytics.track(analytics.EVENTS.email_sent, userId, { kind: 'connect_accepted' });
+  } catch (err) {
+    analytics.track(analytics.EVENTS.email_failed, userId, { kind: 'connect_accepted', error: err.message });
+    throw err;
+  }
+}
+
 // Re-engagement email #3 — "you have a new message". Throttled by the caller
 // to the FIRST unread message in a conversation (not per-message). Never
 // includes the message body — a notification, not the content.
@@ -817,6 +843,6 @@ module.exports = {
   sendWelcomeEmail, sendSafetyAlertEmail,
   sendFounderSignupAlert,
   sendParentDigestEmail,
-  sendConnectRequestEmail, sendNewMessageEmail,
+  sendConnectRequestEmail, sendConnectAcceptedEmail, sendNewMessageEmail,
   sendSupportReplyEmail, sendSupportAckEmail, sendCrisisAlertEmail,
 };
