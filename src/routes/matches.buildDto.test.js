@@ -136,3 +136,15 @@ test('buildMatchDTO sends move-in only once the student has answered it', () => 
   const real = buildMatchDTO(fullRow({ move_in_timeline: 'fall_semester', move_in_set_at: new Date() }), { myAnswers: null, mySchool: 'UCLA' });
   assert.equal(real.moveInTimeline, 'fall_semester');
 });
+
+test('buildMatchDTO carries per-habit agreement, and only agreement', () => {
+  const opt = (index) => ({ type: 'option', index });
+  const dto = buildMatchDTO(fullRow({ candidate_answers: { 50: opt(1), 49: opt(1) } }),
+    { myAnswers: { 50: opt(1), 49: opt(3) }, mySchool: 'UCLA' });
+  assert.deepEqual(dto.pairAgreement, [
+    { label: 'Tidiness', agreement: 100 },
+    { label: 'Up late', agreement: 50 },
+  ]);
+  const none = buildMatchDTO(fullRow({ candidate_answers: null }), { myAnswers: { 50: opt(1) }, mySchool: 'UCLA' });
+  assert.ok(!('pairAgreement' in none), 'no shared habit, no field');
+});

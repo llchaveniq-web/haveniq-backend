@@ -19,6 +19,7 @@ const { spendConnect, refundConnect } = require('../lib/connectQuota');
 // Pre-match photo gallery (owner decision 2026-07-22: faces visible while choosing).
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { connectedSet } = require('../lib/photoGate');
+const { pairAgreement } = require('../lib/pairAgreement');
 const { loadDrift } = require('../services/pulseDrift');
 const { calculateCompatibility, topFrictionTopic, matchingV11Enabled, flatten } = require('../services/scoring');
 const QUIZ_QUESTIONS = require('../data/quizQuestions');
@@ -282,6 +283,12 @@ function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
   const suppressDims = compDims.map(d => Number(d && d.qid)).filter(Number.isFinite);
   const topFrictions = computeFrictions(myAnswers, r.candidate_answers, { suppressDims, n: 3 });
   const frictionFields = topFrictions.length ? { topFrictions } : {};
+  // Per-habit AGREEMENT for the app's ring pictures (lib/pairAgreement.js).
+  // Computed here for the same reason as the frictions: only here do both
+  // answer sets exist. Agreement only, never either position. Omitted when
+  // the two share no answered habit, so the app draws nothing hollow.
+  const agreement = pairAgreement(myAnswers, r.candidate_answers);
+  const agreementFields = agreement.length ? { pairAgreement: agreement } : {};
   return ({
     userId:        r.id,
     firstName:     r.first_name,
@@ -376,6 +383,7 @@ function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
     ...complementaryFields,
     ...convergingFields,
     ...frictionFields,
+    ...agreementFields,
   });
 }
 
