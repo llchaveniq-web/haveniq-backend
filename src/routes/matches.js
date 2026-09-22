@@ -411,36 +411,38 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     const includeDemos = isFounderUser(req.user) && process.env.DEMO_FEED === 'true';
     const demoFilter   = includeDemos ? '' : `AND ${notDemo('u.email')}`;
 
-    // Current user's MBTI/DISC — feeds the secondary personality-pairing
-    // readout on each match card. Display-only; never touches scoring.
-    const { rows: meRows } = await pool.query(
-      'SELECT mbti, disc FROM personality_profiles WHERE user_id = $1',
-      [userId],
-    );
-    const me = meRows[0] || {};
-
-    // Viewer's own gender + roommate gender preference — used to filter the feed
-    // so BOTH sides' stated preferences are respected (matching previously
-    // ignored gender entirely → a student who only wants same-gender roommates
-    // still saw, and scored high with, excluded genders). Empty preference or an
-    // undeclared / "Prefer not to say" gender stays inclusive.
-    const { rows: meUserRows } = await pool.query(
-      `SELECT gender, looking_for, match_dealbreakers,
-              school, budget_min, budget_max, move_in_timeline
-         FROM users WHERE id = $1`,
-      [userId],
-    );
-    const myGender     = meUserRows[0]?.gender ?? null;
+    // Three reads about the VIEWER, none of which depends on the others, so
+    // they go together rather than one after another. This endpoint is what
+    // Home and Matches wait on, and every query is a separate round trip to
+    // the database: four sequential round trips became two.
+    //
+    //   personality_profiles — MBTI/DISC for the secondary pairing readout on
+    //     each card. Display-only; never touches scoring.
+    //   users — the viewer's gender + roommate gender preference, so BOTH
+    //     sides' stated preferences are respected (matching once ignored
+    //     gender entirely, so a student who only wanted same-gender roommates
+    //     still saw, and scored high with, excluded genders). An empty
+    //     preference or an undeclared / "Prefer not to say" gender stays
+    //     inclusive. Also the budget/move-in/school fields used below.
+    //   quiz_answers — the viewer's raw answers, snapshotted into each served
+    //     impression's feature vector (pairing_outcomes logging) and used for
+    //     the both-sides friction forecast. Best-effort: a missing row just
+    //     yields empty features.
+    const [meRes, meUserRes, meAnsRes] = await Promise.all([
+      pool.query('SELECT mbti, disc FROM personality_profiles WHERE user_id = $1', [userId]),
+      pool.query(
+        `SELECT gender, looking_for, match_dealbreakers,
+                school, budget_min, budget_max, move_in_timeline
+           FROM users WHERE id = $1`,
+        [userId],
+      ),
+      pool.query('SELECT answers FROM quiz_answers WHERE user_id = $1', [userId]),
+    ]);
+    const me          = meRes.rows[0] || {};
+    const meUserRows  = meUserRes.rows;
+    const myGender    = meUserRows[0]?.gender ?? null;
     const myLookingFor = Array.isArray(meUserRows[0]?.looking_for) ? meUserRows[0].looking_for : [];
-
-    // Viewer's own quiz answers — snapshotted into each served impression's
-    // feature vector (pairing_outcomes logging). Does NOT touch scoring or the
-    // response; best-effort, so a missing row just yields empty features.
-    const { rows: meAnsRows } = await pool.query(
-      'SELECT answers FROM quiz_answers WHERE user_id = $1',
-      [userId],
-    );
-    const myAnswers = meAnsRows[0]?.answers || null;
+    const myAnswers   = meAnsRes.rows[0]?.answers || null;
     // v8 deal-breaker hard-filter (1d). Only the TRUE-hard, data-backed breaker
     // is hard-excluded (smoke-free, from Q51) so a cold-start deck never empties
     // on the soft ones. No-op until the viewer sets it (the app's deal-breaker
