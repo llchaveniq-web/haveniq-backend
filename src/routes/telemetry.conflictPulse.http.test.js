@@ -25,6 +25,14 @@ inject('../db/pool', {
     release: () => {},
   }),
   query: async (sql, params) => {
+    // routes/telemetry.js inserts the whole batch in one statement through
+    // the pool now (it was one INSERT per event on a checked-out client).
+    if (/INSERT INTO telemetry_events/.test(sql)) {
+      // One row per event, 7 params each, so the counts below still mean
+      // "events stored" rather than "statements sent".
+      for (let i = 0; i < params.length; i += 7) telemetryInserts.push(params.slice(i, i + 7));
+      return { rows: [], rowCount: params.length / 7 };
+    }
     if (/INSERT INTO conflict_pulses/.test(sql)) {
       if (cpInsertThrows) throw new Error('conflict_pulses table exploded');
       cpInserts.push(params);

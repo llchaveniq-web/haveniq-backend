@@ -93,25 +93,34 @@ router.post('/batch', requireAuth, async (req, res) => {
     && e.payload && typeof e.payload === 'object'
   );
 
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    for (const evt of valid) {
-      await client.query(
+  // ONE insert for the whole batch, not one per event.
+  //
+  // This ran an INSERT per event inside a transaction: a batch of 100 (the
+  // cap) meant 100 round trips to Postgres while holding a pooled connection
+  // and an open transaction, every ~5 seconds, per active student. A single
+  // multi-row INSERT is one round trip and is atomic on its own, so it needs
+  // neither the transaction nor the checked-out client. The cap keeps this
+  // far under Postgres' 65535 parameter limit (100 × 7 = 700).
+  if (valid.length) {
+    const params = [];
+    const tuples = valid.map((evt, i) => {
+      const b = i * 7;
+      params.push(evt.id, userId, deviceId, evt.type, evt.category, evt.timestamp, evt.payload);
+      return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, to_timestamp($${b + 6} / 1000.0), $${b + 7})`;
+    });
+    try {
+      // ON CONFLICT DO NOTHING keeps client retries idempotent, as before.
+      await pool.query(
         `INSERT INTO telemetry_events
            (id, user_id, device_id, event_type, category, client_ts, payload)
-         VALUES ($1, $2, $3, $4, $5, to_timestamp($6 / 1000.0), $7)
+         VALUES ${tuples.join(', ')}
          ON CONFLICT (id) DO NOTHING`,
-        [evt.id, userId, deviceId, evt.type, evt.category, evt.timestamp, evt.payload]
+        params,
       );
+    } catch (err) {
+      console.error('Telemetry batch insert failed:', err);
+      return res.status(500).json({ error: 'insert failed' });
     }
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Telemetry batch insert failed:', err);
-    return res.status(500).json({ error: 'insert failed' });
-  } finally {
-    client.release();
   }
 
   // 2d: persist the latest behavioral validation_score onto the user so the
