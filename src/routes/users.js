@@ -11,7 +11,7 @@ const { checkPhotoSafety } = require('../services/photoSafety');
 const { applyPrimaryPhotoChange } = require('../lib/primaryPhoto');
 const { audit } = require('../services/auditLog');
 const webPush = require('../services/webPush');
-const { isFounder } = require('../utils/founders');
+const { isFounder, isFounderUser } = require('../utils/founders');
 const { notDemo } = require('../lib/demoFilter');
 const { NO_DASH_RULE, stripDashes, stripDashesDeep } = require('../lib/textStyle');
 const { screenMessage } = require('../lib/contentFilter');
@@ -235,6 +235,11 @@ router.get('/me', requireAuth, async (req, res) => {
       neighborhoods:   u.neighborhoods || [],
       roommateStatus:  u.roommate_status,
       isVerified:      u.is_verified,
+    // Ours, not a student's. PostHog excludes internal traffic on this, so the
+    // signup funnel counts real students only. Derived from FOUNDER_EMAILS /
+    // FOUNDER_USER_IDS server side (utils/founders.js) rather than a list in
+    // the web bundle, which would publish the address to anyone who looks.
+      isInternal:      isFounderUser({ id: u.id, email: u.email }),
       isPaused:        u.is_paused,
       // Surfaces the real 2FA state on the Profile row so the toggle
       // and setup screen can show ON vs OFF correctly. The secret +

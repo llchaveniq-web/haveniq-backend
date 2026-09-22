@@ -166,6 +166,10 @@ test('the skip profile shape matches verify-code\'s profile keys exactly (no dri
     'age','gender','lookingFor','photoUrl','budgetMin','budgetMax','neighborhoods','moveInDate',
     'moveInTimeline','moveInSetAt',
     'isVerified','trustScore','quizCompleted','identityVerifiedAt','totpEnabled',
+    // isInternal: our own account, for excluding internal traffic from the
+    // PostHog signup funnel. Server-derived (utils/founders.js), never a
+    // permission signal.
+    'isInternal',
   ].sort();
   await withFlag('true', async () => {
     const res = await send({ email: 'shape@gmail.com' });

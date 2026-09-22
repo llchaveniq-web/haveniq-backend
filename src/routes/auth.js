@@ -36,6 +36,7 @@ const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
 const { signToken, requireAuth, sessionRevoked } = require('../middleware/auth');
 const { setSessionCookie, clearSessionCookie, readTokenCookie } = require('../lib/sessionCookie');
 const { signChallengeToken } = require('./twoFactor');
+const { isFounderUser } = require('../utils/founders');
 const analytics = require('../services/analytics');
 
 // Rate limiters — TWO buckets per route: per-email (so a single victim
@@ -150,6 +151,11 @@ function buildAuthProfile(user) {
     neighborhoods: user.neighborhoods ?? [],
     moveInDate:  user.move_in_date ?? null, moveInTimeline: user.move_in_timeline ?? null, moveInSetAt: user.move_in_set_at ?? null,
     isVerified:  user.is_verified,
+    // Ours, not a student's. PostHog excludes internal traffic on this, so the
+    // signup funnel counts real students only. Derived from FOUNDER_EMAILS /
+    // FOUNDER_USER_IDS server side (utils/founders.js) rather than a list in
+    // the web bundle, which would publish the address to anyone who looks.
+    isInternal:  isFounderUser({ id: user.id, email: user.email }),
     trustScore:  user.trust_score,
     quizCompleted: user.quiz_completed,
     identityVerifiedAt: user.identity_verified_at,
@@ -712,6 +718,7 @@ router.post('/verify-code', verifyLimitIp, verifyLimitEmail, async (req, res) =>
         neighborhoods: user.neighborhoods ?? [],
         moveInDate:  user.move_in_date ?? null, moveInTimeline: user.move_in_timeline ?? null, moveInSetAt: user.move_in_set_at ?? null,
         isVerified:  user.is_verified,
+        isInternal:  isFounderUser({ id: user.id, email: user.email }),
         trustScore:  user.trust_score,
         quizCompleted: user.quiz_completed,
         // ID-verification timestamp (Stripe Identity). Null when the user
