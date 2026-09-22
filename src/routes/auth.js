@@ -32,7 +32,7 @@ function logSignIn(pool, userId, method, req) {
 
 // OTP hash + attempt cap are shared with the founder support endpoints
 // (routes/admin.js resend/unlock) via lib/otp so they can never drift.
-const { hashOtp, MAX_OTP_ATTEMPTS } = require('../lib/otp');
+const { hashOtp, MAX_OTP_ATTEMPTS, signCodeRef, readCodeRef } = require('../lib/otp');
 const { signToken, requireAuth, sessionRevoked } = require('../middleware/auth');
 const { setSessionCookie, clearSessionCookie, readTokenCookie } = require('../lib/sessionCookie');
 const { signChallengeToken } = require('./twoFactor');
@@ -87,6 +87,20 @@ const sendLimitIp = rateLimit({
   max: 60,
   message: { error: 'Too many signups from this network. Try again in 1 hour.' },
   // Default keyGenerator (IP) is what we want here.
+});
+
+// The code screen asks this three times per code, on a fixed schedule, so a
+// launch room of forty students on one WiFi egress is a few hundred reads in
+// ten minutes. Roomy on purpose.
+//
+// Over the limit it answers "nothing yet" rather than an error. This endpoint
+// only ever softens a sentence of copy: there is no version of hitting a rate
+// limit here that a student should be shown, or that should stop him typing
+// the code he is holding.
+const codeStatusLimit = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 400,
+  handler: (req, res) => res.json({ delivery: null, deliveredAt: null }),
 });
 
 const verifyLimitEmail = rateLimit({
@@ -418,8 +432,8 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
     // OTPs, not the cleartext code. The dual-path verify (further down)
     // accepts both formats so any OTP issued during the brief
     // cleartext window still validates.
-    await pool.query(
-      "INSERT INTO otp_codes (email, code, expires_at, purpose) VALUES ($1, $2, $3, 'signup')",
+    const { rows: [issued] } = await pool.query(
+      "INSERT INTO otp_codes (email, code, expires_at, purpose) VALUES ($1, $2, $3, 'signup') RETURNING id",
       [emailLower, hashOtp(code), expiresAt]
     );
 
@@ -453,10 +467,54 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
         : `Code generated but email delivery failed: ${emailError}`,
       emailDelivery,
       emailError,
+      // The handle the code screen uses to ask what became of this message.
+      codeRef: signCodeRef(issued.id),
     });
   } catch (err) {
     console.error('send-code error:', err);
     res.status(500).json({ error: 'Failed to send verification code' });
+  }
+});
+
+// ── GET /auth/code-status ─────────────────────────────────────────────────
+// What happened to the email after we handed it to Resend.
+//
+// The code screen used to guess. It counted seconds and, at forty five of
+// them, told the student the message was in his junk folder, which was a good
+// guess and nothing more. It is a bad thing to be confidently wrong about: if
+// the message never left, sending him to dig through junk wastes the only
+// minute he was ever going to give this.
+//
+// We already know the answer. routes/resendWebhook.js records email.delivered
+// and email.delivery_delayed against the code row as they arrive. This hands
+// that back to the one client entitled to it, so the screen can say what is
+// true: the school took it and it is in a folder, or the school's server is
+// still chewing on it, or nothing has come back yet and it may not have left.
+//
+// Deliberately thin. No email address in, no email address out, no code, no
+// attempt count. A handle to one row and a word about its delivery.
+router.get('/code-status', codeStatusLimit, async (req, res) => {
+  const otpId = readCodeRef(req.query.ref);
+  // Same answer for a forged ref and an expired one. There is nothing to learn
+  // here either way, and an error that distinguishes them is an error that
+  // teaches.
+  if (!otpId) return res.json({ delivery: null, deliveredAt: null });
+
+  try {
+    const { rows } = await pool.query(
+      'SELECT delivery_status, delivered_at FROM otp_codes WHERE id = $1',
+      [otpId],
+    );
+    const row = rows[0];
+    return res.json({
+      delivery:    row?.delivery_status || null,
+      deliveredAt: row?.delivered_at    || null,
+    });
+  } catch (err) {
+    console.error('[/auth/code-status]', err.message);
+    // A screen that polls this cannot be allowed to show an error because our
+    // database hiccuped. Unknown reads exactly like not yet.
+    return res.json({ delivery: null, deliveredAt: null });
   }
 });
 

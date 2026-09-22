@@ -5,6 +5,7 @@
 // that /verify-code rejects.
 
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 
 // Max wrong /verify-code attempts before a code is burned.
 const MAX_OTP_ATTEMPTS = 3;
@@ -19,4 +20,44 @@ function hashOtp(code) {
     .digest('hex');
 }
 
-module.exports = { hashOtp, MAX_OTP_ATTEMPTS };
+// A handle on ONE issued code, given to the client that requested it.
+//
+// The code screen needs to ask "did that email reach the school", and the
+// obvious way to ask is by email address. That would be a free oracle: anyone
+// could probe any address and learn whether a signup was in flight for it, and
+// what a university's mail server did with it. So the question is keyed on a
+// signed handle to a specific row instead. You can only ask about a code you
+// yourself asked for, and the handle dies with the code.
+//
+// Signed rather than stored so this needs no column and no migration: the row
+// id is in the token, and the signature is what makes it unforgeable.
+const CODE_REF_PURPOSE = 'otp-status';
+const CODE_REF_TTL_SEC = 15 * 60; // outlives the 10 minute code, barely
+
+function signCodeRef(otpId) {
+  return jwt.sign(
+    { otpId, purpose: CODE_REF_PURPOSE },
+    process.env.JWT_SECRET,
+    { expiresIn: CODE_REF_TTL_SEC },
+  );
+}
+
+// Returns the otp row id, or null for anything that is not a live ref we
+// issued: bad signature, expired, or a token minted for some other purpose.
+// The purpose check is the important one. Every token in this system is signed
+// with the same secret, so without it a session JWT would be accepted here.
+function readCodeRef(token) {
+  if (!token || typeof token !== 'string') return null;
+  try {
+    const claims = jwt.verify(token, process.env.JWT_SECRET);
+    if (claims?.purpose !== CODE_REF_PURPOSE) return null;
+    return claims.otpId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = {
+  hashOtp, MAX_OTP_ATTEMPTS,
+  signCodeRef, readCodeRef, CODE_REF_PURPOSE, CODE_REF_TTL_SEC,
+};
