@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
+    "_test_note": "concurrency 1 because the parallel runner loses a random file. Node 24.13.1 drops one test file's results per run with 'Unable to deserialize cloned data', reporting it as a generic failure. Measured: parallel gives 1421/1422/1427/1428 tests and a phantom failure in a different file each time; serial gives 1428 pass 0 fail, repeatably. A lost file's real failures are lost with it, and the commit gate depends on this number. 31s to 61s locally, nothing in CI. Use 'node --test' directly for a fast local sweep.",
     "audit:high": "npm audit --omit=dev --audit-level=high",
     "audit:weekly": "npm audit --audit-level=moderate"
   },
