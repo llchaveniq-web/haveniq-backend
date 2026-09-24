@@ -317,6 +317,10 @@ function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
     // before that is what the old lease picker wrote for them ('flexible' for
     // a 9/12/24 month lease), so it never leaves the server as a fact.
     moveInTimeline: r.move_in_set_at ? r.move_in_timeline : null,
+    // The room question, the first thing students ask each other and the one
+    // this product could not answer. Null until they pick one, and a null says
+    // nothing rather than guessing they are looking like everybody else.
+    housingRole:   r.housing_role || null,
     isVerified:    r.is_verified,
     trustScore:    r.trust_score,
     // ID-verified timestamp from Stripe Identity. Null when the user
@@ -484,6 +488,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          u.budget_min,
          u.budget_max,
          u.move_in_timeline,
+         u.housing_role,
          u.move_in_set_at,
          u.is_verified,
          u.trust_score,
@@ -747,6 +752,7 @@ router.get('/pool-composition', requireAuth, suspicious.track('matches.poolCompo
          u.budget_min,
          u.budget_max,
          u.move_in_timeline,
+         u.housing_role,
          u.move_in_set_at,
          (
            $2::text[] IS NULL OR array_length($2::text[], 1) IS NULL
@@ -1962,6 +1968,7 @@ router.get('/:userId', (req, res, next) => {
          u.budget_min,
          u.budget_max,
          u.move_in_timeline,
+         u.housing_role,
          u.move_in_set_at,
          u.is_verified,
          u.trust_score,

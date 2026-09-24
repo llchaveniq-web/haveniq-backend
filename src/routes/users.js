@@ -234,6 +234,7 @@ router.get('/me', requireAuth, async (req, res) => {
       moveInSetAt:     u.move_in_set_at ?? null,
       neighborhoods:   u.neighborhoods || [],
       roommateStatus:  u.roommate_status,
+      housingRole:     u.housing_role,
       isVerified:      u.is_verified,
     // Ours, not a student's. PostHog excludes internal traffic on this, so the
     // signup funnel counts real students only. Derived from FOUNDER_EMAILS /
@@ -291,6 +292,10 @@ const LOOKING_FOR = new Set([
 ]);
 const STATUSES     = new Set(['looking', 'open', 'committed', 'paused']);
 const TIMELINES    = new Set(['this_month', '1-3_months', 'fall_semester', 'spring_semester', 'flexible']);
+// The room question. has_room = a room to fill, needs_room = looking for one,
+// find_together = two people who will go and find a place, which is what the
+// product assumed everyone was.
+const HOUSING_ROLES = new Set(['has_room', 'needs_room', 'find_together']);
 const EMAIL_RE     = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const validators = {
@@ -317,6 +322,7 @@ const validators = {
   budget_min:      v => Number.isInteger(v) && v >= 0 && v <= 100000,
   budget_max:      v => Number.isInteger(v) && v >= 0 && v <= 100000,
   move_in_timeline:v => typeof v === 'string' && TIMELINES.has(v),
+  housing_role:    v => typeof v === 'string' && HOUSING_ROLES.has(v),
   neighborhoods:   v => Array.isArray(v) && v.length <= 20 && v.every(x => typeof x === 'string' && x.length <= 100),
   roommate_status: v => typeof v === 'string' && STATUSES.has(v),
   is_paused:       v => typeof v === 'boolean',
@@ -383,6 +389,7 @@ router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
       moveInTimeline: 'move_in_timeline',
       neighborhoods:  'neighborhoods',
       roommateStatus: 'roommate_status',
+      housingRole:    'housing_role',
       isPaused:       'is_paused',
       parentEmail:    'parent_email',
       // Up-to-3 "what matters most to me" tags chosen during profile setup.

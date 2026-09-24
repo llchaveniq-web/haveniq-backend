@@ -1101,3 +1101,18 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS last_new_match_alert_at TIMESTAMPTZ;
 -- a leftover. Stamped by PATCH /users/me only when moveInTimeline is sent;
 -- NULL means "never really answered", and match payloads send no move-in then.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS move_in_set_at TIMESTAMPTZ;
+
+-- "Do you have a room available?" is the first thing students ask each other,
+-- and this product had no way to answer it. It modelled two people who both
+-- need housing looking for each other, and nothing else. Olivia has a room and
+-- is interviewing candidates for it; Talan opened with the question; two more
+-- assumed we were advertising one.
+--
+-- Three values, because there are three real situations: someone with a room to
+-- fill, someone who needs one, and two people who will go and find a place
+-- together, which is the only one the app understood before.
+--
+-- Nullable with no default and no backfill. An unanswered role says nothing
+-- rather than guessing, the same rule move_in_set_at exists to enforce. A new
+-- column needs no stamp because it has no leftovers.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS housing_role TEXT;
