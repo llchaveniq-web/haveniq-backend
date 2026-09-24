@@ -32,7 +32,7 @@ function logSignIn(pool, userId, method, req) {
 
 // OTP hash + attempt cap are shared with the founder support endpoints
 // (routes/admin.js resend/unlock) via lib/otp so they can never drift.
-const { hashOtp, MAX_OTP_ATTEMPTS, signCodeRef, readCodeRef } = require('../lib/otp');
+const { hashOtp, MAX_OTP_ATTEMPTS, OTP_TTL_MS, OTP_TTL_MINUTES, signCodeRef, readCodeRef } = require('../lib/otp');
 const { signToken, requireAuth, sessionRevoked } = require('../middleware/auth');
 const { setSessionCookie, clearSessionCookie, readTokenCookie } = require('../lib/sessionCookie');
 const { signChallengeToken } = require('./twoFactor');
@@ -421,7 +421,7 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
     );
 
     const code      = generateOTP();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+    const expiresAt = new Date(Date.now() + OTP_TTL_MS);
 
     // Store the hash, not the cleartext. /verify-code hashes the user's
     // submission the same way and compares. We keep the column named
@@ -453,7 +453,14 @@ router.post('/send-code', sendBurstLimit, sendLimitIp, sendLimitEmail, async (re
     let emailDelivery = 'sent';
     let emailError = null;
     try {
-      await sendOTPEmail(emailLower, code);
+      // The school travels with the send so the email can carry a link back
+      // to the verify screen. otp_codes does not store it, and /verify-code
+      // requires school + schoolDomain for a new signup, so without this the
+      // link could only work for someone who already has an account.
+      await sendOTPEmail(emailLower, code, '', null, {
+        school: typeof school === 'string' ? school : '',
+        schoolDomain: emailDomain,
+      });
     } catch (emailErr) {
       emailDelivery = 'failed';
       emailError    = emailErr?.message || 'Unknown Resend error';

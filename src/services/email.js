@@ -20,6 +20,9 @@ function escapeHtml(s) {
 // Where the buttons in student email go. The app, not the apex marketing site:
 // haveniq.org has no way into the app.
 const APP_URL = (process.env.APP_PUBLIC_URL || 'https://app.haveniq.org').replace(/\/$/, '');
+// The code's lifetime is stated three times in the OTP mail below and counted
+// down by the app. One constant so they cannot drift apart.
+const { OTP_TTL_MINUTES } = require('../lib/otp');
 
 // The branded card the sign-in code email already used, shared by the notice
 // emails below. Those were a bare heading and two sentences ending in "Open
@@ -65,7 +68,31 @@ function generateOTP() {
 // Send OTP verification email. `userId` is optional because OTP fires before
 // the user row exists; pass null in that case — PostHog will bucket under
 // 'system'.
-async function sendOTPEmail(email, code, firstName = '', userId = null) {
+async function sendOTPEmail(email, code, firstName = '', userId = null, signup = null) {
+  // One tap instead of six digits.
+  //
+  // Three students have now had a code DELIVERED and never typed a digit:
+  // attempts = 0 on every otp_codes row, at LBCC on 2026-09-16 and at Valencia
+  // on 2026-09-23. All three schools are Microsoft tenants. Finding the mail in
+  // a junk folder is only the first half of what we ask. The second half is
+  // memorising six digits, switching apps, finding the tab you left open, and
+  // typing them before the clock runs out.
+  //
+  // The link lands on the verify screen with the code already filled in and
+  // STILL requires a tap to submit. That is what makes it safe against
+  // Microsoft Defender Safe Links, which fetches every URL in a message before
+  // the student ever sees it: a prefetch renders a page and consumes nothing.
+  // A link that signed someone in on GET would be burned by the scanner before
+  // it arrived, at exactly the schools this exists to help.
+  //
+  // Signup only. /verify-code needs school + schoolDomain to create an account
+  // and otp_codes does not store them, so routes/auth.js hands them in here.
+  const verifyUrl = signup && signup.school && signup.schoolDomain
+    ? `${APP_URL}/verify?email=${encodeURIComponent(email)}`
+      + `&school=${encodeURIComponent(signup.school)}`
+      + `&domain=${encodeURIComponent(signup.schoolDomain)}`
+      + `&code=${encodeURIComponent(code)}`
+    : null;
   const greeting = firstName ? `Hi ${firstName},` : 'Hi there,';
 
   try {
@@ -95,7 +122,10 @@ async function sendOTPEmail(email, code, firstName = '', userId = null) {
 
 ${greeting}
 
-Enter it in the app to verify your .edu email. It expires in 10 minutes.
+Enter it in the app to verify your .edu email. It expires in ${OTP_TTL_MINUTES} minutes.${verifyUrl ? `
+
+Or open this link and the code is filled in for you:
+${verifyUrl}` : ''}
 
 HavenIQ will never call, text, or email you asking for this code. If this wasn't you, just ignore this email.
 
@@ -111,7 +141,7 @@ HavenIQ`,
                  matters. Hidden in the rendered mail, then padded so nothing
                  else gets pulled in behind it. -->
             <div style="display:none; max-height:0; overflow:hidden; opacity:0; mso-hide:all;">
-              Enter ${code} to finish verifying your school email. Expires in 10 minutes.
+              Enter ${code} to finish verifying your school email. Expires in ${OTP_TTL_MINUTES} minutes.
               &#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;&#8199;&#65279;
             </div>
             <div style="max-width:480px; margin:0 auto; background:#fff; border-radius:20px; overflow:hidden; box-shadow:0 4px 24px rgba(0,0,0,0.08);">
@@ -127,7 +157,11 @@ HavenIQ`,
                 <div style="background:#f4f0e8; border:2px dashed #3f6a57; border-radius:16px; padding:28px; text-align:center; margin-bottom:32px;">
                   <p style="font-size:48px; font-weight:900; color:#3f6a57; letter-spacing:12px; margin:0;">${code}</p>
                 </div>
-                <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0 0 8px;">⏱ This code expires in <strong>10 minutes</strong>.</p>
+${verifyUrl ? `<div style="text-align:center; margin:0 0 28px;">
+                  <a href="${verifyUrl}" style="display:inline-block; padding:14px 28px; font-size:16px; font-weight:700; color:#ffffff; background:#3f6a57; text-decoration:none; border-radius:12px;">Verify my email &rarr;</a>
+                  <p style="color:#625c52; font-size:12px; margin:10px 0 0;">Opens HavenIQ with the code filled in.</p>
+                </div>` : ''}
+                <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0 0 8px;">⏱ This code expires in <strong>${OTP_TTL_MINUTES} minutes</strong>.</p>
                 <p style="color:#625c52; font-size:13px; line-height:1.6; margin:0;">🔒 HavenIQ will <strong>never</strong> call, text, or email you asking for this code.</p>
               </div>
               <div style="background:#f4f0e8; padding:20px 32px; text-align:center; border-top:1px solid #efe8dd;">

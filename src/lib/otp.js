@@ -10,6 +10,26 @@ const jwt = require('jsonwebtoken');
 // Max wrong /verify-code attempts before a code is burned.
 const MAX_OTP_ATTEMPTS = 3;
 
+// How long a code lives. Was 10 minutes, which is the right number when the
+// mail lands in an inbox and the wrong one when it lands in a junk folder.
+//
+// Three students have now had a code DELIVERED and never typed a digit: two at
+// LBCC on 2026-09-16 and one at Valencia on 2026-09-23, every otp_codes row at
+// attempts = 0. All three schools are Microsoft tenants. The Valencia student
+// asked for a second code at 22:01:06; it died at 22:11:06. Someone hunting
+// through a filtered folder, or coming back after being pulled away, arrives
+// after that and finds the screen telling them the code expired.
+//
+// The brute-force control here is MAX_OTP_ATTEMPTS, not the clock: three wrong
+// guesses burn the code whatever its lifetime. Thirty minutes buys a student
+// the time to go and find the email.
+//
+// Lives here because the email copy states the number three times and the app
+// counts down from it, so a change in one place has to be a change in all of
+// them.
+const OTP_TTL_MINUTES = 30;
+const OTP_TTL_MS = OTP_TTL_MINUTES * 60 * 1000;
+
 // Hash an OTP for at-rest storage. We never want the cleartext on disk — a DB
 // dump would expose every in-flight code otherwise. The JWT_SECRET pepper means
 // a stolen DB without the secret can't be brute-forced offline.
@@ -58,6 +78,6 @@ function readCodeRef(token) {
 }
 
 module.exports = {
-  hashOtp, MAX_OTP_ATTEMPTS,
+  hashOtp, MAX_OTP_ATTEMPTS, OTP_TTL_MINUTES, OTP_TTL_MS,
   signCodeRef, readCodeRef, CODE_REF_PURPOSE, CODE_REF_TTL_SEC,
 };
