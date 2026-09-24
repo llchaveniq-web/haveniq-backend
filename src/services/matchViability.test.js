@@ -3,7 +3,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const {
-  hasRealBudget, budgetsConflict, moveInDays, moveInConflict, isViable, applyCampusRanking, THIN_POOL,
+  hasRealBudget, budgetsConflict, realMoveIn, hasRealMoveIn, moveInConflict,
+  isViable, applyCampusRanking, THIN_POOL, MOVE_IN_VALUES, MOVE_IN_SOON,
 } = require('./matchViability');
 
 // ── budgets ────────────────────────────────────────────────────────────────
@@ -29,20 +30,83 @@ test('budgetsConflict: only when BOTH real and ranges do not overlap', () => {
 });
 
 // ── move-in ──────────────────────────────────────────────────────────────
-test('moveInDays: parses months, treats Flexible/NULL/garbage as unknown', () => {
-  assert.strictEqual(moveInDays('2 months'), 60);
-  assert.strictEqual(moveInDays('1 months'), 30);
-  assert.strictEqual(moveInDays('Flexible'), null);
-  assert.strictEqual(moveInDays(null), null);
-  assert.strictEqual(moveInDays('soon'), null);
+// ── move-in ────────────────────────────────────────────────────────────────
+//
+// This filter excluded nobody, ever. It parsed move_in_timeline as "N months"
+// and compared the gap in days, which was right for a format the app stopped
+// sending. The picker offers five values and routes/users.js accepts exactly
+// those five, and not one of them parses, so every pair came back viable: a
+// student moving in this month and a student moving in next fall matched
+// freely at any score. The old tests passed because they only ever fed it the
+// dead format.
+//
+// So these use the values that can actually be in the column, and the first
+// one asserts the vocabulary itself.
+
+test('the vocabulary matches what the picker offers and the API accepts', () => {
+  assert.deepStrictEqual(
+    [...MOVE_IN_VALUES].sort(),
+    ['1-3_months', 'fall_semester', 'flexible', 'spring_semester', 'this_month']);
+  assert.deepStrictEqual([...MOVE_IN_SOON].sort(), ['1-3_months', 'this_month']);
 });
 
-test('moveInConflict: only when BOTH concrete and >45 days apart', () => {
-  assert.strictEqual(moveInConflict({ move_in_timeline: '1 months' }, { move_in_timeline: '6 months' }), true);  // 150d
-  assert.strictEqual(moveInConflict({ move_in_timeline: '2 months' }, { move_in_timeline: '3 months' }), false); // 30d
-  assert.strictEqual(moveInConflict({ move_in_timeline: 'Flexible' }, { move_in_timeline: '6 months' }), false); // flexible passes
-  assert.strictEqual(moveInConflict({ move_in_timeline: null }, { move_in_timeline: '6 months' }), false);       // unknown passes
+// A student who really answered. The stamp is what separates an answer from
+// the leftover the old lease-length picker wrote into this column.
+const answered = (t) => ({ move_in_timeline: t, move_in_set_at: '2026-09-22T00:00:00Z' });
+
+test('realMoveIn: only a stamped, concrete, known value counts', () => {
+  assert.strictEqual(realMoveIn(answered('this_month')), 'this_month');
+  assert.strictEqual(realMoveIn(answered('flexible')), null,  'flexible fits everyone');
+  assert.strictEqual(realMoveIn(answered('9 months')), null,  'the dead format is not a value');
+  assert.strictEqual(realMoveIn({ move_in_timeline: 'fall_semester' }), null, 'unstamped is a leftover');
+  assert.strictEqual(realMoveIn(null), null);
+  assert.strictEqual(hasRealMoveIn(answered('fall_semester')), true);
+  assert.strictEqual(hasRealMoveIn(answered('flexible')), false);
 });
+
+test('moveInConflict: the whole matrix, mirroring the app', () => {
+  // haveniq-app constants/moveIn.ts moveInCompatible(), transcribed. This file
+  // is a deliberate mirror of that one, the way lib/pairAgreement.js mirrors
+  // utils/pairFingerprint. A change there is a change here.
+  const isConcrete = t => !!t && t !== 'flexible';
+  const appCompatible = (a, b) => {
+    if (!isConcrete(a) || !isConcrete(b)) return true;
+    if (a === b) return true;
+    const soon = new Set(['this_month', '1-3_months']);
+    return soon.has(a) && soon.has(b);
+  };
+  let pairs = 0;
+  for (const a of MOVE_IN_VALUES) {
+    for (const b of MOVE_IN_VALUES) {
+      pairs++;
+      assert.strictEqual(
+        moveInConflict(answered(a), answered(b)), !appCompatible(a, b),
+        `server and app disagree on ${a} vs ${b}`);
+    }
+  }
+  assert.strictEqual(pairs, 25);
+});
+
+test('moveInConflict: the pairs that actually cost a lease', () => {
+  assert.strictEqual(moveInConflict(answered('this_month'), answered('fall_semester')), true);
+  assert.strictEqual(moveInConflict(answered('spring_semester'), answered('fall_semester')), true);
+  // One window: "this month" and "within three months" overlap.
+  assert.strictEqual(moveInConflict(answered('this_month'), answered('1-3_months')), false);
+  assert.strictEqual(moveInConflict(answered('fall_semester'), answered('fall_semester')), false);
+});
+
+test('moveInConflict fails OPEN on anything that is not a real answer', () => {
+  // The pool is about thirty per campus. Excluding on a value nobody typed is
+  // how you empty a feed, and the column is full of values nobody typed.
+  const far = answered('fall_semester');
+  assert.strictEqual(moveInConflict(answered('flexible'), far), false);
+  assert.strictEqual(moveInConflict({ move_in_timeline: 'this_month' }, far), false, 'unstamped');
+  assert.strictEqual(moveInConflict({ move_in_timeline: null, move_in_set_at: null }, far), false);
+  assert.strictEqual(moveInConflict({}, far), false);
+  assert.strictEqual(moveInConflict(answered('garbage'), far), false);
+  assert.strictEqual(moveInConflict(answered('12 months'), far), false, 'the old dead format');
+});
+
 
 // ── combined ─────────────────────────────────────────────────────────────
 test('isViable: viable unless a hard conflict, with reason', () => {
@@ -51,7 +115,8 @@ test('isViable: viable unless a hard conflict, with reason', () => {
     isViable({ budget_min: 500, budget_max: 700 }, { budget_min: 1800, budget_max: 2500 }),
     { viable: false, reason: 'budget' });
   assert.deepStrictEqual(
-    isViable({ move_in_timeline: '1 months' }, { move_in_timeline: '8 months' }),
+    isViable({ move_in_timeline: 'this_month', move_in_set_at: 'x' },
+             { move_in_timeline: 'fall_semester', move_in_set_at: 'x' }),
     { viable: false, reason: 'moveIn' });
 });
 

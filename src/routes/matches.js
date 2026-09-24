@@ -12,7 +12,7 @@ const {
   isViable, applyCampusRanking,
   // Used by /pool-composition, which needs each logistics axis judged
   // independently rather than isViable's short-circuiting verdict.
-  budgetsConflict, moveInConflict, hasRealBudget, moveInDays,
+  budgetsConflict, moveInConflict, hasRealBudget, hasRealMoveIn,
 } = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 const { spendConnect, refundConnect } = require('../lib/connectQuota');
@@ -432,7 +432,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
       pool.query('SELECT mbti, disc FROM personality_profiles WHERE user_id = $1', [userId]),
       pool.query(
         `SELECT gender, looking_for, match_dealbreakers,
-                school, budget_min, budget_max, move_in_timeline
+                school, budget_min, budget_max, move_in_timeline, move_in_set_at
            FROM users WHERE id = $1`,
         [userId],
       ),
@@ -585,14 +585,18 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
     // ── Viability pre-filter (matching-v10 P1) ──────────────────────────────
     // A high compatibility score is noise if two people can't share a lease.
     // Drop candidates on HARD logistics conflicts BEFORE ranking — but only on
-    // real, conflicting data: both sides have non-default budgets that don't
-    // overlap, or concrete move-in windows >45 days apart. Missing / default
-    // (500–2000) / "Flexible" always passes — the pool is thin, so this fails
-    // OPEN and never empties a feed on incomplete profiles.
+    // real, conflicting data: both sides have non-default budgets that do not
+    // overlap, or two concrete move-in answers whose windows cannot meet (see
+    // matchViability.js). Missing / default (500-2000) / "Flexible" / a move-in
+    // the student never actually answered always passes. The pool is thin, so
+    // this fails OPEN and never empties a feed on incomplete profiles.
     const meLogistics = {
       budget_min:       meUserRows[0]?.budget_min,
       budget_max:       meUserRows[0]?.budget_max,
       move_in_timeline: meUserRows[0]?.move_in_timeline,
+      // Without this the viewer's own timing reads as a leftover and the
+      // filter fails open on every candidate, which is what it used to do.
+      move_in_set_at:   meUserRows[0]?.move_in_set_at,
     };
     const mySchool = meUserRows[0]?.school ?? null;
     let feedRows = rows.filter(r => isViable(meLogistics, r).viable);
@@ -705,7 +709,7 @@ router.get('/pool-composition', requireAuth, suspicious.track('matches.poolCompo
     // Exactly the viewer state /feed reads, loaded the same way.
     const { rows: meUserRows } = await pool.query(
       `SELECT gender, looking_for, match_dealbreakers,
-              school, budget_min, budget_max, move_in_timeline
+              school, budget_min, budget_max, move_in_timeline, move_in_set_at
          FROM users WHERE id = $1`,
       [userId],
     );
@@ -784,6 +788,7 @@ router.get('/pool-composition', requireAuth, suspicious.track('matches.poolCompo
       budget_min:       meRow.budget_min,
       budget_max:       meRow.budget_max,
       move_in_timeline: meRow.move_in_timeline,
+      move_in_set_at:   meRow.move_in_set_at,
     };
 
     // Deliberately NOT isViable(): it short-circuits, reporting 'budget' and
@@ -820,7 +825,7 @@ router.get('/pool-composition', requireAuth, suspicious.track('matches.poolCompo
       smokeFree: smokeFree,
       school:    scopedSchool != null,
       budget:    hasRealBudget(meRow.budget_min, meRow.budget_max),
-      moveIn:    moveInDays(meRow.move_in_timeline) != null,
+      moveIn:    hasRealMoveIn(meRow),
     };
 
     const blocks      = Object.fromEntries(ORDER.map(k => [k, 0]));
@@ -1031,7 +1036,7 @@ router.post('/connect', requireAuth, refuseBanned, async (req, res) => {
     // conservative gate. Fails OPEN — missing / default (500–2000) / 'Flexible'
     // data never blocks; only a genuine hard conflict does.
     const { rows: logi } = await pool.query(
-      'SELECT id, budget_min, budget_max, move_in_timeline, is_banned, is_paused FROM users WHERE id = $1 OR id = $2',
+      'SELECT id, budget_min, budget_max, move_in_timeline, move_in_set_at, is_banned, is_paused FROM users WHERE id = $1 OR id = $2',
       [req.user.id, toUserId],
     );
     const meLog   = logi.find(u => u.id === req.user.id) || {};

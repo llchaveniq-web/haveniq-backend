@@ -39,7 +39,7 @@ inject('../db/pool', {
     if (/FROM user_blocks/.test(sql)) {
       return { rows: [] };
     }
-    if (/SELECT id, budget_min, budget_max, move_in_timeline, is_banned, is_paused FROM users/.test(sql)) {
+    if (/SELECT id, budget_min, budget_max, move_in_timeline, move_in_set_at, is_banned, is_paused FROM users/.test(sql)) {
       return { rows: [{ id: VIEWER, is_banned: false, is_paused: false }, targetRow] };
     }
     if (/SELECT id, status, updated_at FROM connect_requests/.test(sql)) {

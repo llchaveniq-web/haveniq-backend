@@ -67,7 +67,7 @@ function cand(over = {}) {
   return {
     id: `u-${Math.abs(JSON.stringify(over).length)}-${candidates.length}`,
     pass_gender: true, pass_smoke: true, pass_school: true,
-    ...DEFAULT_BUDGET, move_in_timeline: 'Flexible',
+    ...DEFAULT_BUDGET, move_in_timeline: 'flexible', move_in_set_at: '2026-09-22T00:00:00Z',
     ...over,
   };
 }
@@ -78,7 +78,7 @@ const byKey = (body, key) => body.pool.filters.find(f => f.key === key);
 test.beforeEach(() => {
   viewer = {
     gender: 'Woman', looking_for: ['Woman'], match_dealbreakers: {},
-    school: 'Ohio University', ...DEFAULT_BUDGET, move_in_timeline: 'Flexible',
+    school: 'Ohio University', ...DEFAULT_BUDGET, move_in_timeline: 'flexible', move_in_set_at: '2026-09-22T00:00:00Z',
   };
   candidates = [];
   candidateSql = '';
@@ -108,10 +108,10 @@ test('blocks partition the removed set — they sum to exactly total minus shown
 // ── 2. The load-bearing distinction ───────────────────────────────────────
 test('a candidate blocked on two axes is attributed once and recoverable by neither', async () => {
   viewer.budget_min = 600; viewer.budget_max = 900;
-  viewer.move_in_timeline = '2 months';
+  viewer.move_in_timeline = 'this_month';
   candidates = [
     // Outside the budget AND moving in a term later.
-    cand({ budget_min: 1500, budget_max: 2400, move_in_timeline: '9 months' }),
+    cand({ budget_min: 1500, budget_max: 2400, move_in_timeline: 'fall_semester' }),
   ];
   const { body } = await get();
   assert.equal(byKey(body, 'budget').blocks, 1, 'attributed to budget, the first axis /feed checks');
@@ -123,11 +123,11 @@ test('a candidate blocked on two axes is attributed once and recoverable by neit
 
 test('wouldReturn counts only sole-cause blocks, and never exceeds blocks', async () => {
   viewer.budget_min = 600; viewer.budget_max = 900;
-  viewer.move_in_timeline = '2 months';
+  viewer.move_in_timeline = 'this_month';
   candidates = [
     cand({ budget_min: 1500, budget_max: 2400 }),                              // budget only
     cand({ budget_min: 1500, budget_max: 2400 }),                              // budget only
-    cand({ budget_min: 1500, budget_max: 2400, move_in_timeline: '9 months' }), // both
+    cand({ budget_min: 1500, budget_max: 2400, move_in_timeline: 'fall_semester' }), // both
   ];
   const { body } = await get();
   assert.equal(byKey(body, 'budget').blocks, 3);
@@ -142,10 +142,10 @@ test('move-in is evaluated on its own axis, and is recoverable when it is the so
   // The mirror of the two tests above, which both have budget failing first.
   // Without this, an endpoint that never evaluated move-in at all would still
   // pass every other case in this file.
-  viewer.move_in_timeline = '2 months';
+  viewer.move_in_timeline = 'this_month';
   candidates = [
-    cand({ move_in_timeline: '9 months' }),   // a term apart — the only conflict
-    cand({ move_in_timeline: '3 months' }),   // inside the 45-day window
+    cand({ move_in_timeline: 'fall_semester' }),  // a term away, the only conflict
+    cand({ move_in_timeline: '1-3_months' }),     // the same window as "this month"
   ];
   const { body } = await get();
   assert.equal(byKey(body, 'moveIn').active, true);
@@ -168,8 +168,8 @@ test('the schema-default budget is not a filter — it means "never set"', async
 });
 
 test('a flexible move-in blocks nobody, however concrete the other side is', async () => {
-  viewer.move_in_timeline = 'Flexible';
-  candidates = [cand({ move_in_timeline: '11 months' })];
+  viewer.move_in_timeline = 'flexible';
+  candidates = [cand({ move_in_timeline: 'fall_semester' })];
   const { body } = await get();
   assert.equal(byKey(body, 'moveIn').active, false);
   assert.equal(byKey(body, 'moveIn').blocks, 0);
