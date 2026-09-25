@@ -67,6 +67,7 @@ const rateLimit = require('../lib/rateLimit');
 const { ipKeyGenerator } = require('../lib/rateLimit');
 const { authenticator } = require('otplib');
 const pool    = require('../db/pool');
+const { budgetIsAnswer } = require('../services/matchViability');
 const { requireAuth, signToken } = require('../middleware/auth');
 const { setSessionCookie } = require('../lib/sessionCookie');
 const { encryptSecret, decryptSecret, isEncrypted } = require('../lib/totpCrypto');
@@ -402,6 +403,7 @@ router.post('/challenge', challengeLimit, async (req, res) => {
       // moveInDate field, defaulting to null (its real value anyway).
       `SELECT id, email, school, first_name, last_name, bio, major, school_year,
               age, gender, looking_for, photo_url, budget_min, budget_max,
+              budget_set_at,
               neighborhoods, is_verified, trust_score, quiz_completed,
               identity_verified_at, totp_secret, totp_enabled, totp_recovery_codes
          FROM users WHERE id = $1`,
@@ -442,6 +444,10 @@ router.post('/challenge', challengeLimit, async (req, res) => {
           photoUrl:       u.photo_url || null,
           budgetMin:      u.budget_min ?? null,
           budgetMax:      u.budget_max ?? null,
+          // Same as the other payload below: is that range an answer, or
+          // schema.sql's DEFAULT 500/2000. Two hand-built payloads in this file
+          // send the same user, and a field added to one is the bug that hides.
+          budgetIsSet:    budgetIsAnswer(u),
           neighborhoods:  u.neighborhoods || [],
           moveInDate:     u.move_in_date || null,
           isVerified:     u.is_verified,
@@ -523,6 +529,11 @@ router.post('/challenge', challengeLimit, async (req, res) => {
         photoUrl:       u.photo_url || null,
         budgetMin:      u.budget_min ?? null,
         budgetMax:      u.budget_max ?? null,
+        // Whether that range is an answer or schema.sql's DEFAULT 500/2000.
+        // Without it the app falls back to a presence check, which a DEFAULT
+        // satisfies, and a student who never set a budget arrives from 2FA with
+        // hasBudget true until the next cold-start refresh corrects it.
+        budgetIsSet:    budgetIsAnswer(u),
         neighborhoods:  u.neighborhoods || [],
         moveInDate:     u.move_in_date || null,
         isVerified:     u.is_verified,
