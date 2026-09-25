@@ -18,7 +18,10 @@ process.env.JWT_SECRET = process.env.JWT_SECRET
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { budgetIsAnswer, buildMatchDTO } = require('./matches');
+// budgetIsAnswer lives in matchViability, beside the DEFAULT_BUDGET_MIN/MAX
+// pair it depends on. buildMatchDTO is what has to call it.
+const { budgetIsAnswer } = require('../services/matchViability');
+const { buildMatchDTO } = require('./matches');
 
 const row = (over = {}) => ({ budget_min: 500, budget_max: 2000, budget_set_at: null, ...over });
 

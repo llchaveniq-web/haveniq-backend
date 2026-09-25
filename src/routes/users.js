@@ -4,6 +4,7 @@ const pool    = require('../db/pool');
 const { galleryJoin, photosFor } = require('../lib/photoGallery');
 const { connectedSet } = require('../lib/photoGate');
 const { requireAuth, refuseBanned } = require('../middleware/auth');
+const { budgetIsAnswer } = require('../services/matchViability');
 const suspicious = require('../middleware/suspiciousActivity');
 const { aiLimiter } = require('../middleware/rateLimits');
 const { uploadProfilePhoto, deleteProfilePhoto, ModerationRejectedError } = require('../services/cloudinary');
@@ -232,6 +233,11 @@ router.get('/me', requireAuth, async (req, res) => {
       budgetMin:       u.budget_min,
       budgetMax:       u.budget_max,
       budgetSetAt:     u.budget_set_at ?? null,
+      // The verdict itself, so the app never has to know that 500 to 2000 is a
+      // schema default. budgetSetAt above is the raw stamp; this is the stamp OR
+      // a range that is not the default, which is what keeps a budget set before
+      // the stamp existed from disappearing off its owner's own profile.
+      budgetIsSet:     budgetIsAnswer(u),
       moveInTimeline:  u.move_in_timeline,
       // When they actually answered it (null: never did, whatever the column
       // above says). The app treats move-in as set only when this is.

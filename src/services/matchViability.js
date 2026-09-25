@@ -24,6 +24,25 @@ function hasRealBudget(min, max) {
   return true;
 }
 
+/**
+ * Did this student choose their budget, or is it the schema's default?
+ *
+ * Lives here, with DEFAULT_BUDGET_MIN/MAX, because that pair is a fact about
+ * schema.sql and this file is the only place that knows it. The app has no
+ * budget-default vocabulary at all, so answering this question there would put
+ * a copy of a schema default in a second repo.
+ *
+ * Stamp OR non-default. budget_set_at is not backfilled, so every row predating
+ * it is unstamped however deliberately its range was chosen; hasRealBudget
+ * covers those. The stamp is exact for everything written since, including for
+ * the student whose real answer happens to be 500 to 2000, whom hasRealBudget
+ * can never see.
+ */
+function budgetIsAnswer(row) {
+  if (!row) return false;
+  return !!row.budget_set_at || hasRealBudget(row.budget_min, row.budget_max);
+}
+
 // Ranges overlap iff aMax >= bMin AND bMax >= aMin. Conflict = both real + no
 // overlap (e.g. someone capped at $800 vs someone starting at $1500).
 function budgetsConflict(a, b) {
@@ -115,6 +134,7 @@ module.exports = {
   MOVE_IN_VALUES,
   MOVE_IN_SOON,
   hasRealBudget,
+  budgetIsAnswer,
   budgetsConflict,
   realMoveIn,
   hasRealMoveIn,

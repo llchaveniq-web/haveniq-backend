@@ -13,6 +13,9 @@ const {
   // Used by /pool-composition, which needs each logistics axis judged
   // independently rather than isViable's short-circuiting verdict.
   budgetsConflict, moveInConflict, hasRealBudget, hasRealMoveIn,
+  // Whether a budget is an answer or the schema's default, defined beside the
+  // DEFAULT_BUDGET_MIN/MAX pair it depends on.
+  budgetIsAnswer,
 } = require('../services/matchViability');
 const { recordPairingEvent, recordFeedImpressions, buildServeFeatures } = require('../services/pairingOutcomes');
 const { spendConnect, refundConnect } = require('../lib/connectQuota');
@@ -258,11 +261,6 @@ async function maybeEmailConnectRequest(toUserId, fromUserId, score) {
 //   me        – viewer's { mbti, disc } for the display-only personality pairing
 //   myAnswers – viewer's raw quiz answers, for the both-sides friction forecast
 //   mySchool  – viewer's campus, for the cross-school flag
-/** Did this student choose their budget, or is it the schema's default? */
-function budgetIsAnswer(r) {
-  return !!r.budget_set_at || hasRealBudget(r.budget_min, r.budget_max);
-}
-
 function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
   // Part 2 honesty gate: only surface the behavioral-validation layer when
   // the multiplier is genuinely ≠ 1.0 (BOTH users had a real validation_score
