@@ -420,6 +420,9 @@ router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
 
     const invalid = [];
     const changed = [];
+    // Parameter number of each column in this UPDATE, so a conditional stamp
+    // below can compare the incoming value with the stored one.
+    const paramOf = {};
     for (const [camel, snake] of Object.entries(fieldMap)) {
       if (req.body[camel] === undefined) continue;
       const v = req.body[camel];
@@ -428,6 +431,7 @@ router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
         invalid.push(camel);
         continue;
       }
+      paramOf[snake] = idx;
       updates.push(`${snake} = $${idx++}`);
       // Instagram handle is the one field that needs a normalization pass —
       // strip a leading @ so we store the bare username regardless of how
@@ -454,12 +458,29 @@ router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
     // migrate_missing.sql). Match payloads only carry move-in once this is set.
     if (changed.includes('moveInTimeline')) updates.push('move_in_set_at = NOW()');
 
-    // Same for the budget. budget_min/budget_max are DEFAULT 500/2000 and
-    // signup sets neither, so the columns alone cannot say whether a student
-    // ever chose a range. Only this stamp can, and match payloads carry a
-    // budget only once it is set.
-    if (changed.includes('budgetMin') || changed.includes('budgetMax')) {
-      updates.push('budget_set_at = NOW()');
+    // Same for the budget, but only when the value actually MOVED.
+    //
+    // budget_min/budget_max are DEFAULT 500/2000 and signup sets neither, so
+    // the columns alone cannot say whether a student ever chose a range. The
+    // stamp can -- and an unconditional stamp would immediately start lying in
+    // the other direction, because the client sends this pair whether or not
+    // the student touched it: app/(setup)/edit-profile.tsx step 3 says "sent
+    // unconditionally exactly as hydrated from the account". A student who has
+    // never set a budget hydrates 500/2000, walks through the profile form, and
+    // would be stamped as having deliberately chosen 500 to 2000. That is worse
+    // than the bug the stamp exists to fix: the old lie was at least detectable
+    // as the default, and a stamped one is indistinguishable from a real answer
+    // forever.
+    //
+    // Postgres evaluates every SET expression against the OLD row, so the
+    // comparison below sees the stored values even though the same statement
+    // is overwriting them. IS DISTINCT FROM rather than <>, because either
+    // column can be NULL and NULL <> 5 is NULL, not true.
+    const budgetCmp = ['budgetMin', 'budgetMax']
+      .filter(k => changed.includes(k))
+      .map(k => `${k === 'budgetMin' ? 'budget_min' : 'budget_max'} IS DISTINCT FROM $${paramOf[k === 'budgetMin' ? 'budget_min' : 'budget_max']}`);
+    if (budgetCmp.length) {
+      updates.push(`budget_set_at = CASE WHEN ${budgetCmp.join(' OR ')} THEN NOW() ELSE budget_set_at END`);
     }
 
     // Same rule as lib/primaryPhoto.js's applyPrimaryPhotoChange (used by the
