@@ -226,8 +226,12 @@ router.get('/me', requireAuth, async (req, res) => {
       gender:          u.gender,
       lookingFor:      u.looking_for || [],
       photoUrl:        u.photo_url,
+      // The student's OWN record keeps the raw range, because the profile form
+      // needs a value to edit. budgetSetAt below is what says whether it is an
+      // answer; the app gates every budget CLAIM on that, never on the range.
       budgetMin:       u.budget_min,
       budgetMax:       u.budget_max,
+      budgetSetAt:     u.budget_set_at ?? null,
       moveInTimeline:  u.move_in_timeline,
       // When they actually answered it (null: never did, whatever the column
       // above says). The app treats move-in as set only when this is.
@@ -443,6 +447,14 @@ router.patch('/me', requireAuth, refuseBanned, async (req, res) => {
     // A move-in the student actually chose (see move_in_set_at in
     // migrate_missing.sql). Match payloads only carry move-in once this is set.
     if (changed.includes('moveInTimeline')) updates.push('move_in_set_at = NOW()');
+
+    // Same for the budget. budget_min/budget_max are DEFAULT 500/2000 and
+    // signup sets neither, so the columns alone cannot say whether a student
+    // ever chose a range. Only this stamp can, and match payloads carry a
+    // budget only once it is set.
+    if (changed.includes('budgetMin') || changed.includes('budgetMax')) {
+      updates.push('budget_set_at = NOW()');
+    }
 
     // Same rule as lib/primaryPhoto.js's applyPrimaryPhotoChange (used by the
     // dedicated upload routes): if the primary photo is actually changing

@@ -1102,6 +1102,24 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS last_new_match_alert_at TIMESTAMPTZ;
 -- NULL means "never really answered", and match payloads send no move-in then.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS move_in_set_at TIMESTAMPTZ;
 
+-- A budget the student actually chose.
+--
+-- budget_min and budget_max are DEFAULT 500 / DEFAULT 2000 and signup inserts
+-- neither, so every account that has ever existed carries 500-2000 whether or
+-- not anyone touched it. The app derived hasBudget as
+-- "budgetMin != null && budgetMax != null", which a default satisfies, so
+-- hasBudget was TRUE for every user alive. types/index.ts warns about exactly
+-- this in its own words -- "never on budget.max > 0, which is true even for a
+-- defaulted range" -- and the derivation did the thing the warning names.
+-- components/LivingFacts.tsx says "a budget shows only if that student really
+-- set one (hasBudget)", and so showed $500 to $2,000 for everyone.
+--
+-- Same shape as move_in_set_at and for the same reason: the column cannot tell
+-- an answer from a leftover, and a stamp can. Nullable, no default, and NOT
+-- backfilled: we cannot tell which of the existing ranges were chosen, and
+-- guessing is what this fixes.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS budget_set_at TIMESTAMPTZ;
+
 -- "Do you have a room available?" is the first thing students ask each other,
 -- and this product had no way to answer it. It modelled two people who both
 -- need housing looking for each other, and nothing else. Olivia has a room and

@@ -258,6 +258,11 @@ async function maybeEmailConnectRequest(toUserId, fromUserId, score) {
 //   me        – viewer's { mbti, disc } for the display-only personality pairing
 //   myAnswers – viewer's raw quiz answers, for the both-sides friction forecast
 //   mySchool  – viewer's campus, for the cross-school flag
+/** Did this student choose their budget, or is it the schema's default? */
+function budgetIsAnswer(r) {
+  return !!r.budget_set_at || hasRealBudget(r.budget_min, r.budget_max);
+}
+
 function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
   // Part 2 honesty gate: only surface the behavioral-validation layer when
   // the multiplier is genuinely ≠ 1.0 (BOTH users had a real validation_score
@@ -310,8 +315,21 @@ function buildMatchDTO(r, { me = {}, myAnswers = null, mySchool = null } = {}) {
     // falling back to [photo_url], and [] with no photo at all.
     photoUrl:      r.connect_status === 'accepted' ? r.photo_url : null,
     photos:        r.connect_status === 'accepted' ? photosFor(r) : [],
-    budgetMin:     r.budget_min,
-    budgetMax:     r.budget_max,
+    // Only a range the student actually chose. budget_min/budget_max are
+    // DEFAULT 500/2000 and signup inserts neither, so the columns alone cannot
+    // tell an answer from the schema's guess, and it must never leave the
+    // server as a fact. Same rule as move_in_set_at directly below.
+    //
+    // Stamp OR non-default, not the stamp alone. budget_set_at is new and
+    // deliberately not backfilled, so on the day this ships every row is
+    // unstamped, and keying only on it would take away every budget that HAD
+    // been set until its owner happened to re-save. hasRealBudget is the
+    // heuristic matchViability has always used for this same question (500-2000
+    // means nobody chose it) and it covers those rows today. The stamp makes it
+    // exact as rows are written, including for the student who really does want
+    // 500 to 2000, whom the heuristic alone can never see.
+    budgetMin:     budgetIsAnswer(r) ? r.budget_min : null,
+    budgetMax:     budgetIsAnswer(r) ? r.budget_max : null,
     // Only an answer the student actually gave. move_in_set_at is stamped when
     // they pick a move-in in the profile (users.js PATCH). Every value from
     // before that is what the old lease picker wrote for them ('flexible' for
@@ -486,6 +504,7 @@ router.get('/feed', requireAuth, suspicious.track('matches.feed', 100), async (r
          u.looking_for,
          u.photo_url,
          u.budget_min,
+         u.budget_set_at,
          u.budget_max,
          u.move_in_timeline,
          u.housing_role,
@@ -750,6 +769,7 @@ router.get('/pool-composition', requireAuth, suspicious.track('matches.poolCompo
       `SELECT
          u.id,
          u.budget_min,
+         u.budget_set_at,
          u.budget_max,
          u.move_in_timeline,
          u.housing_role,
@@ -1966,6 +1986,7 @@ router.get('/:userId', (req, res, next) => {
          u.looking_for,
          u.photo_url,
          u.budget_min,
+         u.budget_set_at,
          u.budget_max,
          u.move_in_timeline,
          u.housing_role,
@@ -2043,3 +2064,6 @@ module.exports = router;
 // single-pair /:userId resolver. Attaching it to the router keeps HTTP mounting
 // (module.exports = router) intact.
 module.exports.buildMatchDTO = buildMatchDTO;
+// Exported for its own test: whether a budget is an answer or the schema's
+// default decides what every match payload says about a stranger's money.
+module.exports.budgetIsAnswer = budgetIsAnswer;
