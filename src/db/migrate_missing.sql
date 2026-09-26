@@ -1134,3 +1134,31 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS budget_set_at TIMESTAMPTZ;
 -- rather than guessing, the same rule move_in_set_at exists to enforce. A new
 -- column needs no stamp because it has no leftovers.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS housing_role TEXT;
+
+-- ── The ban columns, which auth.js selects on EVERY authenticated request ───
+--
+-- src/db/migrations/2026-05-24-user-bans.sql adds these, and its header says
+-- "Apply via Railway -> Postgres -> Data tab" -- by hand. This file is the
+-- automated path (server.js applies it on every boot) and it never carried
+-- them, so a database built the documented way -- schema.sql plus this file --
+-- is missing is_banned, banned_at and ban_reason.
+--
+-- src/middleware/auth.js line 53 and line 114 both SELECT is_banned and
+-- ban_reason for every authenticated request. Measured on a fresh database
+-- 2026-09-26: GET /users/me with a valid token returns HTTP 500,
+-- errorMissingColumn, while smoke-test.sh reports 42 PASS / 0 FAIL -- because
+-- every route it checks answers 401 before the query runs. A new environment
+-- (staging, a restore, a second region) therefore boots green, passes every
+-- check, and fails on the first real sign-in.
+--
+-- Production has had these columns since May and ADD COLUMN IF NOT EXISTS is a
+-- no-op there. The transaction wrapper from the original migration is dropped
+-- because server.js applies this file statement by statement
+-- (src/lib/splitSqlStatements.js); each statement below is idempotent alone.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS is_banned   BOOLEAN     NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS banned_at   TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS ban_reason  TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_users_banned
+  ON users (banned_at DESC) WHERE is_banned = TRUE;
